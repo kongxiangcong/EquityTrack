@@ -69,7 +69,8 @@ Row 83-90: Key ratios (Gross Margin, Op Margin, Net Margin, ROE, ROA, D/E, Curre
 
 ### Data Entry Rules
 - **Blue font** for all hardcoded data (manual entry from APIs)
-- **Source annotation**: Column A can optionally note the API/source for each section
+- **Source annotation is mandatory**: every historical financial value, share count, net debt component, and market-data input must carry `source_id`, period, currency, unit, and retrieved_at from the source manifest. If the compact layout cannot fit all metadata beside each cell, add a Raw Data Source Map directly below the table keyed by line item and period.
+- **Missing critical values**: leave the model input blank or `NA`, mark the field as `missing` in the source manifest, and stop valuation outputs when the validator requires `data_insufficient_memo`.
 - **Currency**: State currency in the header row. All numbers in same currency.
 - **Units**: Millions unless otherwise stated. Per-share data in actual units.
 
@@ -412,6 +413,8 @@ Upside / (Downside) %        =(Implied - Current) / Current
 
 ### Rules
 - WACC reasonability: Must be within market-typical range (see `valuation/dcf-and-sensitivity.md` §Part 1 — WACC Calculation)
+- WACC input sources are mandatory: risk-free rate, beta, ERP, size/country premium, cost of debt, tax rate, market cap, gross debt, lease debt, cash, preferred stock, minority interest, and diluted shares must all reference `source_id` or an explicit `missing` record.
+- Net debt and equity bridge source annotations are mandatory: each bridge line must tie to Raw Data and source manifest fields before any per-share value is shown.
 - All FCF inputs are formula links to IS/CF tabs (not hardcoded)
 - Terminal Value sanity check row is mandatory
 
@@ -457,6 +460,8 @@ vs. Current     | formula    | formula      | formula
 ### Rules
 - Minimum 5 comparable companies (ideally 8-10)
 - Statistical summary with Max/75th/Median/25th/Min is **MANDATORY** (non-negotiable)
+- Peer data source annotations are mandatory: each peer's market cap, EV, revenue, EBITDA, net income, book value, share count, reporting period, currency, and unit must reference source manifest `source_id` or be excluded from the usable peer set.
+- Peer rows with missing source_id, incompatible accounting period, incompatible currency/unit, or unresolved source conflicts are not usable. Fewer than 3 usable peers means comps cannot support a valuation conclusion.
 - All statistics use Excel formulas (PERCENTILE.INC, MEDIAN, MAX, MIN)
 - Target company row uses `.row-highlight` equivalent formatting
 - Currency unified per `valuation/comparable.md` rules
@@ -560,12 +565,14 @@ Before declaring Task 2 complete, the agent MUST verify:
 | 2 | Cash ties | =CF Ending Cash - BS Cash | = 0 for all periods |
 | 3 | Revenue ties | =Revenue Model Total - IS Revenue | = 0 for all periods |
 | 4 | Historical accuracy | Compare IS/BS/CF to Raw Data | Difference < 1% |
-| 5 | WACC range | Check vs market-typical range | Within normal range (flag if outside) |
-| 6 | TV % of EV | =PV(TV) / EV | < 80% (flag if higher) |
-| 7 | Sensitivity center | =Sensitivity center cell - DCF base | = 0 |
-| 8 | Comps stats | Check PERCENTILE formulas work | No #N/A or #REF errors |
-| 9 | Scenarios sum | =Bull% + Base% + Bear% | = 100% |
-| 10 | FCF sign | Check FCF is positive for base case | Positive (flag if negative with explanation) |
+| 5 | Source manifest validation | Read validation result JSON | `passed = true`, `source_manifest_status = sufficient`, `data_insufficient_memo_required = false` |
+| 6 | Source annotation coverage | Check Raw Data, share count, net debt, WACC inputs, peer data | Every critical input has `source_id` or explicit `missing`; missing critical inputs block valuation outputs |
+| 7 | WACC range | Check vs market-typical range | Within normal range (flag if outside) |
+| 8 | TV % of EV | =PV(TV) / EV | < 80% (flag if higher) |
+| 9 | Sensitivity center | =Sensitivity center cell - DCF base | = 0 |
+| 10 | Comps stats | Check PERCENTILE formulas work | No #N/A or #REF errors |
+| 11 | Scenarios sum | =Bull% + Base% + Bear% | = 100% |
+| 12 | FCF sign | Check FCF is positive for base case | Positive (flag if negative with explanation) |
 
 **If any check fails**: Fix the model before proceeding. Do NOT deliver a broken model.
 

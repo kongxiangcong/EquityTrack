@@ -77,10 +77,13 @@ When the user says "下一步"/"继续"/"continue" to enter Task 3, all previous
 | **L2 only** | Task 2 Financial Model | `*_Financial_Model_*.xlsx` |
 | **L2 only** | Task 2 Valuation Analysis | `*_Valuation_Analysis_*.md` |
 | **L1 & L2** | Source manifest summary | Embedded in research/valuation docs or `source_manifest.*` if created |
+| **L1 & L2** | Source manifest validation result | Explicit path in research doc or `*_source_manifest_validation_*.json` |
 | **L1 & L2** | Stock chart SVG | Path from research doc metadata |
 | **L1 & L2** | Stock price CSV + Benchmark CSV | From Task 1 assets |
 
 **If files cannot be found in session**: Ask the user to confirm filenames. Do NOT start Task 3 without required inputs.
+
+**Source validation hard gate**: Before report generation, read the source manifest validation result JSON. If it cannot be found, cannot be parsed, has `passed = false`, has `source_manifest_status != sufficient`, or has `data_insufficient_memo_required = true`, do not generate the full equity report. Generate only a data insufficient memo report containing missing critical data, validator issue codes, unavailable tools, disabled methods, and next data requirements.
 
 Also verify these asset files exist (from Task 1):
 - Stock chart SVG (path in research document metadata)
@@ -93,13 +96,14 @@ Also verify these asset files exist (from Task 1):
 | # | File | Purpose | L1 | L2 |
 |---|------|---------|-----|-----|
 | 1 | Task 1 Research Document | Narrative content, six-dimension analysis | ✅ | ✅ |
-| 2 | Task 2 Valuation Analysis (.md) | Method router result, valuation view, data quality, selected method summaries | ❌ | ✅ |
-| 3 | `references/source-manifest.md` | Source manifest schema and coverage expectations | ✅ | ✅ |
-| 4 | `valuation/valuation-method-router.md` | Confirms report uses only selected/caution methods | ✅ | ✅ |
-| 5 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
-| 6 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
-| 7 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
-| 8 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
+| 2 | Source manifest validation result JSON | Executable source gate; determines full report vs data insufficient memo | ✅ | ✅ |
+| 3 | Task 2 Valuation Analysis (.md) | Method router result, valuation view, data quality, selected method summaries | ❌ | ✅ |
+| 4 | `references/source-manifest.md` | Source manifest schema and coverage expectations | ✅ | ✅ |
+| 5 | `valuation/valuation-method-router.md` | Confirms report uses only selected/caution methods | ✅ | ✅ |
+| 6 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
+| 7 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
+| 8 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
+| 9 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
 
 **Task 2 Financial Model (.xlsx)** (L2 only): Read via Python/openpyxl during report generation. Do NOT read it all upfront — read specific tabs as needed for each module.
 
@@ -118,7 +122,11 @@ From the Research Document's `## Task Handoff Metadata` section, extract:
 | `page_target` | QA page count validation |
 | `module_count` | L2: all 21 modules mandatory. L1: 18 mandatory modules — DCF Model, Sensitivity Matrix, and Historical Valuation Band are skipped because the Excel model is not produced in L1. |
 | `current_price` | Cover sidebar |
+| `source_manifest_path` | References & Data Sources section |
+| `source_manifest_validation_result_path` | Pre-report validation gate and QA evidence |
+| `source_manifest_validation_result.passed` | Whether full report generation is allowed |
 | `source_manifest_status` | Whether full report or data insufficient memo is allowed |
+| `data_insufficient_memo_required` | Whether full report generation is blocked |
 | `valuation_method_router_result` | Which valuation methods may appear in the report |
 | `data_quality_grade` | Data quality section and gating |
 | `user_requested_rating` | Rating section may appear only if true |
@@ -131,7 +139,7 @@ From the Valuation Analysis, extract:
 | Valuation Range | Valuation section, if data gates pass |
 | Probability Basis | Scenario section; omit probability-weighted value if missing |
 
-If `source_manifest_status = insufficient` or the valuation analysis is a `data_insufficient_memo`, stop the full report workflow and generate a data insufficient memo report with missing sources, unavailable tools, disabled methods, and next data requirements.
+If source manifest validation failed, `source_manifest_status = insufficient`, `data_insufficient_memo_required = true`, or the valuation analysis is a `data_insufficient_memo`, stop the full report workflow and generate a data insufficient memo report with missing sources, validator issue codes, unavailable tools, disabled methods, and next data requirements.
 
 ---
 
@@ -332,6 +340,7 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 ### 6.3 Manual QA (Key Items)
 
 **A-tier (Must Pass)**:
+- [ ] Source manifest validation JSON was read and passed before full report generation
 - [ ] Cover has valuation view, data quality grade, and key uncertainty summary; no rating/target price unless `user_requested_rating = true`
 - [ ] Cover has `.key-data-grid` (Market / Return / Valuation groups + Earnings Forecast)
 - [ ] Executive Summary present with all 4 items (Thesis, Financials, Valuation, Risks)
@@ -362,6 +371,8 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 ## Step 7: Final Delivery — ALL Deliverables
 
 > ⚠️ **Deliver ALL project deliverables together**, not just the PDF. The user should receive the complete research package in one handoff.
+
+If source manifest validation failed and this task generated a `data_insufficient_memo` report, deliver only the memo report, source manifest path, source manifest validation result path, Research Document, and any already-generated non-valuation assets. Do not require a Financial Model or Valuation Analysis deliverable in this blocked path.
 
 ### 7.1 Pre-Delivery Checklist
 

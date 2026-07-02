@@ -69,7 +69,11 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 | `latest_financial_report` | [e.g., "FY2025 Q3" or "2024 Annual Report"] |
 | `current_price` | [e.g., $198.50 or ¥1,850.00] |
 | `user_requested_rating` | false unless explicitly requested |
+| `source_manifest_path` | [Path to `{Company}_{Ticker}_source_manifest_{Date}.json`] |
+| `source_manifest_validation_result_path` | [Path to `{Company}_{Ticker}_source_manifest_validation_{Date}.json`] |
+| `source_manifest_validation_passed` | [true / false] |
 | `source_manifest_status` | [draft / sufficient / insufficient] |
+| `source_manifest_validation_summary` | [sources_total / critical_fields_source_covered / errors / warnings] |
 | `data_quality_grade` | [High / Medium / Low / Insufficient] |
 | `valuation_method_router_result` | [selected_methods / caution_methods / disabled_methods / missing_data] |
 | `dcf_applicability` | [not_selected / allowed / caution / disabled] |
@@ -376,6 +380,34 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ## XI. Source Manifest Summary
 
+### Source Manifest Artifacts
+
+| Artifact | Path | Required For |
+|----------|------|--------------|
+| Source manifest JSON | `[source_manifest_path]` | Task 2 Raw Data, valuation inputs, report references |
+| Source manifest validation JSON | `[source_manifest_validation_result_path]` | Task 2/3 executable source gate |
+
+### Validation Summary
+
+| Field | Value |
+|-------|-------|
+| `passed` | true / false |
+| `source_manifest_status` | sufficient / insufficient / draft / invalid |
+| `data_insufficient_memo_required` | true / false |
+| `sources_total` | [number] |
+| `official_sources_total` | [number] |
+| `critical_fields_source_covered` | [number] / [required] |
+| `official_financial_fields_covered` | [number] |
+| `hash_checks` | [number] |
+| `errors` / `warnings` | [number] / [number] |
+
+**Blocking Validator Issues**:
+- [issue.code] — [issue.message] — [issue.path] — [next data required]
+
+If `passed = false`, this document must switch to `data_insufficient_memo` or a data gap section and must not hand off a full valuation model or target-price/rating conclusion.
+
+### Source Records
+
 | Source ID | Tier | Publisher | Filing Period | Report Date | Currency | Unit | Raw File / URL | Page/Table | Coverage |
 |-----------|------|-----------|---------------|-------------|----------|------|----------------|------------|----------|
 | [Every critical source or missing field] | official / terminal / secondary / news / estimate / missing | | | | | | | | |
@@ -483,6 +515,8 @@ Before delivering the research document, verify ALL of the following:
 - [ ] §IX Catalysts: ≥4 events with dates (including next earnings)
 - [ ] §X Risks: ≥8 risks across ≥3 categories with P×I scoring; each risk 80-130 words
 - [ ] §XI Source Manifest Summary: every critical number has `source_id` or is marked `missing`
+- [ ] §XI Source Manifest Artifacts: source manifest path and validation result path are present
+- [ ] §XI Source Manifest Validation Summary: `passed`, `source_manifest_status`, `data_insufficient_memo_required`, errors/warnings, and blocking issues recorded
 - [ ] §XII Valuation Method Router Result: selected/caution/disabled methods and missing data recorded
 - [ ] §XII Comparable Companies: ≥3 companies with real data and source IDs (L1 target ≥5 with full metrics)
 - [ ] §XII Consensus Estimates: FY+1E/FY+2E revenue and EPS if sourced; consensus price view is reference only
@@ -495,6 +529,8 @@ Before delivering the research document, verify ALL of the following:
 - [ ] Financial data cross-verified: Revenue in IS = Revenue in CF discussion (if mentioned)
 - [ ] Revenue segments sum to total revenue (within 2% tolerance for "other" segment)
 - [ ] All critical data sources documented in §XI Source Manifest Summary
+- [ ] Source manifest validation result has been read back after generation
+- [ ] If source manifest validation failed, only `data_insufficient_memo` / data gap content is written
 - [ ] No default BUY/HOLD/SELL, target price conclusion, or buy/sell advice
 - [ ] If `data_insufficient_memo_required = true`, no valuation conclusion is written
 

@@ -21,6 +21,7 @@ description: "Task 2 of equity report workflow (L2 only). Builds a source-gated,
 
 - ✅ Build a REAL Excel model with formulas that recalculate when inputs change — not static numbers
 - ✅ Load Task 1 `source_manifest`, `source_manifest_status`, and `valuation_method_router_result` before any model work
+- ✅ Load Task 1 `source_manifest_validation_result` JSON before any model work
 - ✅ Every historical and market number must carry a `source_id` or be marked `missing`
 - ✅ All 3 financial statements (IS → BS → CF) must link and balance
 - ✅ Balance Sheet: Assets = Liabilities + Equity on EVERY projected year (BALANCE CHECK row mandatory)
@@ -33,6 +34,7 @@ description: "Task 2 of equity report workflow (L2 only). Builds a source-gated,
 - ✅ Pre-revenue or pipeline-driven biopharma: use rNPV/SOTP; do not use ordinary consolidated DCF/PE as the primary method
 - ❌ Do not hardcode projected numbers — every projection must flow from Operating Drivers
 - ❌ Do not create a DCF tab when `dcf_applicability = disabled`
+- ❌ Do not create a full three-statement model, DCF tab, target price, rating, or valuation conclusion when source manifest validation failed
 - ❌ Do not output a rating, target price, upside/downside, or buy/sell conclusion unless `user_requested_rating = true` and all data gates pass
 - ❌ Do not calculate probability-weighted price unless probability basis is sourced; otherwise show scenario range only
 - ❌ Do not fabricate comparable company data — use real market data
@@ -43,9 +45,10 @@ description: "Task 2 of equity report workflow (L2 only). Builds a source-gated,
 - 🟢 Green font = cross-sheet link (references another tab)
 
 ### Task Boundary
-- ✅ Deliver: Excel model (.xlsx) + Valuation Analysis document (.md) — then STOP
+- ✅ If source validation passes: deliver Excel model (.xlsx) + Valuation Analysis document (.md) — then STOP
+- ✅ If source validation fails: deliver only `data_insufficient_memo` / `model_blocked_reason` — then STOP
 - ❌ **Do not continue to Task 3.** Wait for user's continuation signal.
-- ❌ **Do not create summary documents or extra files.** Deliver ONLY the 2 specified outputs.
+- ❌ **Do not create summary documents or extra files.** Deliver only the applicable output set for the validation state.
 
 ---
 
@@ -61,12 +64,17 @@ When the user says "下一步"/"继续"/"continue" to enter Task 2, the Task 1 f
    - Historical financial data (§VI)
    - Revenue segment breakdown (§VII)
    - Source manifest summary (§XI)
+   - Source manifest path and source manifest validation result path
+   - Source manifest validation result (`passed`, `source_manifest_status`, `data_insufficient_memo_required`, errors/warnings, blocking issue codes)
    - Valuation method router result and comparable companies (§XII)
    - Operating assumptions mentioned in the analysis
    - `source_manifest_status`, `data_quality_grade`, `dcf_applicability`, `selected_methods`, `disabled_methods`, `missing_data`
-3. **Do NOT read**: `SKILL.md`, `analysis/*.md`, `modules/*.md` — these were consumed in Task 1.
+3. **Auto-locate and read source manifest validation JSON**: Prefer the explicit path in the Research Document. If absent, search for the most recent `*_source_manifest_validation_*.json` beside the Research Document.
+4. **Do NOT read**: `SKILL.md`, `analysis/*.md`, `modules/*.md` — these were consumed in Task 1.
 
 **If the research document cannot be found in session**: Ask the user to confirm the filename. Do NOT start Task 2 without it.
+
+**Source validation hard gate**: If the validation JSON cannot be found, cannot be parsed, has `passed = false`, has `source_manifest_status != sufficient`, or has `data_insufficient_memo_required = true`, do not start workbook construction. Do not generate a full three-statement model, DCF, target price, rating, upside/downside, or valuation conclusion. Produce only a `data_insufficient_memo` / `model_blocked_reason` listing validator issues and next source requirements, then STOP.
 
 ---
 
@@ -75,13 +83,15 @@ When the user says "下一步"/"继续"/"continue" to enter Task 2, the Task 1 f
 | # | File | Purpose |
 |---|------|---------|
 | 1 | Task 1 Research Document | Source of all analytical content and historical data |
-| 2 | `references/source-manifest.md` | Source manifest schema and critical-number coverage gate |
-| 3 | `valuation/valuation-method-router.md` | Determines selected/caution/disabled valuation methods |
-| 4 | `valuation/industry-valuation-matrix.md` | Industry-specific method rules, minimum data gates, sensitivities |
-| 5 | `references/financial-model-spec.md` | **SOLE SOURCE** for Excel model structure — tab specs, line items, formula patterns, formatting |
-| 6 | `valuation/dcf-and-sensitivity.md` | Conditional reference — read only if DCF is `allowed` or `caution` |
-| 7 | `valuation/comparable.md` | Comps methodology — peer selection, metric selection by industry, analysis framework |
-| 8 | `references/data-sources.md` | Official-first data source priority and fallback rules |
+| 2 | Source manifest validation result JSON | Executable pass/fail gate before any model construction |
+| 3 | Source manifest JSON | Source records referenced by Raw Data and valuation inputs |
+| 4 | `references/source-manifest.md` | Source manifest schema and critical-number coverage gate |
+| 5 | `valuation/valuation-method-router.md` | Determines selected/caution/disabled valuation methods |
+| 6 | `valuation/industry-valuation-matrix.md` | Industry-specific method rules, minimum data gates, sensitivities |
+| 7 | `references/financial-model-spec.md` | **SOLE SOURCE** for Excel model structure — tab specs, line items, formula patterns, formatting |
+| 8 | `valuation/dcf-and-sensitivity.md` | Conditional reference — read only if DCF is `allowed` or `caution` |
+| 9 | `valuation/comparable.md` | Comps methodology — peer selection, metric selection by industry, analysis framework |
+| 10 | `references/data-sources.md` | Official-first data source priority and fallback rules |
 
 **Do not read DCF mechanics just because this is L2.** Read `valuation/dcf-and-sensitivity.md` only after the router says DCF is `allowed` or `caution`.
 
@@ -194,12 +204,14 @@ For each projected year (FY+1 through FY+5), set these assumptions:
 
 Before any valuation calculation, confirm:
 
+- `source_manifest_validation_result.passed = true`.
 - `source_manifest_status = sufficient` for the selected method's critical inputs.
+- `source_manifest_validation_result.data_insufficient_memo_required = false`.
 - `valuation_method_router_result.selected_methods` is populated.
 - `disabled_methods` includes explicit reasons.
 - `missing_data` is empty for every selected method, or the method is removed/degraded.
 
-If this check fails, skip valuation calculations and write `data_insufficient_memo`.
+If this check fails, skip workbook valuation tabs and write `data_insufficient_memo` / `model_blocked_reason`.
 
 ### 3.1 DCF Valuation (conditional)
 
@@ -333,22 +345,24 @@ Include only when `user_requested_rating = true` and all data gates pass. Add no
 
 ## Step 5: Model Integrity Verification
 
-Run the applicable checks from `references/financial-model-spec.md` §Model Integrity Checks plus the Phase 0 source/method checks below. This Phase 0 patch does not implement full `model_validator.py` or `source_manifest_validator.py`; until those scripts exist, perform the checks manually and record pass/fail in the model notes.
+Run the applicable checks from `references/financial-model-spec.md` §Model Integrity Checks plus the executable source validation gate below. `source_manifest_validator.py` must already have produced a passed validation JSON before this step; full `model_validator.py` is still out of scope, so workbook formula checks remain manual for now.
 
 | # | Check | Pass? |
 |---|-------|-------|
-| 1 | Source manifest exists and every critical number has `source_id` or `missing` | ☐ |
-| 2 | Official-source coverage exists for latest critical financial statements | ☐ |
-| 3 | `valuation_method_router_result` exists with selected/caution/disabled methods | ☐ |
-| 4 | Disabled methods are not accidentally modeled as valuation conclusions | ☐ |
-| 5 | BS balances (all periods, if 3-statement model is applicable) | ☐ |
-| 6 | Cash ties (CF ending = BS cash, if 3-statement model is applicable) | ☐ |
-| 7 | Revenue ties (Rev Model = IS, if applicable) | ☐ |
-| 8 | Historical accuracy vs Raw Data <1% and source IDs match | ☐ |
-| 9 | DCF checks pass only if DCF allowed: WACC in range or explained, WACC > g, TV/EV disclosed | ☐ |
-| 10 | Sensitivity center equals base case for selected method | ☐ |
-| 11 | Comps stats no errors; minimum 3 usable peers or downgrade | ☐ |
-| 12 | Scenario probabilities have `probability_basis`; otherwise no probability-weighted value | ☐ |
+| 1 | Source manifest validation JSON exists, was read, and has `passed = true` | ☐ |
+| 2 | Validation JSON has `source_manifest_status = sufficient` and `data_insufficient_memo_required = false` | ☐ |
+| 3 | Source manifest exists and every critical number has `source_id` or `missing` | ☐ |
+| 4 | Official-source coverage exists for latest critical financial statements | ☐ |
+| 5 | `valuation_method_router_result` exists with selected/caution/disabled methods | ☐ |
+| 6 | Disabled methods are not accidentally modeled as valuation conclusions | ☐ |
+| 7 | BS balances (all periods, if 3-statement model is applicable) | ☐ |
+| 8 | Cash ties (CF ending = BS cash, if 3-statement model is applicable) | ☐ |
+| 9 | Revenue ties (Rev Model = IS, if applicable) | ☐ |
+| 10 | Historical accuracy vs Raw Data <1% and source IDs match | ☐ |
+| 11 | DCF checks pass only if DCF allowed: WACC in range or explained, WACC > g, TV/EV disclosed | ☐ |
+| 12 | Sensitivity center equals base case for selected method | ☐ |
+| 13 | Comps stats no errors; minimum 3 usable peers or downgrade | ☐ |
+| 14 | Scenario probabilities have `probability_basis`; otherwise no probability-weighted value | ☐ |
 
 **All applicable checks must pass before delivery to Task 3.** If a critical source/method check fails, do not fix by inventing data; deliver `data_insufficient_memo` and STOP.
 
@@ -356,12 +370,16 @@ Run the applicable checks from `references/financial-model-spec.md` §Model Inte
 
 ## Step 6: Deliver
 
+If source manifest validation failed, deliver only `{Company}_{Ticker}_Data_Insufficient_Memo_{Date}.md` or `{Company}_{Ticker}_Model_Blocked_Reason_{Date}.md`; do not create a full model workbook or valuation analysis.
+
+If source manifest validation passed:
+
 1. Save `{Company}_{Ticker}_Financial_Model_{Date}.xlsx` to output directory
 2. Save `{Company}_{Ticker}_Valuation_Analysis_{Date}.md` to output directory
 3. Report:
    - Model summary (# tabs, # years projected)
    - Key outputs: Revenue CAGR, selected valuation methods, method-specific ranges, data quality grade
-   - Source/method/model integrity checks passed, or data insufficient memo delivered
+   - Source manifest validation result path and source/method/model integrity checks passed, or data insufficient memo delivered
 4. Provide **continuation-ready message** to user:
 
    **Chinese:**

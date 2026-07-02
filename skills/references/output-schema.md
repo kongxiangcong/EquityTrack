@@ -37,10 +37,42 @@ The analysis engine produces a structured intermediate object (written to `{comp
 | `benchmark_name` | string | Yes | Benchmark index name (e.g., "Shanghai Composite / 上证指数") |
 | `output_level` | enum | Yes | `tear-sheet` / `equity-report` |
 | `user_requested_rating` | boolean | Yes | Default `false`; rating language allowed only when true and all gates pass |
+| `source_manifest_path` | string | Yes | Path to the source manifest JSON artifact |
+| `source_manifest_validation_result_path` | string | Yes | Path to the validation JSON emitted by `scripts/source_manifest_validator.py` |
+| `source_manifest_validation_result` | object | Yes | Executable validation result; see shape below |
 | `source_manifest_status` | enum | Yes | `sufficient` / `insufficient` / `draft` |
 | `data_quality_grade` | enum | Yes | `High` / `Medium` / `Low` / `Insufficient` |
 | `valuation_method_router_result` | object | Yes | Selected/caution/disabled methods and missing data |
 | `data_insufficient_memo_required` | boolean | Yes | True when critical data or method gates fail |
+
+`source_manifest_status` and `data_insufficient_memo_required` must mirror the validation result JSON. Presentation and modeling layers must not infer these fields from narrative text.
+
+`source_manifest_validation_result` shape:
+
+```
+{
+  "path": string,
+  "validator": "source_manifest_validator",
+  "validator_version": number,
+  "passed": boolean,
+  "source_manifest_status": "sufficient" | "insufficient" | "draft" | "invalid",
+  "data_insufficient_memo_required": boolean,
+  "summary": {
+    "sources_total": number,
+    "official_sources_total": number,
+    "critical_fields_required": number,
+    "critical_fields_source_covered": number,
+    "critical_fields_explicitly_missing": number,
+    "official_financial_fields_covered": number,
+    "hash_checks": number,
+    "errors": number,
+    "warnings": number
+  },
+  "issues": [
+    { "severity": "error" | "warning", "code": string, "message": string, "path": string }
+  ]
+}
+```
 
 ### Section II: Core Investment Narrative
 
@@ -154,7 +186,9 @@ Each dimension follows this structure:
 
 ```
 {
+  "source_manifest_validation_result": { ... },
   "source_manifest_status": "sufficient" | "insufficient" | "draft",
+  "data_insufficient_memo_required": boolean,
   "income_statement": { ... },       // Revenue, net income, EPS, margins (3Y historical + 2Y forecast)
   "balance_sheet_highlights": { ... },
   "cash_flow_highlights": { ... },
@@ -212,6 +246,7 @@ All valuation output starts with method routing. L2 does not imply DCF.
     "missing_data": string[]
   },
   "source_manifest_status": "sufficient" | "insufficient" | "draft",
+  "source_manifest_validation_result": { ... },
   "model_validation_status": "not_run" | "passed" | "failed" | "not_available",
   "data_insufficient_memo_required": boolean
 }

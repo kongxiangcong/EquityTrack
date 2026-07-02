@@ -146,7 +146,10 @@ Run this gate before Phase 1 data collection. It determines whether the workflow
 | `unit` | Must be explicit (CNY mn, HKD mn, USD mn, shares mn, etc.) |
 | `latest_financial_period` | Filing period and report date |
 | `industry_classification` | Industry + business model + lifecycle |
+| `source_manifest_path` | Path to the JSON source manifest artifact |
+| `source_manifest_validation_result_path` | Path to validator JSON output from `scripts/source_manifest_validator.py` |
 | `source_manifest_status` | `draft`, `sufficient`, or `insufficient` |
+| `source_manifest_validation_result` | `passed`, `source_manifest_status`, `data_insufficient_memo_required`, summary, and blocking issues |
 | `valuation_method_router_result` | `selected_methods`, `caution_methods`, `disabled_methods`, `missing_data` |
 | `dcf_applicability` | `not_selected`, `allowed`, `caution`, or `disabled` |
 
@@ -161,6 +164,16 @@ Run this gate before Phase 1 data collection. It determines whether the workflow
 **Output of this gate:**
 
 Write a short `Source and Method Gate` block into the Research Document metadata. If any hard stop is triggered, continue only as a `data_insufficient_memo` with research notes, source gaps, and next data requirements.
+
+**Executable source validation gate:**
+
+Before Task 1 is considered complete, write the source manifest to `{Company}_{Ticker}_source_manifest_{Date}.json`, then run:
+
+```bash
+python skills/scripts/source_manifest_validator.py --manifest {Company}_{Ticker}_source_manifest_{Date}.json --pretty > {Company}_{Ticker}_source_manifest_validation_{Date}.json
+```
+
+Task 1 output must record both artifact paths. If the validation result has `passed = false`, `source_manifest_status != sufficient`, or `data_insufficient_memo_required = true`, Task 1 may only output `data_insufficient_memo` or a data gap section. It must not hand off valuation conclusions, target price, rating language, or a "ready for full model" signal.
 
 ---
 
@@ -209,6 +222,8 @@ Brief priority: official disclosure first, then optional terminal/secondary sour
 - [ ] Company fundamentals (financial statements, business structure, management)
 - [ ] Official financial filings and raw artifacts saved/referenced in `source_manifest`
 - [ ] Source manifest draft with `source_id`, publisher, URL/API, retrieved_at, period, currency, unit, raw_file_path/hash, page/table reference
+- [ ] Source manifest JSON saved to disk and validator JSON saved to disk
+- [ ] Source manifest validation result read back; blocking issues copied into the Research Document metadata and §XI
 - [ ] Industry and competitive landscape (CR concentration, pricing power, supply chain)
 - [ ] Equity structure (Chinese companies: 天眼查 `shareholder_info`; others: annual reports/SEC)
 - [ ] Valuation method router result and comparables (PE/PB/PS/EV where applicable, target 5-10 peers, minimum 3 before downgrade)
@@ -390,6 +405,8 @@ Write all findings to `{Company}_{Ticker}_Research_Document_{Date}.md` per `refe
 **This is the handoff artifact to Task 2 (Financial Model) and Task 3 (Report Generation).**
 - Contains all research, analysis, historical financial data, and competitive intelligence
 - Contains source feasibility, source manifest summary, method router result, and valuation inputs
+- Contains `source_manifest_path` and `source_manifest_validation_result_path`
+- Contains a source manifest validation summary: `passed`, `source_manifest_status`, `data_insufficient_memo_required`, errors/warnings count, and blocking issue codes
 - Does NOT contain default rating, target price, buy/sell advice, or final valuation calculations (that's Task 2's job when gates pass)
 - Must pass ALL acceptance criteria in the template's Content Quality Gate
 
@@ -399,9 +416,10 @@ Write all findings to `{Company}_{Ticker}_Research_Document_{Date}.md` per `refe
 - §VII Revenue Model: ≥3 segments with Volume×Price decomposition
 - §IV Competitive: ≥5 named competitors with revenue and market share
 - §XI Source Manifest Summary: every critical number mapped to `source_id` or `missing`
+- §XI Source Manifest Validation Summary: validation result path, pass/fail status, data insufficient flag, and blocking issues
 - §XII Preliminary Valuation Inputs: method router result + ≥3 comparable companies where applicable + DCF starting assumptions only if DCF gate is not `disabled`
 - NO placeholder text anywhere
-- If any critical data gate fails: output `data_insufficient_memo` and do not proceed to Task 2 valuation model
+- If source manifest validation fails or any critical data gate fails: output `data_insufficient_memo` / data gap section and do not proceed to Task 2 valuation model
 
 **Self-check**: Read the Content Quality Gate at the bottom of `references/research-document-template.md`. Every checkbox must pass. If any fails, return to Phase 2/3 to fill the gap.
 
@@ -414,11 +432,15 @@ Write all findings to `{Company}_{Ticker}_Research_Document_{Date}.md` per `refe
 After the research document passes the Content Quality Gate:
 
 1. **Save the document** to disk: `{Company}_{Ticker}_Research_Document_{Date}.md`
-2. **Save generated assets** alongside:
+2. **Save source validation artifacts** alongside:
+   - Source manifest JSON: `{Company}_{Ticker}_source_manifest_{Date}.json`
+   - Source manifest validation JSON: `{Company}_{Ticker}_source_manifest_validation_{Date}.json`
+3. **Read the validation JSON back** and confirm `passed = true`, `source_manifest_status = sufficient`, and `data_insufficient_memo_required = false` before marking the document ready for Task 2. If not, deliver a `data_insufficient_memo` / data gap section and STOP.
+4. **Save generated assets** alongside:
    - Stock chart SVG (from `scripts/stock_chart_generator.py`)
    - Stock price CSV + benchmark CSV
-3. **Run acceptance gate**: Verify all checks in `references/research-document-template.md` §Content Quality Gate
-4. **Deliver to user** with a **continuation-ready message**:
+5. **Run acceptance gate**: Verify all checks in `references/research-document-template.md` §Content Quality Gate
+6. **Deliver to user** with a **continuation-ready message**:
 
    **For L2 (Full Version, 3 Tasks):**
    > ✅ Step 1 完成 — 研究文档已生成。
@@ -444,4 +466,4 @@ After the research document passes the Content Quality Gate:
    > Next: Step 2 — Generate final PDF report (streamlined version, comparable-company valuation, no Excel model).
    > Just say **"next"**, **"continue"**, or **"下一步"** and I'll automatically proceed using the files generated in this session.
 
-5. **STOP.** Wait for user's continuation signal. Do not continue until user says "下一步"/"继续"/"continue"/"next".
+7. **STOP.** Wait for user's continuation signal. Do not continue until user says "下一步"/"继续"/"continue"/"next".
