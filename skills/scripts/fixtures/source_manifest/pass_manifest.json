@@ -1,0 +1,270 @@
+{
+  "source_manifest_version": 1,
+  "company": {
+    "name": "TestCorp Inc.",
+    "ticker": "TEST",
+    "market": "US",
+    "reporting_currency": "USD",
+    "trading_currency": "USD",
+    "accounting_standard": "US GAAP",
+    "latest_financial_period": "FY2024"
+  },
+  "sources": [
+    {
+      "source_id": "src_testcorp_2024_10k",
+      "tier": "official",
+      "market": "US",
+      "publisher": "SEC EDGAR",
+      "title": "TestCorp Form 10-K FY2024",
+      "official_or_secondary": "official",
+      "url_or_api": "https://www.sec.gov/Archives/testcorp-2024-10k",
+      "retrieved_at": "2026-07-02T12:00:00Z",
+      "query_params": {
+        "accession": "fixture"
+      },
+      "filing_period": "FY2024",
+      "report_date": "2025-02-28",
+      "currency": "USD",
+      "unit": "USD million",
+      "raw_file_path": "raw/testcorp_2024_10k.txt",
+      "raw_file_sha256": "d1f9fc93e045f6d3b01fa565a0615321a8d50d3ef22c30e615868e1f8d96703c",
+      "page_or_table": "fixture financial statements",
+      "extracted_fields": [
+        {
+          "field_name": "Revenue",
+          "period": "FY2024",
+          "value": 1000,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "EBIT",
+          "period": "FY2024",
+          "value": 120,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Net income",
+          "period": "FY2024",
+          "value": 80,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "EPS",
+          "period": "FY2024",
+          "value": 1.2,
+          "unit": "USD/share",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Tax",
+          "period": "FY2024",
+          "value": 24,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "D&A",
+          "period": "FY2024",
+          "value": 50,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "CapEx",
+          "period": "FY2024",
+          "value": 60,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "CFO",
+          "period": "FY2024",
+          "value": 140,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "FCF",
+          "period": "FY2024",
+          "value": 80,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Working capital",
+          "period": "FY2024",
+          "value": 200,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Cash",
+          "period": "FY2024",
+          "value": 300,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Debt",
+          "period": "FY2024",
+          "value": 400,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Lease debt",
+          "period": "FY2024",
+          "value": 40,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Preferred stock",
+          "period": "FY2024",
+          "value": 0,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Minority interest",
+          "period": "FY2024",
+          "value": 0,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Pension deficit",
+          "period": "FY2024",
+          "value": 0,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Associates/JV value",
+          "period": "FY2024",
+          "value": 20,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Non-operating assets",
+          "period": "FY2024",
+          "value": 10,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Diluted shares",
+          "period": "FY2024",
+          "value": 66.7,
+          "unit": "million shares",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "SBC/options dilution",
+          "period": "FY2024",
+          "value": 1.1,
+          "unit": "million shares",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "src_testcorp_market_20260702",
+      "tier": "terminal",
+      "market": "US",
+      "publisher": "Fixture Exchange Feed",
+      "title": "TestCorp market data 2026-07-02",
+      "official_or_secondary": "secondary",
+      "url_or_api": "fixture://market-data/testcorp",
+      "retrieved_at": "2026-07-02T12:30:00Z",
+      "query_params": {
+        "ticker": "TEST",
+        "date": "2026-07-02"
+      },
+      "filing_period": "2026-07-02",
+      "report_date": "2026-07-02",
+      "currency": "USD",
+      "unit": "mixed",
+      "raw_file_path": "raw/testcorp_market_20260702.txt",
+      "raw_file_sha256": "031505dea28cd833cedde47a2557424ec52b3a349dd2017e078285e25d064aa9",
+      "page_or_table": "fixture market snapshot",
+      "extracted_fields": [
+        {
+          "field_name": "Current price",
+          "period": "2026-07-02",
+          "value": 15,
+          "unit": "USD/share",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "Market cap",
+          "period": "2026-07-02",
+          "value": 1000,
+          "unit": "USD million",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        },
+        {
+          "field_name": "FX rate",
+          "period": "2026-07-02",
+          "value": 1,
+          "unit": "USD/USD",
+          "currency": "USD",
+          "extraction_method": "fixture",
+          "confidence": "high"
+        }
+      ],
+      "cross_checks": []
+    }
+  ],
+  "missing_critical_data": [],
+  "unavailable_tools": []
+}

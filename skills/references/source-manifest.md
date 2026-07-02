@@ -100,3 +100,64 @@ Set `source_manifest_status = insufficient` and produce `data_insufficient_memo`
 - Source conflicts remain unresolved for critical fields.
 
 When this trigger fires, the skill must not output target price, rating, buy/sell advice, or probability-weighted target.
+
+---
+
+## Executable Validation
+
+Run the validator before Task 2 modeling and before any final report generation:
+
+```bash
+python skills/scripts/source_manifest_validator.py --manifest path/to/source_manifest.json --pretty
+```
+
+The validator always prints a validation result JSON object:
+
+```json
+{
+  "validator": "source_manifest_validator",
+  "passed": true,
+  "source_manifest_status": "sufficient",
+  "data_insufficient_memo_required": false,
+  "summary": {
+    "sources_total": 2,
+    "critical_fields_required": 23,
+    "critical_fields_source_covered": 23,
+    "hash_checks": 2,
+    "errors": 0,
+    "warnings": 0
+  },
+  "issues": []
+}
+```
+
+Exit code is `0` only when there are no error-severity issues. Any error means the workflow must stop before valuation conclusions. If the result sets `data_insufficient_memo_required = true`, produce `data_insufficient_memo` and do not output target price, rating, buy/sell advice, or probability-weighted target.
+
+### Supported Inputs
+
+- JSON is the default supported format.
+- YAML is supported when PyYAML is installed. If PyYAML is unavailable, the validator returns structured JSON with `YAML_SUPPORT_UNAVAILABLE` instead of crashing.
+- Markdown files are supported when they contain a fenced `json`, `yaml`, or `yml` source manifest block.
+
+### Checks Performed
+
+The validator checks:
+
+- Required root, company, source, and extracted-field schema fields.
+- `source_id` uniqueness and cross-check references.
+- Critical field coverage by `source_id` or explicit `missing_critical_data`.
+- Official-source coverage for critical financial statement fields.
+- `raw_file_path` existence and `raw_file_sha256` match.
+- Currency, unit, and period consistency.
+- Unresolved source conflicts (`mismatch`, `conflict`, or `unresolved` cross-check status).
+
+### Fixture Smoke Tests
+
+Use the included fixtures to verify the validator itself:
+
+```bash
+python skills/scripts/source_manifest_validator.py --manifest skills/scripts/fixtures/source_manifest/pass_manifest.json --pretty
+python skills/scripts/source_manifest_validator.py --manifest skills/scripts/fixtures/source_manifest/fail_manifest.json --pretty
+```
+
+The first command should pass with `source_manifest_status = sufficient`. The second command should fail and report representative hard errors.

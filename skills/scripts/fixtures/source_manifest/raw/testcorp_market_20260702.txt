@@ -1,0 +1,4 @@
+TestCorp market data fixture retrieved 2026-07-02.
+Current price 15.00
+Market cap 1000
+FX rate 1.0

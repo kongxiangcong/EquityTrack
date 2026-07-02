@@ -1,0 +1,21 @@
+TestCorp FY2024 official filing fixture.
+Revenue 1000
+EBIT 120
+Net income 80
+EPS 1.20
+Tax 24
+D&A 50
+CapEx 60
+CFO 140
+FCF 80
+Working capital 200
+Cash 300
+Debt 400
+Lease debt 40
+Preferred stock 0
+Minority interest 0
+Pension deficit 0
+Associates/JV value 20
+Non-operating assets 10
+Diluted shares 66.7
+SBC/options dilution 1.1
