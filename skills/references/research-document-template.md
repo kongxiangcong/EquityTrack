@@ -13,10 +13,12 @@ After completing Phase 0-3 of Task 1, the agent writes all findings into `{Compa
 ## Design Principles
 
 1. **Research document ≠ final report.** It's a structured data repository plus fully-written analytical prose, not a formatted presentation.
-2. **Every claim needs data.** No unsupported assertions. Every statement backed by a number, source, or named piece of evidence.
+2. **Every claim needs data.** No unsupported assertions. Every statement backed by a number, `source_id`, or named piece of evidence.
 3. **Task 2 extracts financial data from this document** to build the Excel model. So §VI and §VII must contain actual numbers, not vague descriptions.
 4. **Task 3 extracts narrative from this document** to populate report sections. So §I–§V, §VIII, §X, and §XIII must contain fully-written analysis paragraphs, not bullet outlines.
 5. **Word counts are minimums, not targets.** The ranges below are the floor that keeps each section genuinely analytical. Going longer when the company warrants it is encouraged.
+6. **Default output is a research view, not investment advice.** Do not write BUY/HOLD/SELL, target price conclusions, or buy/sell advice unless `user_requested_rating = true` and all data gates pass.
+7. **Missing critical data changes the output type.** If official-source coverage or selected-method inputs are insufficient, write `data_insufficient_memo` instead of valuation conclusion.
 
 ---
 
@@ -66,6 +68,12 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 | `report_date` | [YYYY-MM-DD] |
 | `latest_financial_report` | [e.g., "FY2025 Q3" or "2024 Annual Report"] |
 | `current_price` | [e.g., $198.50 or ¥1,850.00] |
+| `user_requested_rating` | false unless explicitly requested |
+| `source_manifest_status` | [draft / sufficient / insufficient] |
+| `data_quality_grade` | [High / Medium / Low / Insufficient] |
+| `valuation_method_router_result` | [selected_methods / caution_methods / disabled_methods / missing_data] |
+| `dcf_applicability` | [not_selected / allowed / caution / disabled] |
+| `data_insufficient_memo_required` | [true / false] |
 
 ---
 
@@ -77,10 +85,10 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 - **Industry context and secular trend** (2-3 sentences): Name the trend, quantify it (TAM growth rate, adoption curve position), and note where the company sits in that trend.
 - **Company's differentiated position** (2-3 sentences): Describe the competitive advantage with one named mechanism (scale, network, IP, switching cost) and one supporting data point (market share, margin spread vs peers).
 - **Recent financial trajectory** (2-3 sentences): Most recent period's revenue/margin/FCF direction with numbers. Include one-sentence explanation of what's driving it.
-- **Valuation assessment** (2-3 sentences): Cheap / fair / expensive vs BOTH history AND peers; name specific anchors (e.g., "trading at 18x forward vs 5Y avg 23x and peer median 21x").
+- **Valuation view** (2-3 sentences): Valuation range/relative position vs BOTH history AND peers where applicable; name specific anchors (e.g., "trading at 18x forward vs 5Y avg 23x and peer median 21x") and data quality limits.
 - **Key catalysts and timeline** (2-3 sentences): Name 2-3 catalysts with specific dates or event triggers.
 - **Principal risks** (2-3 sentences): The 1-2 biggest reasons the thesis could break, with observable early-warning signals.
-- **Bottom-line rating rationale** (1 sentence): Tie it together with an overall rating conclusion.]
+- **Bottom-line research view** (1 sentence): Tie it together with a non-advice research view and the most important uncertainty.]
 
 ---
 
@@ -110,7 +118,7 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 **Sustainability** (2-3 full paragraphs, 150-250 words): TAM remaining (today's penetration %, S-curve position), volume vs. price vs. mix decomposition of historical growth, competitive risk to growth (peer encroachment, new entrants), management execution track record (cite 2-3 recent guidance vs. actuals comparisons), and one explicit factor that could break the growth trajectory.
 
-**So What** (40-80 words): Implication for target price, scenario probability weighting, and which catalysts to watch for trajectory confirmation.
+**So What** (40-80 words): Implication for valuation view/range, scenario framing, and which catalysts to watch for trajectory confirmation.
 
 ### 2.3 Earnings Quality (H3) — 250-400 words
 
@@ -134,9 +142,9 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 - Forward PE: X, PEG: Y
 - Consensus gap: [where market may be wrong]
 
-**Expectation Gap** (2-3 paragraphs, 150-250 words): What is the market explicitly pricing in (revenue growth, margin level, terminal multiple)? Where do you disagree with consensus and by how much? Which 1-2 catalysts could close the gap, and on what timeline? This is the alpha-thinking section — if you cannot identify a mispricing, say so honestly and frame as "fairly valued, neutral rating".
+**Expectation Gap** (2-3 paragraphs, 150-250 words): What is the market explicitly pricing in (revenue growth, margin level, terminal multiple)? Where do you disagree with consensus and by how much? Which 1-2 catalysts could close the gap, and on what timeline? If you cannot identify a mispricing, say so honestly and frame as "fairly valued / no clear valuation edge" rather than a rating.
 
-**So What** (40-80 words): Direct implication for target price range and recommended action.
+**So What** (40-80 words): Direct implication for valuation range, uncertainty, and what evidence would change the research view.
 
 ### 2.5 Geopolitics/Policy (H5) — 250-400 words
 
@@ -191,7 +199,7 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ### TAM/SAM/SOM
 
-| Level | Size | Growth (CAGR) | Source |
+| Level | Size | Growth (CAGR) | Source ID |
 |-------|------|---------------|--------|
 | TAM | $XXB | X% | [Source] |
 | SAM | $XXB | X% | [Source] |
@@ -236,7 +244,7 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ### Income Statement
 
-| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 (Latest) | Source |
+| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 (Latest) | Source ID / Missing |
 |--------|------|------|------|------|-------------|--------|
 | Revenue | | | | | | |
 | Cost of Revenue | | | | | | |
@@ -261,7 +269,7 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ### Balance Sheet (Year-End)
 
-| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 | Source |
+| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 | Source ID / Missing |
 |--------|------|------|------|------|-----|--------|
 | Cash & Equivalents | | | | | | |
 | Accounts Receivable | | | | | | |
@@ -281,7 +289,7 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ### Cash Flow
 
-| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 | Source |
+| Metric | FY-4 | FY-3 | FY-2 | FY-1 | FY0 | Source ID / Missing |
 |--------|------|------|------|------|-----|--------|
 | CFO | | | | | | |
 | CapEx | | | | | | |
@@ -366,17 +374,33 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 ---
 
-## XI. Data Sources
+## XI. Source Manifest Summary
 
-| Data Type | Source | Retrieval Date | Reliability |
-|-----------|--------|----------------|-------------|
-| [Every data source used] | | | |
+| Source ID | Tier | Publisher | Filing Period | Report Date | Currency | Unit | Raw File / URL | Page/Table | Coverage |
+|-----------|------|-----------|---------------|-------------|----------|------|----------------|------------|----------|
+| [Every critical source or missing field] | official / terminal / secondary / news / estimate / missing | | | | | | | | |
+
+**Critical Missing Data**:
+- [Field] — required for [method/output] — missing reason — next data required.
 
 ---
 
 ## XII. Preliminary Valuation Inputs
 
-> This section provides starting-point data for valuation. Content adapts based on `valuation_depth`.
+> This section provides starting-point data for valuation. Content adapts based on `valuation_depth`, `source_manifest_status`, and `valuation_method_router_result`. It does not output a final target price or rating.
+
+### Valuation Method Router Result
+
+| Method | Status | Role | Reason | Required Data | Missing Data | Source Coverage |
+|--------|--------|------|--------|---------------|--------------|-----------------|
+| DCF | not_selected / allowed / caution / disabled | primary / secondary / cross-check / none | | | | |
+| Comps | selected / caution / disabled | | | | | |
+| rNPV / SOTP / NAV / Residual Income / DDM | selected / caution / disabled | | | | | |
+
+**Router notes**:
+- Financial firms: ordinary FCFF/WACC DCF must be disabled.
+- Pre-revenue or pipeline-driven biopharma: rNPV/SOTP should be primary; ordinary DCF/PE disabled or caution.
+- If critical data is missing, set `data_insufficient_memo_required = true`.
 
 ### Comparable Companies (required for both L1 and L2)
 | Company | Ticker | Market Cap | Revenue(TTM) | PE(TTM) | PB | EV/EBITDA | Why Selected |
@@ -387,53 +411,61 @@ Example: `{Company}_{Ticker}_Research_Document_{Date}.md`
 
 **L2 Mode**: This is a preliminary list for Task 2 to refine.
 
-### DCF Starting Assumptions (L2 only; L1 skip this subsection)
-| Parameter | Suggested Value | Basis |
-|-----------|----------------|-------|
-| Risk-Free Rate | X% | [Country] 10Y bond |
-| Beta | X.X | [Source] |
-| WACC (estimated) | X-X% | CAPM preliminary |
-| Terminal Growth | X-X% | [Rationale] |
-| Revenue CAGR (5Y) | X-X% | Consensus ± adjustment |
-| Terminal Margin | X-X% | Historical trend |
+### DCF Starting Assumptions (L2 only if DCF is allowed/caution)
+| Parameter | Suggested Value | Source ID / Basis | Gate |
+|-----------|----------------|-------------------|------|
+| Risk-Free Rate | X% | [Country] 10Y bond / source_id | required |
+| Beta | X.X | raw/unlevered/relevered beta source_id | required |
+| WACC (estimated) | X-X% | CAPM preliminary | must satisfy WACC > g |
+| Terminal Growth | X-X% | source/rationale | must not exceed long-term nominal growth |
+| Revenue CAGR (5Y) | X-X% | consensus/source_id ± adjustment | required |
+| Terminal Margin | X-X% | historical/peer source_id | mature-state check |
+
+If DCF is disabled, replace this subsection with:
+
+```
+DCF disabled_reason: [financial firm / pre-revenue biotech / unstable FCFF / insufficient official source / WACC <= g / terminal state not supportable / other]
+Selected alternative method: [rNPV / SOTP / NAV / residual income / DDM / comps / data_insufficient_memo]
+```
 
 ### Consensus Estimates (required for both L1 and L2)
-| Metric | FY+1E | FY+2E | Source | # Analysts |
+| Metric | FY+1E | FY+2E | Source ID | # Analysts |
 |--------|-------|-------|--------|-----------|
 | Revenue | | | | |
 | EPS | | | | |
 | EBITDA | | | | |
-| Target Price | | | | |
+| Consensus Price View (if sourced; reference only) | | | | |
 
 ### Scenario Assumptions (L1: simple table; L2: detailed inputs)
-| Scenario | Revenue Growth | Margin | Implied PE | Implied Price | Probability |
-|----------|---------------|--------|-----------|--------------|------------|
-| Bull | X% | X% | XXx | ¥XX | XX% |
-| Base | X% | X% | XXx | ¥XX | XX% |
-| Bear | X% | X% | XXx | ¥XX | XX% |
+| Scenario | Revenue Growth | Margin | Implied Multiple / Method Driver | Implied Valuation Range | Probability Basis |
+|----------|---------------|--------|----------------------------------|-------------------------|-------------------|
+| Bull | X% | X% | XXx / driver | ¥XX-XX | [sourced / not_quantified] |
+| Base | X% | X% | XXx / driver | ¥XX-XX | [sourced / not_quantified] |
+| Bear | X% | X% | XXx / driver | ¥XX-XX | [sourced / not_quantified] |
 
 ---
 
-## XIII. Cross-Method Valuation Synthesis (250-400 words)
+## XIII. Cross-Method Valuation View (250-400 words)
 
-> **Why this section exists**: A single valuation method can mislead. Cross-method synthesis is how the final target price is defended. Task 3 reads this section directly to write the "Valuation Conclusion" subsection and to justify the rating.
+> **Why this section exists**: A single valuation method can mislead. Cross-method synthesis explains the valuation view, confidence band, and method limitations. Task 3 reads this section directly to write the valuation section. It does not justify a default rating or target price.
 >
 > **Mode-specific handling**:
-> - **L1 (streamlined, 2-Task)**: Fill this section completely in Task 1 using only the comparable-companies method (§XII Comps table) plus consensus target price. No DCF. State explicitly that DCF was not performed and why (e.g., "L1 scope — no explicit DCF model built").
-> - **L2 (full, 3-Task)**: Fill in the **Comparable Companies** row and any **Historical Trading Band** row during Task 1 based on the data you already have. Leave the **DCF** row and the **Final Synthesis** paragraph marked `[TO BE COMPLETED IN TASK 2]`. Task 2 will fill them in after building the DCF model and will rewrite the synthesis paragraph with all three methods reconciled.
+> - **L1 (streamlined, 2-Task)**: Fill this section using selected L1 methods from the router. No DCF. State explicitly that DCF was not performed because L1 scope or applicability gate does not allow it.
+> - **L2 (full, 3-Task)**: Fill in selected method rows based on Task 1 data. Leave any model-dependent row marked `[TO BE COMPLETED IN TASK 2 IF GATES PASS]`. DCF appears only if `dcf_applicability` is `allowed` or `caution`.
 
 ### Method Summary Table
 
-| Method | Implied Price | Target Multiple / Key Assumption | Confidence | Weighting | Notes |
-|--------|--------------|----------------------------------|-----------|----------|-------|
-| Comparable Companies (peer multiples) | $XXX | [e.g., 18x FY+1 EPS, peer median] | High/Med/Low | XX% | [L1 and L2 both] |
-| DCF (L2 only) | $XXX | [e.g., WACC 9.5%, TG 2.5%] | High/Med/Low | XX% | [L2 — filled in Task 2] |
-| Historical Trading Band | $XXX | [e.g., 5Y avg forward PE 22x] | High/Med/Low | XX% | [Optional but recommended] |
-| Consensus Target Price | $XXX | [analyst median] | — | Reference only | [For calibration, not weighted] |
-| **Weighted Target Price** | **$XXX** | | | 100% | |
+| Method | Status | Implied Valuation Range | Key Assumption / Driver | Confidence | Weighting Logic | Notes |
+|--------|--------|-------------------------|-------------------------|------------|-----------------|-------|
+| Comparable Companies (peer multiples) | selected/caution/disabled | $XX-$XX | [e.g., 18x FY+1 EPS, peer median] | High/Med/Low | [if selected] | [L1 and L2 both] |
+| DCF (L2 conditional) | allowed/caution/disabled | $XX-$XX or N/A | [e.g., WACC 9.5%, TG 2.5%] | High/Med/Low | [if allowed] | [disabled_reason if disabled] |
+| Historical Trading Band | selected/caution/disabled | $XX-$XX or N/A | [e.g., 5Y avg forward PE 22x] | High/Med/Low | [if sourceable] | |
+| rNPV / SOTP / NAV / Residual Income / DDM | selected/caution/disabled | $XX-$XX or N/A | [method-specific driver] | High/Med/Low | [if selected] | |
+| Consensus Price View | reference only | $XX-$XX or N/A | [analyst median if sourced] | — | Not weighted | For calibration only |
+| **Valuation View Range** | gated | **$XX-$XX or data insufficient** | | | | No default target price |
 
 ### Synthesis Paragraph (150-250 words)
-[Explain the weighting logic: why each method is weighted as it is given the company's stage, cyclicality, data reliability, and peer comparability. Reconcile the spread between methods — if comps imply $120 and DCF implies $150, explain which assumption drives the gap and which method you trust more. State the final target price and the 12-month total-return expectation (price appreciation + dividend yield). Derive the rating (Buy / Hold / Sell) from the total-return vs. your firm's rating bands, and tie back to the scenario probabilities from §XII. Close with one sentence on what would cause you to revise the target price by >10%.]
+[Explain the weighting logic: why each selected method is weighted as it is given the company's stage, cyclicality, data reliability, and peer comparability. Reconcile the spread between methods — if comps imply a materially different range than DCF/rNPV/NAV, explain which assumption drives the gap and which method has higher confidence. State the valuation view range only if gates pass; otherwise state why the workflow degraded to `data_insufficient_memo`. Close with one sentence on what evidence would change the valuation view materially.]
 
 Before delivering the research document, verify ALL of the following:
 
@@ -443,24 +475,28 @@ Before delivering the research document, verify ALL of the following:
 - [ ] §II Six-Dimension: All 6 dimensions 250-400 words each with Conclusion + Data + expanded analysis sub-section + So What
 - [ ] §III Company Overview: 1,200-1,800 words with all 4 subsections hitting their individual word floors
 - [ ] §IV Industry: ≥5 named competitors with revenue and market share data; Industry Overview ≥450 words; Competitive Positioning Analysis ≥350 words
-- [ ] §IV TAM/SAM/SOM: All 4 rows filled with actual numbers and sources PLUS 200-350 word narrative
+- [ ] §IV TAM/SAM/SOM: All 4 rows filled with actual numbers and source IDs PLUS 200-350 word narrative
 - [ ] §V Supply Chain: Complete Mermaid code + Upstream (200-300 words) + Downstream (200-300 words)
-- [ ] §VI Historical Financials: ALL cells filled for at least 3 years (NO blanks in IS/BS/CF)
+- [ ] §VI Historical Financials: critical cells filled for at least 3 years with `source_id`; unavailable critical cells marked `missing`
 - [ ] §VII Revenue Model: ≥3 segments with Volume×Price decomposition, 200-300 words per-segment analysis, Revenue Concentration paragraph
 - [ ] §VIII Thesis Table: All 4 rows have both Bull AND Bear arguments (no blanks) + 400-600 word Commentary
 - [ ] §IX Catalysts: ≥4 events with dates (including next earnings)
 - [ ] §X Risks: ≥8 risks across ≥3 categories with P×I scoring; each risk 80-130 words
-- [ ] §XII Comparable Companies: ≥3 companies with real data (L1: must have ≥5 with full metrics)
-- [ ] §XII Consensus Estimates: Target price + FY+1E/FY+2E revenue and EPS (both L1 and L2)
-- [ ] §XII Scenario Assumptions: Bull/Base/Bear with implied prices and probabilities (both L1 and L2)
-- [ ] §XII DCF Starting Assumptions: Filled (L2 only; L1 may skip)
-- [ ] §XIII Cross-Method Valuation Synthesis: Method Summary Table + 150-250 word synthesis paragraph. L1: fully completed in Task 1 (comps + historical band + consensus). L2: comps row filled in Task 1; DCF row and final synthesis paragraph marked `[TO BE COMPLETED IN TASK 2]`.
+- [ ] §XI Source Manifest Summary: every critical number has `source_id` or is marked `missing`
+- [ ] §XII Valuation Method Router Result: selected/caution/disabled methods and missing data recorded
+- [ ] §XII Comparable Companies: ≥3 companies with real data and source IDs (L1 target ≥5 with full metrics)
+- [ ] §XII Consensus Estimates: FY+1E/FY+2E revenue and EPS if sourced; consensus price view is reference only
+- [ ] §XII Scenario Assumptions: Bull/Base/Bear with implied valuation ranges; probability basis required before probability weighting
+- [ ] §XII DCF Starting Assumptions: filled only if DCF gate is `allowed` or `caution`; otherwise `disabled_reason` recorded
+- [ ] §XIII Cross-Method Valuation View: Method Summary Table + 150-250 word synthesis paragraph. L1: selected L1 methods only. L2: selected/caution methods only; DCF row appears only if gate permits.
 
 ### Data Quality Checks
 - [ ] No placeholder text (e.g., "TBD", "XXX", "to be filled")
 - [ ] Financial data cross-verified: Revenue in IS = Revenue in CF discussion (if mentioned)
 - [ ] Revenue segments sum to total revenue (within 2% tolerance for "other" segment)
-- [ ] All data sources documented in §XI
+- [ ] All critical data sources documented in §XI Source Manifest Summary
+- [ ] No default BUY/HOLD/SELL, target price conclusion, or buy/sell advice
+- [ ] If `data_insufficient_memo_required = true`, no valuation conclusion is written
 
 ### Metadata Checks
 - [ ] All Task Handoff Metadata fields filled

@@ -6,18 +6,27 @@
 
 ## Data Source Priority
 
-> **Priority is market-specific.** iFind has the deepest coverage for mainland-listed
-> names (A-shares, HK), while Yahoo Finance is faster and more reliable for US tickers.
-> The conflict-resolution tree at the bottom of this document follows the same
-> per-market preference — keep them aligned.
+> **Official disclosure is the first layer for critical financial data.** Commercial terminals and Yahoo Finance are useful for structuring, market data, and cross-checks, but they cannot be the sole authority for financial statements, share count, net debt, minority interest, or other valuation-critical numbers.
 
-### By market (financial / valuation / price data)
+Every critical number must be entered into `source_manifest` using `references/source-manifest.md`. If a critical number cannot be tied to an official source, mark it `missing` and trigger `data_insufficient_memo` rather than continuing to a valuation conclusion.
 
-| Market | Priority 1 | Priority 2 | Fallback |
-|--------|-----------|-----------|----------|
-| A-shares (`.SH` / `.SZ`) | **iFind** | Yahoo Finance (limited coverage; rate-limited) | Web Search |
-| Hong Kong (`.HK`) | **iFind** | Yahoo Finance | Web Search |
-| US (`AAPL`, `MSFT`, ...) | **Yahoo Finance** | iFind (limited coverage for some US names) | Web Search |
+### By market (official-first)
+
+| Market | Priority 1: Official financial disclosure | Optional secondary / cross-check | Fallback / allowed use |
+|--------|-------------------------------------------|----------------------------------|------------------------|
+| A-shares (`.SH` / `.SZ` / `.BJ`) | CNINFO, SSE/SZSE/BSE announcements, company IR annual/interim/quarterly reports | iFind, exchange market data, Yahoo where usable | Web search only for source discovery, news, industry context; not as sole critical financial source |
+| Hong Kong (`.HK`) | HKEXnews, company IR annual/interim reports | iFind, Yahoo, terminal data | Web search for source discovery, news, industry context |
+| US (`AAPL`, `MSFT`, ...) | SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR annual/quarterly reports | Yahoo, terminal data, consensus services | Web search for source discovery, news, industry context |
+
+### Data type priority
+
+| Data Type | Primary Source | Secondary / Cross-check | Hard Rule |
+|-----------|----------------|-------------------------|-----------|
+| Financial statements | Official filings / company IR | iFind/Yahoo/terminal structured data | No official source → no valuation conclusion |
+| Share count / net debt / minority interest / preferred / leases | Official filings / notes | Terminal data | Missing or conflicting → no per-share value |
+| Price / market cap / trading data | Exchange/terminal/Yahoo/iFind with timestamp | Backup market data source | Must save retrieval date and adjustment method |
+| Consensus estimates | Licensed consensus source or clearly labeled secondary source | Company guidance / broker summaries | Treat as estimates, never official history |
+| Industry / TAM / market share | Association/statistical agency/company filings/reputable research | News/web search | Must label methodology and period |
 
 ### Cross-market sources (any ticker)
 
@@ -29,7 +38,9 @@
 
 ---
 
-## iFind Data Source
+## iFind Data Source (Optional Secondary)
+
+iFind is an optional connector/terminal source. Use it for structuring, market data, historical multiples, and cross-checking. Do not treat it as the only source for critical financial-statement history when official filings are available or required.
 
 ### API List
 
@@ -79,7 +90,9 @@
 
 ---
 
-## Yahoo Finance Data Source
+## Yahoo Finance Data Source (Optional Secondary)
+
+Yahoo Finance is acceptable for price, market cap, trading data, and a secondary view of financials. It is not the sole source of authority for financial-statement history in this skill.
 
 | API Name | Function | Parameters |
 |----------|----------|------------|
@@ -154,10 +167,23 @@ Must collect the following data in Phase 1 for subsequent 六维分析 and short
 
 | Scenario | Handling Method | Annotation |
 |----------|-----------------|------------|
-| Single source missing | Try backup data sources (same type) | Annotate actual source |
-| Dual source conflict | Use iFind as reference (Yahoo Finance for US stocks) | Annotate difference |
-| **Critical stock price/financial data missing** | **Multi-attempt retry → then skip module** | **See §Stock Price Data Retry Protocol below** |
+| Single source missing | Try official source route first, then optional secondary/cross-check | Annotate actual source and source tier |
+| Dual source conflict | Official disclosure wins for financials; latest restatement wins when applicable | Annotate difference, period, currency, unit |
+| **Critical financial data missing official source** | **Mark `missing` in source manifest → produce `data_insufficient_memo`** | **No valuation conclusion, target price, or rating** |
+| **Critical stock price data missing** | **Multi-attempt retry → then skip price/chart module** | **See §Stock Price Data Retry Protocol below** |
 | Industry data missing | Web Search supplement | Annotate source |
+
+### Critical Data Gate
+
+If any of the following fields lacks official or adequately documented source coverage, the workflow must degrade to `data_insufficient_memo`:
+
+- Latest annual/interim/quarterly financial statements.
+- Reporting currency, unit, reporting period, accounting standard, and restatement status.
+- Diluted share count, options/SBC dilution when material, net debt, lease debt, preferred stock, minority interest, pension deficit, non-operating assets, associates/JV value.
+- For DCF: EBIT, tax rate, D&A, CapEx, working capital, WACC components, terminal growth basis, and `WACC > g`.
+- For financial firms: book value, ROE, COE inputs, regulatory capital/solvency metrics, credit/underwriting quality metrics.
+- For biopharma rNPV: asset, indication, phase, geography, rights ownership, PoS basis, peak-sales basis, license terms, cash runway.
+- For comps: peer market cap/EV, metric definitions, reporting period, currency/unit, and at least 3 usable peers.
 
 ### ⛔ ZERO TOLERANCE: No Simulated/Mock Data Under Any Circumstance
 
@@ -278,15 +304,15 @@ Data Conflict Detection
     │
     ├─ Conflict Type Judgment
     │   ├─ Price Data Conflict (stock price/valuation)
-    │   │   ├─ A股/HK stocks → Use iFind as reference (primary source)
-    │   │   ├─ US stocks → Use Yahoo Finance as reference (more timely)
+    │   │   ├─ A股/HK stocks → Use exchange/terminal source with documented adjustment; iFind/Yahoo can cross-check
+    │   │   ├─ US stocks → Use exchange/Yahoo/terminal source with retrieval timestamp
     │   │   └─ Difference >10% → Re-fetch data, check adjustment settings
     │   │
     │   ├─ Financial Data Conflict (revenue/profit/assets)
     │   │   ├─ Check if reporting periods match
-    │   │   │   ├─ Match → Use iFind as reference (more current)
+    │   │   │   ├─ Match → Use official filing/company disclosure as reference
     │   │   │   └─ Mismatch → Unify using latest reporting period
-    │   │   └─ Difference 5-10% → Annotate data source difference, prioritize iFind
+    │   │   └─ Difference 5-10% → Annotate data source difference, prioritize official disclosure/restatement
     │   │
     │   ├─ Time Series Data Conflict (52-week high/low/historical valuation)
     │   │   ├─ Check if ex-dividend adjustment is consistent, including checking price continuity (any single-day swings >30%)
@@ -309,13 +335,13 @@ Data Conflict Detection
 
 | Data Type | Primary Source | Verification Source | Conflict Handling Rule |
 |-----------|----------------|---------------------|----------------------|
-| A股 stock price | iFind | Yahoo Finance | Use iFind, check adjustment if difference >5% |
-| HK stock price | iFind | Yahoo Finance | Use iFind, check adjustment if difference >5% |
-| US stock price | Yahoo Finance | iFind | Use Yahoo Finance |
-| A股 financials | iFind | Company financial reports | Use iFind, verify reports if difference >5% |
-| HK financials | iFind | Yahoo Finance | Use iFind |
-| US financials | Yahoo Finance | iFind | Use Yahoo Finance |
-| Industry data | Caixin/brokerage reports | Web Search | Use authoritative sources, annotate source |
+| A股 stock price | Exchange/terminal/iFind with timestamp | Yahoo Finance where usable | Check adjustment if difference >5%; document chosen series |
+| HK stock price | Exchange/terminal/iFind/Yahoo with timestamp | Alternate market data source | Check adjustment/currency if difference >5%; document chosen series |
+| US stock price | Exchange/Yahoo/terminal with timestamp | Alternate market data source | Document retrieval timestamp and adjustment method |
+| A股 financials | CNINFO/SSE/SZSE/BSE/company IR | iFind/terminal | Official filing/restatement wins |
+| HK financials | HKEXnews/company IR | iFind/Yahoo/terminal | Official filing/restatement wins |
+| US financials | SEC EDGAR/XBRL/company IR | Yahoo/iFind/terminal | Official filing/restatement wins |
+| Industry data | Official statistics/associations/company filings/reputable research | Web Search | Use authoritative source, annotate methodology and period |
 
 ### Adjustment Problem Handling
 

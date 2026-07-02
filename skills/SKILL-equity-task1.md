@@ -16,13 +16,16 @@ description: "Task 1 of equity report workflow. Produces a Research Document (�
 
 ### DO NOT TAKE SHORTCUTS
 - ✅ Write the full Research Document — ≥6,000 words, every section complete
-- ✅ §VI Historical Financials: Fill ALL cells for ≥3 years of IS/BS/CF (no blanks, no "N/A")
+- ✅ §VI Historical Financials: Fill ALL available cells for ≥3 years of IS/BS/CF with official-source `source_id`; any unavailable critical field must be marked `missing` and trigger the data gate
 - ✅ §VII Revenue Model: ≥3 segments with Volume × Price decomposition
 - ✅ §IV Competitive: ≥5 named competitors with revenue and market share data
 - ✅ Phase 2.7 deep research: Complete ALL 6 sub-steps with minimum word counts
 - ✅ Every claim must have a real data source — no fabrication
+- ✅ Every critical number must enter `source_manifest` or be explicitly marked `missing`
+- ✅ Default output uses research language (`valuation_view`, `risk_reward_summary`, `data_quality_grade`), not BUY/HOLD/SELL or buy/sell advice
 - ❌ Do not abbreviate sections to save context — this document feeds Task 2 and Task 3
-- ❌ Do not fabricate financial data — if unavailable, search harder or document the gap
+- ❌ Do not fabricate financial data — if unavailable from official or documented secondary sources, degrade to `data_insufficient_memo`
+- ❌ Do not output target price, rating, or buy/sell conclusion from Task 1
 - ❌ Do not skip Phase 2.7 or merge sub-steps — each produces distinct analytical output
 - ❌ Do not use placeholder text ("TBD", "to be determined", "[insert data]")
 
@@ -40,6 +43,9 @@ Before each Phase begins, complete the corresponding pre-inspection. **Any uncom
 
 | Phase | Pre-Inspection Item | Action if Incomplete |
 |-------|-----------|---------------|
+| Phase 0.6 | Confirmed `references/source-manifest.md` is read | Immediately ReadFile, then continue |
+| Phase 0.6 | Confirmed `valuation/valuation-method-router.md` is read | Immediately ReadFile, then continue |
+| Phase 0.6 | Confirmed `valuation/industry-valuation-matrix.md` is read | Immediately ReadFile, then continue |
 | Phase 1 | Confirmed `references/data-sources.md` is read | Immediately ReadFile, then continue |
 | Phase 1 | Confirmed `references/data-sources-detail.md` is read (if API params needed) | Immediately ReadFile or Grep, then continue |
 | Phase 2.1 | Confirmed `modules/industry-chain.md` is read | Immediately ReadFile, then continue |
@@ -47,7 +53,7 @@ Before each Phase begins, complete the corresponding pre-inspection. **Any uncom
 | Phase 2.4 | Confirmed `analysis/six-dimension-analysis.md` is read | Immediately ReadFile, then continue |
 | Phase 2.5 | Confirmed `analysis/investment-logic.md` is read | Immediately ReadFile, then continue |
 | Phase 2.5 | Confirmed `valuation/comparable.md` is read | Immediately ReadFile, then continue |
-| Phase 2.6 | Confirmed `valuation/dcf-and-sensitivity.md` is read (L2 only) | Immediately ReadFile, then continue |
+| Phase 2.6 | Confirmed `valuation/dcf-and-sensitivity.md` is read only when router says DCF is `allowed` or `caution` | Immediately ReadFile, then run DCF applicability gate |
 | Phase 2.7 | Confirmed `analysis/revenue-model.md` is read | Immediately ReadFile, then continue |
 | Phase 2.7 | Confirmed `analysis/projection-assumptions.md` is read | Immediately ReadFile, then continue |
 | Phase 2.7 | Confirmed `analysis/scenario-deep-dive.md` is read | Immediately ReadFile, then continue |
@@ -121,6 +127,41 @@ Ask user or auto-determine based on company characteristics:
 
 Benchmark index codes in `references/data-sources.md` §Benchmark Index Codes.
 
+### 0.6 Source and Method Feasibility Gate
+
+**Pre-inspection:**
+1. Confirm `references/source-manifest.md` is read.
+2. Confirm `valuation/valuation-method-router.md` is read.
+3. Confirm `valuation/industry-valuation-matrix.md` is read.
+
+Run this gate before Phase 1 data collection. It determines whether the workflow may produce valuation conclusions or must degrade to a data insufficient memo.
+
+**Gate inputs to record:**
+
+| Field | Required Decision |
+|-------|-------------------|
+| `market` | A-share / HK / US / dual-listed |
+| `official_financial_source_route` | CNINFO/SSE/SZSE/BSE, HKEXnews, SEC EDGAR/XBRL, company IR |
+| `reporting_currency` / `trading_currency` | Must be explicit; note FX handling if different |
+| `unit` | Must be explicit (CNY mn, HKD mn, USD mn, shares mn, etc.) |
+| `latest_financial_period` | Filing period and report date |
+| `industry_classification` | Industry + business model + lifecycle |
+| `source_manifest_status` | `draft`, `sufficient`, or `insufficient` |
+| `valuation_method_router_result` | `selected_methods`, `caution_methods`, `disabled_methods`, `missing_data` |
+| `dcf_applicability` | `not_selected`, `allowed`, `caution`, or `disabled` |
+
+**Hard stops:**
+
+- If the latest financial statements cannot be tied to official disclosures, set `source_manifest_status = insufficient` and prepare `data_insufficient_memo`.
+- If share count, net debt, minority interest, reporting currency, or unit cannot be verified, do not produce per-share valuation, target price, or rating.
+- If the company is a bank, insurer, broker, asset manager, or other financial firm, ordinary FCFF/WACC DCF is disabled.
+- If the company is pre-revenue or pipeline-driven biopharma, route to rNPV/SOTP and disable ordinary consolidated DCF/PE.
+- If tools or APIs are unavailable, record `tool_unavailable` in the source manifest and degrade instead of inventing or approximating data.
+
+**Output of this gate:**
+
+Write a short `Source and Method Gate` block into the Research Document metadata. If any hard stop is triggered, continue only as a `data_insufficient_memo` with research notes, source gaps, and next data requirements.
+
 ---
 
 ## Phase 1: Data Collection
@@ -134,7 +175,13 @@ Benchmark index codes in `references/data-sources.md` §Benchmark Index Codes.
 
 ### 1.1 Data Source Priority
 
-Brief priority: iFind > Yahoo Finance > 天眼查 > Web Search. Details in `references/data-sources.md`.
+Brief priority: official disclosure first, then optional terminal/secondary sources, then web search for news/background only. Details in `references/data-sources.md`.
+
+| Market | Official financial disclosure first | Optional secondary / cross-check | Notes |
+|--------|-------------------------------------|----------------------------------|-------|
+| A-share | CNINFO, SSE/SZSE/BSE announcements, company IR reports | iFind, exchange market data, Yahoo where usable | iFind can structure or cross-check data, but cannot replace official filings for critical financials |
+| HK | HKEXnews, company IR annual/interim reports | iFind, Yahoo, terminal data | Keep filing date, currency, unit, and page/table reference |
+| US | SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR reports | Yahoo, terminal data, consensus services | Yahoo is acceptable for price/market data, not as sole financial-statement authority |
 
 ### 1.1a Web Search Budget
 
@@ -142,8 +189,7 @@ Brief priority: iFind > Yahoo Finance > 天眼查 > Web Search. Details in `refe
 > sources than a tear sheet (industry deep-dive + competitor profiles + regulatory context),
 > but unlimited search invites diminishing returns and "perfect source" paralysis.
 
-**Cap: ≤25 web searches across Task 1 (Phases 1-3 combined).** API calls (iFind, Yahoo)
-do NOT count against this cap; only `WebSearch` and `WebFetch` calls do.
+**Cap: ≤25 ordinary web searches across Task 1 (Phases 1-3 combined).** Official filings, SEC/CNINFO/HKEX/exchange/company IR retrieval, downloaded PDFs/XBRL, and documented terminal/API calls do NOT count against this cap. Ordinary `WebSearch`/`WebFetch` is for news, industry background, secondary checks, and source discovery.
 
 **Suggested allocation**:
 - Phase 1 (Data Collection): ~10 searches (industry data, competitor identification, regulatory landscape)
@@ -153,17 +199,19 @@ do NOT count against this cap; only `WebSearch` and `WebFetch` calls do.
 **When approaching the cap (≥20 used)**:
 - Stop hunting for incremental sources; consolidate what you have
 - Prioritize remaining budget for time-sensitive items (recent news, catalysts)
-- Genuine data gaps should flow to §X Risk Assessment as "data limitation" — they do NOT block delivery
+- Genuine non-critical data gaps should flow to §X Risk Assessment as "data limitation"
+- Critical financial, share count, net debt, peer comparability, rNPV, or DCF input gaps block valuation conclusions and trigger `data_insufficient_memo`
 
-**When the cap is hit**: Proceed with available data. Note unresolved questions in the
-research document's §X Risks. Task 2/3 should not re-attempt these searches.
+**When the cap is hit**: Proceed with available non-critical data. If critical data is still missing, do not proceed to valuation conclusion; produce `data_insufficient_memo` and list the exact missing official sources.
 
 ### 1.2 Data Collection Checklist (Core)
 
 - [ ] Company fundamentals (financial statements, business structure, management)
+- [ ] Official financial filings and raw artifacts saved/referenced in `source_manifest`
+- [ ] Source manifest draft with `source_id`, publisher, URL/API, retrieved_at, period, currency, unit, raw_file_path/hash, page/table reference
 - [ ] Industry and competitive landscape (CR concentration, pricing power, supply chain)
 - [ ] Equity structure (Chinese companies: 天眼查 `shareholder_info`; others: annual reports/SEC)
-- [ ] Valuation and comparables (PE/PB/PS/EV, 3-5 comparable companies)
+- [ ] Valuation method router result and comparables (PE/PB/PS/EV where applicable, target 5-10 peers, minimum 3 before downgrade)
 - [ ] Funding data (see `references/data-sources.md` §Short-term Investment Logic Dedicated Data Collection Rules)
 - [ ] 52-week stock price + benchmark index CSV (**must** call `scripts/stock_chart_generator.py`, prohibit manual code)
 
@@ -236,30 +284,37 @@ If any unread, immediately stop and ReadFile. The research-document-template alr
 
 ### 2.5 Valuation & Investment Logic — Level 1 (Required for ALL modes)
 
-**Read**: `analysis/investment-logic.md` + `valuation/comparable.md`
-**Valuation Level**: Level 1 (comparable companies + multiples + consensus expectations)
-**Output**: Valuation conclusion + Investment logic framework + Investment thesis table
+**Read**: `analysis/investment-logic.md` + `valuation/valuation-method-router.md` + `valuation/industry-valuation-matrix.md` + `valuation/comparable.md`
+**Valuation Level**: Level 1 (method router + comparable companies / industry-adapted multiples + consensus expectations when sourced)
+**Output**: `valuation_method_router_result` + `valuation_view` + Investment logic framework + Investment thesis table
 
-For **L1 (streamlined)**: This is the ONLY valuation section. Ensure §XII Comparable Companies table has ≥5 peers with complete financial metrics (Market Cap, Revenue, PE, PB, EV/EBITDA). This data feeds directly into Task 3 — there is no Excel model to refine it.
+For **L1 (streamlined)**: This is the ONLY valuation section. Ensure §XII Comparable Companies table has ≥5 peers with complete financial metrics (Market Cap, Revenue, PE, PB, EV/EBITDA) when those metrics are applicable and sourced. If fewer than 3 usable peers remain after source/currency/accounting checks, downgrade to `data_insufficient_memo`. This data feeds directly into Task 3 — there is no Excel model to refine it.
 
-For **L2 (full)**: This provides the preliminary comps list. Task 2 will build the full Excel model.
+For **L2 (full)**: This provides the preliminary comps list and the method router result. Task 2 will build the full model only for methods that are selected or explicitly marked `caution`.
 
 ### 2.6 Valuation — Level 2 (L2 only; SKIP for L1)
 
 > **Check `valuation_depth` before executing this section.**
 > - If `valuation_depth = L1`: **SKIP 2.6 entirely.** Write "Level 2 valuation skipped — streamlined mode" in the research document and move to Phase 2.7.
-> - If `valuation_depth = L2`: Execute all steps below.
+> - If `valuation_depth = L2`: Execute only the methods permitted by `valuation_method_router_result`.
 
-**Read**: `valuation/dcf-and-sensitivity.md` (covers DCF mechanics + historical valuation band + sensitivity matrix in a single reference).
+**Read**: `valuation/valuation-method-router.md` and `valuation/industry-valuation-matrix.md` first. Read `valuation/dcf-and-sensitivity.md` only if DCF is `allowed` or `caution`.
+
+**DCF applicability gate:**
+- Run the DCF gate from `valuation/dcf-and-sensitivity.md` before creating any DCF inputs.
+- If DCF is `disabled`, write `disabled_reason` and do not create DCF-derived implied value, target price, or WACC x g sensitivity.
+- If DCF is `caution`, document the caution reason, terminal value risk, and required cross-checks; do not let DCF be the sole valuation anchor.
+- If DCF is `allowed`, record `dcf_applicability = allowed` and the required source IDs for every WACC/FCFF/equity bridge input.
 
 **Steps**:
-1. **DCF Model**: WACC → FCF projection (5Y) → Terminal value → Equity bridge → Per-share value
-2. **Historical Valuation Band**: 5Y PE/PB band with percentile analysis
-3. **Sensitivity Matrix**: WACC × Terminal Growth (mandatory), Revenue × Margin (optional)
-4. **SOTP**: If company has distinct segments, sum-of-the-parts valuation
-5. **Cross-Method Synthesis**: Compare all methods, identify convergence/divergence, determine valuation range
+1. **Method Router Result**: Selected, caution, disabled methods with reasons and missing data.
+2. **DCF Model (conditional)**: WACC → FCFF projection (5Y) → terminal value → equity bridge → per-share value only if DCF gate passes.
+3. **Historical Valuation Band (conditional)**: 5Y PE/PB/PS/EV metrics only when data is comparable and sourced.
+4. **Sensitivity Matrix (conditional)**: For DCF, WACC × Terminal Growth; for non-DCF methods, use method-specific sensitivity variables from `industry-valuation-matrix.md`.
+5. **SOTP / rNPV / NAV / residual income (conditional)**: Use the industry-adapted method selected by the router.
+6. **Cross-Method Synthesis**: Compare applicable methods, identify convergence/divergence, determine a valuation range only if critical data gates pass.
 
-**Output**: Complete Level 2 valuation data per `references/output-schema.md` §Section VIII Level 2.
+**Output**: Complete Level 2 method-router data per `references/output-schema.md` §Section VIII. If critical data is missing, output `data_insufficient_memo` instead of valuation conclusion.
 
 ### 2.7 Deep Research Modules
 
@@ -334,16 +389,19 @@ Write all findings to `{Company}_{Ticker}_Research_Document_{Date}.md` per `refe
 
 **This is the handoff artifact to Task 2 (Financial Model) and Task 3 (Report Generation).**
 - Contains all research, analysis, historical financial data, and competitive intelligence
-- Does NOT contain valuation calculations (that's Task 2's job)
+- Contains source feasibility, source manifest summary, method router result, and valuation inputs
+- Does NOT contain default rating, target price, buy/sell advice, or final valuation calculations (that's Task 2's job when gates pass)
 - Must pass ALL acceptance criteria in the template's Content Quality Gate
 
 **Research Document Requirements**:
 - ≥6,000 words total
-- §VI Historical Financials: ALL cells filled with real data for ≥3 years (NO blanks)
+- §VI Historical Financials: all critical available cells filled with real data for ≥3 years and linked to `source_id`; unavailable critical cells marked `missing`
 - §VII Revenue Model: ≥3 segments with Volume×Price decomposition
 - §IV Competitive: ≥5 named competitors with revenue and market share
-- §XII Preliminary Valuation Inputs: ≥3 comparable companies + DCF starting assumptions
+- §XI Source Manifest Summary: every critical number mapped to `source_id` or `missing`
+- §XII Preliminary Valuation Inputs: method router result + ≥3 comparable companies where applicable + DCF starting assumptions only if DCF gate is not `disabled`
 - NO placeholder text anywhere
+- If any critical data gate fails: output `data_insufficient_memo` and do not proceed to Task 2 valuation model
 
 **Self-check**: Read the Content Quality Gate at the bottom of `references/research-document-template.md`. Every checkbox must pass. If any fails, return to Phase 2/3 to fill the gap.
 
@@ -365,13 +423,13 @@ After the research document passes the Content Quality Gate:
    **For L2 (Full Version, 3 Tasks):**
    > ✅ Step 1 完成 — 研究文档已生成。
    >
-   > 接下来进入 Step 2：财务建模与估值（Excel 三表模型 + DCF + 敏感性分析）。
+   > 接下来进入 Step 2：财务建模与估值（行业适配模型 + 适用估值方法 + 敏感性分析；DCF 仅在门禁通过时使用）。
    > 你只需要说 **"下一步"**、**"继续"** 或 **"continue"**，我将自动读取本步骤生成的研究文档并继续。
 
    **For L2 (English):**
    > ✅ Step 1 complete — Research Document generated.
    >
-   > Next: Step 2 — Financial Modeling & Valuation (Excel 3-statement model + DCF + sensitivity).
+   > Next: Step 2 — Financial Modeling & Valuation (industry-adapted model + applicable valuation methods + sensitivity; DCF only if the gate passes).
    > Just say **"next"**, **"continue"**, or **"下一步"** and I'll automatically proceed using the files generated in this session.
 
    **For L1 (Streamlined Version, 2 Tasks):**

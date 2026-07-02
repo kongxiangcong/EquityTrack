@@ -36,6 +36,11 @@ The analysis engine produces a structured intermediate object (written to `{comp
 | `benchmark_index` | string | Yes | Benchmark index code (e.g., `000001.SH`) |
 | `benchmark_name` | string | Yes | Benchmark index name (e.g., "Shanghai Composite / 上证指数") |
 | `output_level` | enum | Yes | `tear-sheet` / `equity-report` |
+| `user_requested_rating` | boolean | Yes | Default `false`; rating language allowed only when true and all gates pass |
+| `source_manifest_status` | enum | Yes | `sufficient` / `insufficient` / `draft` |
+| `data_quality_grade` | enum | Yes | `High` / `Medium` / `Low` / `Insufficient` |
+| `valuation_method_router_result` | object | Yes | Selected/caution/disabled methods and missing data |
+| `data_insufficient_memo_required` | boolean | Yes | True when critical data or method gates fail |
 
 ### Section II: Core Investment Narrative
 
@@ -149,6 +154,7 @@ Each dimension follows this structure:
 
 ```
 {
+  "source_manifest_status": "sufficient" | "insufficient" | "draft",
   "income_statement": { ... },       // Revenue, net income, EPS, margins (3Y historical + 2Y forecast)
   "balance_sheet_highlights": { ... },
   "cash_flow_highlights": { ... },
@@ -162,7 +168,54 @@ Each dimension follows this structure:
 }
 ```
 
+Each financial field must use the following shape:
+
+```
+{
+  "value": number | null,
+  "source_id": string | "missing",
+  "currency": string,
+  "unit": string,
+  "reporting_period": string,
+  "accounting_standard": string,
+  "retrieved_at": string,
+  "restated": boolean,
+  "missing_reason": string | null
+}
+```
+
 ### Section VIII: Valuation Data
+
+All valuation output starts with method routing. L2 does not imply DCF.
+
+```
+{
+  "industry_classification": string,
+  "lifecycle": string,
+  "method_router_result": {
+    "selected_methods": [
+      { "method": string, "role": "primary" | "secondary" | "cross_check", "reason": string }
+    ],
+    "caution_methods": [
+      { "method": string, "reason": string, "required_checks": string[] }
+    ],
+    "disabled_methods": [
+      { "method": string, "reason": string }
+    ],
+    "required_data": string[],
+    "missing_data": string[]
+  },
+  "dcf_applicability": {
+    "status": "not_selected" | "allowed" | "caution" | "disabled",
+    "reason": string,
+    "required_source_ids": string[],
+    "missing_data": string[]
+  },
+  "source_manifest_status": "sufficient" | "insufficient" | "draft",
+  "model_validation_status": "not_run" | "passed" | "failed" | "not_available",
+  "data_insufficient_memo_required": boolean
+}
+```
 
 **Level 1 (Tear Sheet):**
 ```
@@ -181,14 +234,16 @@ Each dimension follows this structure:
     { "name", "ticker", "market_cap", "pe", "pb", "ps", ... }
   ],
   "industry_average": { "pe", "pb", "ps", ... },
-  "premium_discount_analysis": string
+  "premium_discount_analysis": string,
+  "valuation_view": string,
+  "risk_reward_summary": string
 }
 ```
 
 **Level 2 (Equity Report) — extends Level 1 with:**
 ```
 {
-  "dcf": {
+  "dcf": null | {
     "wacc": number,
     "terminal_growth": number,
     "fcf_projections": [...],
@@ -197,12 +252,36 @@ Each dimension follows this structure:
     "equity_value_per_share": number,
     "sensitivity_matrix": { ... }
   },
+  "rnpv_assets": null | [...],
+  "financial_firm_equity_model": null | { ... },
+  "nav_or_sotp": null | { ... },
   "historical_band": {
     "pe_band": { "high", "low", "median", "current_percentile" },
     "pb_band": { ... }
   },
   "sotp": { ... },  // Sum-of-the-parts if applicable
   "valuation_synthesis": string  // Cross-method comparison narrative
+}
+```
+
+`dcf` must be `null` unless `dcf_applicability.status` is `allowed` or documented `caution`.
+
+### Section VIII-a: Data Insufficient Memo
+
+When `data_insufficient_memo_required = true`, the presentation layer must render this memo instead of a valuation conclusion:
+
+```
+{
+  "memo_type": "data_insufficient_memo",
+  "missing_critical_data": [
+    { "field": string, "required_for": string, "missing_reason": string }
+  ],
+  "unavailable_tools": string[],
+  "disabled_methods": [
+    { "method": string, "reason": string }
+  ],
+  "allowed_output": ["research_notes", "source_gap_table", "next_data_requirements"],
+  "prohibited_output": ["rating", "target_price", "buy_sell_advice", "probability_weighted_target"]
 }
 ```
 
@@ -226,11 +305,35 @@ Each dimension follows this structure:
 
 ```
 {
+  "probability_basis": "historical_frequency" | "market_implied" | "consensus_distribution" | "clinical_pos" | "commodity_curve" | "user_defined" | "not_quantified",
   "optimistic": { "probability", "assumptions", "revenue", "net_income", "target_pe", "implied_market_cap" },
   "base_case": { ... },
   "pessimistic": { ... }
 }
 ```
+
+If `probability_basis = not_quantified`, omit probability-weighted target/value.
+
+### Section XIV: Final Research View
+
+Default final output:
+
+```
+{
+  "valuation_view": string,
+  "risk_reward_summary": string,
+  "data_quality_grade": "High" | "Medium" | "Low" | "Insufficient",
+  "key_uncertainties": string[],
+  "what_would_change_the_view": string[],
+  "rating": null | {
+    "value": "BUY" | "HOLD" | "SELL",
+    "user_requested_rating": true,
+    "non_investment_advice_boundary": string
+  }
+}
+```
+
+`rating` must be `null` unless `user_requested_rating = true` and all critical source/method gates pass.
 
 ### Section XI: Risk List
 
@@ -289,7 +392,7 @@ Each dimension follows this structure:
 
 ### For `equity-report` skill L2 (Full Version):
 - Consumes all sections
-- Valuation uses Level 1 + Level 2 (DCF + Historical Band + Sensitivity)
+- Valuation uses method-routed Level 2; DCF appears only when `dcf_applicability.status` is `allowed` or documented `caution`
 - Task 1 → Task 2 (Excel model) → Task 3
 - Modules expand into full paragraphs with deeper analysis
 - ≥25 pages, flexible layout
@@ -298,7 +401,7 @@ Each dimension follows this structure:
 - Consumes all sections EXCEPT §XII (Preliminary DCF inputs are replaced with comps data)
 - Valuation uses Level 1 only (Comparable companies + consensus + scenario table)
 - Task 1 → Task 3 directly (no Task 2 Excel model)
-- §XII of the research document must contain: ≥3 comparable companies with full financial metrics, consensus target price, and scenario assumptions
+- §XII of the research document must contain: valuation method router result, ≥3 comparable companies with full financial metrics when applicable, sourced consensus estimates when available, and scenario assumptions
 - ≥25 pages, flexible layout
 - DCF, Historical Band, and Sensitivity Matrix modules are SKIPPED in Task 3
 
@@ -310,3 +413,7 @@ Each dimension follows this structure:
 5. Catalyst calendar must have ≥4 events including next earnings
 6. All financial data must have source attribution
 7. No fabricated/placeholder data allowed
+8. Every critical number must have `source_id` or `missing`
+9. `dcf` must be null when DCF applicability is disabled
+10. `rating` must be null unless `user_requested_rating = true`
+11. If `data_insufficient_memo_required = true`, presentation must not render rating, target price, or buy/sell advice

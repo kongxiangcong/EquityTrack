@@ -1,0 +1,102 @@
+# Source Manifest Schema
+
+This file defines the minimum source manifest required before an equity research output can contain valuation conclusions.
+
+The manifest may be written as Markdown, YAML, or JSON, but it must preserve the fields below. Every critical number used in research, modeling, charts, or valuation must either reference a `source_id` or be marked `missing`.
+
+---
+
+## Manifest Schema
+
+```yaml
+source_manifest_version: 1
+company:
+  name:
+  ticker:
+  market:
+  reporting_currency:
+  trading_currency:
+  accounting_standard:
+  latest_financial_period:
+sources:
+  - source_id:
+    tier: official | terminal | secondary | news | estimate | missing
+    market:
+    publisher:
+    title:
+    official_or_secondary: official | secondary
+    url_or_api:
+    retrieved_at:
+    query_params:
+    filing_period:
+    report_date:
+    currency:
+    unit:
+    raw_file_path:
+    raw_file_sha256:
+    page_or_table:
+    extracted_fields:
+      - field_name:
+        period:
+        value:
+        unit:
+        currency:
+        extraction_method:
+        confidence: high | medium | low | missing
+        notes:
+    cross_checks:
+      - source_id:
+        status: match | mismatch | not_checked
+        notes:
+missing_critical_data:
+  - field_name:
+    required_for:
+    missing_reason:
+    next_data_required:
+unavailable_tools:
+  - tool_name:
+    attempted_use:
+    fallback_used:
+```
+
+---
+
+## Official Source Requirements
+
+Critical financial statement data must prioritize official disclosure:
+
+| Market | Official Sources |
+|--------|------------------|
+| A-share | CNINFO, SSE/SZSE/BSE announcements, company IR annual/interim/quarterly reports |
+| HK | HKEXnews, company IR annual/interim reports |
+| US | SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR annual/quarterly reports |
+
+iFind, Yahoo, and other terminals are optional secondary sources for structure, market data, and cross-checking. They cannot be the sole source for critical financial statement history.
+
+---
+
+## Critical Number Coverage Gate
+
+The following must be `source_id` covered or explicitly `missing`:
+
+- Revenue, EBIT/operating income, net income, EPS, tax, D&A, CapEx, CFO, FCF, working capital.
+- Cash, debt, lease debt, preferred stock, minority interest, pension deficit, associates/JV value, non-operating assets.
+- Diluted shares, SBC/options dilution, market cap, current price, FX rate when applicable.
+- Peer market cap/EV, multiples, reporting period, currency, unit.
+- DCF inputs if DCF is allowed: WACC components, terminal growth basis, terminal state assumptions.
+- Financial firm inputs: book value, ROE, COE, regulatory capital, credit/underwriting quality.
+- Biopharma rNPV inputs: asset, indication, phase, geography, rights ownership, PoS basis, launch/peak sales, license terms, cash runway.
+
+---
+
+## Data Insufficient Memo Trigger
+
+Set `source_manifest_status = insufficient` and produce `data_insufficient_memo` when:
+
+- Latest critical financial statements lack official-source coverage.
+- Per-share valuation bridge fields are missing.
+- Selected valuation method inputs are missing.
+- Required tool/API access fails and no official fallback is available.
+- Source conflicts remain unresolved for critical fields.
+
+When this trigger fires, the skill must not output target price, rating, buy/sell advice, or probability-weighted target.

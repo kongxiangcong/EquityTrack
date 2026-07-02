@@ -1,13 +1,13 @@
 ---
 name: equity-report-task2-model
-description: "Task 2 of equity report workflow (L2 only). Builds a complete financial model (Excel) and valuation analysis from the Task 1 research document. Produces: (1) a fully linked 3-statement financial model with DCF, comps, and sensitivity; (2) a valuation analysis summary document. This file is the entry point — do NOT read SKILL.md or Task 1's analysis framework files."
+description: "Task 2 of equity report workflow (L2 only). Builds a source-gated, method-routed financial model and valuation analysis from the Task 1 research document. Produces: (1) a linked model with only applicable valuation methods; (2) a valuation analysis or data insufficient memo. DCF is conditional on the applicability gate. This file is the entry point — do NOT read SKILL.md or Task 1's analysis framework files."
 ---
 
 # Task 2: Financial Model + Valuation (L2 Only)
 
 > **This is the entry point for Task 2 of the equity report workflow (L2 Full Version).**
 > Task 1 (Research + Analysis) has already been completed and produced a research document.
-> Your job: build an actual Excel financial model and perform valuation analysis.
+> Your job: build an actual Excel financial model and perform valuation analysis only for methods that passed source and method gates.
 > **If this is an L1 (streamlined) report**: Skip this file entirely. Go directly to `SKILL-task3-report.md`.
 
 ---
@@ -20,15 +20,21 @@ description: "Task 2 of equity report workflow (L2 only). Builds a complete fina
 **Timeliness**  Must use latest financial reports and real-time market data 
 
 - ✅ Build a REAL Excel model with formulas that recalculate when inputs change — not static numbers
+- ✅ Load Task 1 `source_manifest`, `source_manifest_status`, and `valuation_method_router_result` before any model work
+- ✅ Every historical and market number must carry a `source_id` or be marked `missing`
 - ✅ All 3 financial statements (IS → BS → CF) must link and balance
 - ✅ Balance Sheet: Assets = Liabilities + Equity on EVERY projected year (BALANCE CHECK row mandatory)
 - ✅ Cash Flow: Ending Cash must tie to BS Cash on every year (CASH TIE-OUT row mandatory)
 - ✅ Revenue must link from Revenue Model tab to Income Statement tab (not typed twice)
-- ✅ DCF: WACC calculated from CAPM, not hardcoded. FCF discounted with formulas.
-- ✅ Sensitivity matrix: Must use Excel formulas that reference WACC and Terminal Growth inputs
+- ✅ DCF, if allowed: WACC calculated from CAPM, not hardcoded. FCFF discounted with formulas and source IDs for every input.
+- ✅ Sensitivity matrix: Use formulas tied to the selected method. WACC × Terminal Growth applies only when DCF is allowed.
 - ✅ Comps table: ≥5 peers with statistical summary (Max/75th/Median/25th/Min)
+- ✅ Financial firms: ordinary FCFF/WACC DCF is disabled; use equity-model methods such as P/B x ROE/COE, DDM, residual income, or excess return
+- ✅ Pre-revenue or pipeline-driven biopharma: use rNPV/SOTP; do not use ordinary consolidated DCF/PE as the primary method
 - ❌ Do not hardcode projected numbers — every projection must flow from Operating Drivers
-- ❌ Do not skip the Scenarios tab — Bull/Base/Bear with probability-weighted price
+- ❌ Do not create a DCF tab when `dcf_applicability = disabled`
+- ❌ Do not output a rating, target price, upside/downside, or buy/sell conclusion unless `user_requested_rating = true` and all data gates pass
+- ❌ Do not calculate probability-weighted price unless probability basis is sourced; otherwise show scenario range only
 - ❌ Do not fabricate comparable company data — use real market data
 
 ### Font Color Convention
@@ -54,8 +60,10 @@ When the user says "下一步"/"继续"/"continue" to enter Task 2, the Task 1 f
    - Company name, ticker, market, currency
    - Historical financial data (§VI)
    - Revenue segment breakdown (§VII)
-   - Comparable companies (§V)
+   - Source manifest summary (§XI)
+   - Valuation method router result and comparable companies (§XII)
    - Operating assumptions mentioned in the analysis
+   - `source_manifest_status`, `data_quality_grade`, `dcf_applicability`, `selected_methods`, `disabled_methods`, `missing_data`
 3. **Do NOT read**: `SKILL.md`, `analysis/*.md`, `modules/*.md` — these were consumed in Task 1.
 
 **If the research document cannot be found in session**: Ask the user to confirm the filename. Do NOT start Task 2 without it.
@@ -67,12 +75,15 @@ When the user says "下一步"/"继续"/"continue" to enter Task 2, the Task 1 f
 | # | File | Purpose |
 |---|------|---------|
 | 1 | Task 1 Research Document | Source of all analytical content and historical data |
-| 2 | `references/financial-model-spec.md` | **SOLE SOURCE** for Excel model structure — tab specs, line items, formula patterns, formatting |
-| 3 | `valuation/dcf-and-sensitivity.md` | Consolidated reference — Part 1: DCF (WACC, projection, terminal value, equity bridge); Part 2: Historical Band (data collection, statistical bands, percentile interpretation); Part 3: Sensitivity Matrix (variable selection, range calibration, interpretation) |
-| 4 | `valuation/comparable.md` | Comps methodology — peer selection, metric selection by industry, analysis framework |
-| 5 | `references/data-sources.md` | Data source priority and API specs (for fetching additional data if needed) |
+| 2 | `references/source-manifest.md` | Source manifest schema and critical-number coverage gate |
+| 3 | `valuation/valuation-method-router.md` | Determines selected/caution/disabled valuation methods |
+| 4 | `valuation/industry-valuation-matrix.md` | Industry-specific method rules, minimum data gates, sensitivities |
+| 5 | `references/financial-model-spec.md` | **SOLE SOURCE** for Excel model structure — tab specs, line items, formula patterns, formatting |
+| 6 | `valuation/dcf-and-sensitivity.md` | Conditional reference — read only if DCF is `allowed` or `caution` |
+| 7 | `valuation/comparable.md` | Comps methodology — peer selection, metric selection by industry, analysis framework |
+| 8 | `references/data-sources.md` | Official-first data source priority and fallback rules |
 
-**Total files to read**: 5 (down from 7 — DCF, sensitivity, and historical band are now consolidated)
+**Do not read DCF mechanics just because this is L2.** Read `valuation/dcf-and-sensitivity.md` only after the router says DCF is `allowed` or `caution`.
 
 ---
 
@@ -88,66 +99,58 @@ The Task 1 research document §VI contains 3-5 years of historical financials. E
 
 ### 1.2 Fetch Additional Data (if needed)
 
-If the research document's financial data is incomplete, fetch from APIs:
-- **A-shares/HK**: iFind API (`ifind_get_financial_statements`, `ifind_get_stock_financial_index`)
-- **US stocks**: Yahoo Finance API or SEC filings via Web Search
-- **Comparable companies**: iFind industry classification or Web Search
+If the research document's financial data is incomplete, first check whether the missing item is critical. Critical missing data must be resolved from official sources or marked `missing` in the source manifest; do not bridge it with unsourced assumptions.
+
+Official-first fallback:
+- **A-shares**: CNINFO, SSE/SZSE/BSE announcements, company IR annual/interim/quarterly reports. iFind is optional secondary structuring/cross-check.
+- **HK**: HKEXnews and company IR reports. iFind/Yahoo are optional secondary/cross-check sources.
+- **US**: SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR reports. Yahoo is acceptable for price/market data, not as sole financial-statement authority.
+- **Comparable companies**: official filings for financials; exchange/terminal/Yahoo for market data with timestamp and field definition.
+
+If an official route or required API/tool is unavailable, record `tool_unavailable` and `missing_data` in the source manifest. If the missing item is required for the selected method, degrade to `data_insufficient_memo`.
 
 Data to fetch that may not be in the research document:
-- [ ] 5-year historical PE/PB weekly data (for historical band)
+- [ ] 5-year historical PE/PB weekly data (for historical band, if selected and sourceable)
 - [ ] Comparable company financial metrics (for comps tab)
-- [ ] Beta, risk-free rate (for WACC)
+- [ ] Beta, risk-free rate (for WACC, only if DCF is allowed/caution)
 - [ ] Consensus estimates for FY+1 and FY+2 (for sanity-checking projections)
 - [ ] Detailed segment-level revenue (if research document only has top-line)
 
 ### 1.3 Record Everything in Raw Data Tab
 
-Every number fetched goes into the Raw Data tab with its source. No data should be used in the model without first being recorded in Raw Data.
+Every number fetched goes into the Raw Data tab with `source_id`, currency, unit, reporting period, retrieved_at, and field definition. No data should be used in the model without first being recorded in Raw Data and source manifest. Critical missing fields remain `missing`; do not fill them with estimates to keep the model moving.
 
 ---
 
 ## Step 2: Build the Financial Model (Excel)
 
-### ⚠️ ENVIRONMENT SKILL INTEGRATION (READ FIRST)
+### ⚠️ TOOL AND SKILL DISCOVERY (READ FIRST)
 
-**Before building the model yourself, check if the following environment skills are available.** If they are, **use them** — they produce more professional, institutional-grade Excel outputs than building from scratch.
-
-**Check following path and files in your skill hub: 
-
-/app/.agents/skills/xlsx/reference/ 
-
-xlsx (SKILL.md)
-  ├── 3_statement_model_skill.md  ← financial model skills
-  └── DCF_SKILL.md                ← DCF valuation skills
-
-
-## Finance Sub-Skills
-
-### 1. `3 statement model`- Entry file: `./reference/3_statement_model_skill.md`- Use when the task needs a full operating model, linked IS/BS/CF, 
-  supporting schedules, balance checks, or a forecast-model foundation 
-  for DCF or other valuation work.
-
-### 2. `DCF`- Entry file: `./reference/DCF_SKILL.md`- Use for DCF valuation, NOPAT, UFCF, WACC, terminal value, discounting, 
-  EV → Equity Value → Implied Share Price, sensitivity tables.
-
+Before building the model yourself, discover what spreadsheet/xlsx tools are available in the current Codex environment. Do not assume a fixed path or a preinstalled finance skill.
 
 **Integration Rules:**
-- ✅ **Use environment skills for Excel model building** (they have superior formatting, formula patterns, and integrity checks)
-- ✅ **Feed them the data you extracted from the Task 1 Research Document** (historical financials, assumptions, peer list)
-- ✅ **After each skill finishes, verify its output passes our integrity checks** (Step 5 below)
-- ✅ ** Must Perform additional data cross-verification checks on key numbers for latest financial period to ensure skill use is all good, no data corruption or mock data used.
-- ✅ **Combine all outputs into a single workbook** — the 3-statement model, DCF tab, and Comps tab should all be tabs in ONE Excel file
-- ❌ **Do NOT let environment skills write the Valuation Analysis document** — that stays in our framework (Step 4 below)
-- ❌ **Do NOT let environment skills change the font color convention** — enforce 🔵 Blue=input, ⚫ Black=formula, 🟢 Green=cross-sheet
+- ✅ Use available spreadsheet/xlsx tooling when it can build linked formulas and preserve source IDs.
+- ✅ Feed it only data extracted from the Task 1 Research Document and `source_manifest`.
+- ✅ After any tool finishes, verify that its output passes the integrity checks in Step 5.
+- ✅ Perform additional cross-verification on latest-period critical numbers against official sources to detect corruption or mock data.
+- ✅ Combine all outputs into a single workbook where feasible. DCF, rNPV, residual income, NAV, or other method tabs appear only when selected by the router.
+- ✅ If no spreadsheet skill is available, fall back to Python/openpyxl or another available local spreadsheet library using `references/financial-model-spec.md`.
+- ❌ Do NOT let external tools write the Valuation Analysis document; that stays in this framework.
+- ❌ Do NOT let tools fabricate missing fields, invent sources, or silently convert units/currencies.
+- ❌ Do NOT create a DCF tab just because a DCF helper exists; DCF requires the applicability gate.
 
-**If environment skills are NOT available**, fall back to building the model yourself using `references/financial-model-spec.md` (read that file instead).
+If required tools are not available for a selected valuation method, record the gap in `source_manifest`/model notes. If the gap prevents a required calculation, degrade to `data_insufficient_memo`.
 
 ### Build Order
 
 Whether using environment skills or building manually, the model must contain these tabs in this order:
 
 ```
-PHASE A — 3-Statement Model (use financial-analysis:3-statement-model if available)
+PHASE A — Source and Method Gate
+  0. Source Manifest          → source_id coverage, official source status, missing critical data
+  0b. Valuation Method Router → selected/caution/disabled methods and reasons
+
+PHASE B — Operating Model (3-statement when applicable; industry-adapted otherwise)
   1. Raw Data          → Populate with historical financials from Task 1
   2. Operating Drivers → Set all forward-looking assumptions with Source + Rationale
   3. Revenue Model     → Bottom-up segment revenue buildup (Volume × Price)
@@ -155,14 +158,16 @@ PHASE A — 3-Statement Model (use financial-analysis:3-statement-model if avail
   5. Balance Sheet     → Full BS driven by Drivers, with balance check
   6. Cash Flow         → Full CF driven by IS and BS changes, cash tie-out
 
-PHASE B — Valuation Tabs (use financial-analysis:dcf-model + comps-analysis if available)
-  7. DCF              → WACC + FCF discounting + Terminal Value + Equity Bridge
-  8. Comps            → 5-10 peers + statistical summary (Max/75th/Median/25th/Min)
-  9. Sensitivity      → WACC × Terminal Growth matrix
-  10. Scenarios       → Bull/Base/Bear parameter sets + probability-weighted price
+PHASE C — Valuation Tabs (only selected methods)
+  7. Valuation Method Rationale → why each method is selected/caution/disabled
+  8. Comps / Multiples          → 5-10 peers where applicable; minimum 3 or downgrade
+  9. DCF                        → only if `dcf_applicability = allowed` or documented `caution`
+  10. rNPV / SOTP / NAV / Residual Income / DDM → only when selected by router
+  11. Sensitivity               → method-specific sensitivity variables
+  12. Scenarios                 → Bull/Base/Bear ranges; probability-weighted only with sourced probability basis
 ```
 
-**If using environment skills**: After Phase A completes, verify BS balance + cash tie-out BEFORE starting Phase B. After Phase B, verify all 10 integrity checks (Step 5).
+**If using environment skills**: After the operating model completes, verify BS balance + cash tie-out BEFORE starting valuation tabs. After valuation tabs, verify all integrity checks (Step 5). If `source_manifest_status = insufficient`, stop at a data insufficient memo.
 
 ### Operating Drivers — Key Assumptions to Set
 
@@ -175,7 +180,7 @@ For each projected year (FY+1 through FY+5), set these assumptions:
 | **Tax** | Effective tax rate | Normalize to statutory rate unless structural reason |
 | **Working Capital** | DSO, DIO, DPO | Use historical averages unless structural change expected |
 | **CapEx** | CapEx % of revenue | Management guidance or historical trend |
-| **Valuation** | WACC inputs, terminal growth | Market-specific (see `valuation/dcf-and-sensitivity.md` §Part 1 ranges) |
+| **Valuation** | Method-specific inputs | Use `valuation-method-router.md`; WACC/terminal growth only if DCF is allowed |
 
 **CRITICAL**: Every assumption MUST have:
 1. A **Source** (e.g., "Management guidance Q4 2025 call", "3Y historical average", "Consensus Bloomberg")
@@ -185,15 +190,28 @@ For each projected year (FY+1 through FY+5), set these assumptions:
 
 ## Step 3: Perform Valuation Analysis
 
-### 3.1 DCF Valuation
+### 3.0 Method Router Check
 
-Read `valuation/dcf-and-sensitivity.md` §Part 1 for DCF methodology. Execute Steps 1-7:
+Before any valuation calculation, confirm:
+
+- `source_manifest_status = sufficient` for the selected method's critical inputs.
+- `valuation_method_router_result.selected_methods` is populated.
+- `disabled_methods` includes explicit reasons.
+- `missing_data` is empty for every selected method, or the method is removed/degraded.
+
+If this check fails, skip valuation calculations and write `data_insufficient_memo`.
+
+### 3.1 DCF Valuation (conditional)
+
+Read `valuation/dcf-and-sensitivity.md` only if DCF is `allowed` or `caution`. Execute Steps 1-7 only after the DCF applicability gate passes:
 1. Calculate WACC (check reasonability vs. market range)
 2. Project 5 years of UFCF from the model
 3. Calculate Terminal Value (Gordon Growth + check TV/EV ratio)
 4. Discount to present value
 5. Equity Bridge: EV → Net Debt → Equity Value → Per Share
 6. Build sensitivity matrix (WACC × Terminal Growth)
+
+If DCF is disabled, create a `Valuation Method Rationale` section with `disabled_reason` and do not output DCF implied value.
 
 ### 3.2 Comparable Companies
 
@@ -213,17 +231,18 @@ Read `valuation/dcf-and-sensitivity.md` §Part 2 for historical band methodology
 ### 3.4 Cross-Method Synthesis
 
 Compare all valuation methods and identify convergence/divergence:
-- DCF implies $XX per share
-- Comps median implies $XX per share
-- Historical band median implies $XX per share
-- **Final valuation range**: $XX — $XX, with base case $XX
+- DCF, if allowed, implies a valuation range with source-linked assumptions
+- Comps median implies a valuation range when peers are sourceable and comparable
+- Historical band median implies a valuation range only when historical data is sourceable
+- rNPV/SOTP/NAV/residual income/DDM methods are included when selected by router
+- **Final valuation view**: a range and key assumptions, not a default target price or rating
 
 ### 3.5 Scenario Analysis
 
 Build Bull/Base/Bear scenarios:
 - Different revenue growth + margin assumptions
 - Different WACC (if macro risk differs)
-- Probability-weighted target price = Σ(prob × price)
+- Probability-weighted value is allowed only when probability basis is sourced; otherwise show scenario range without probability-weighted target
 
 ---
 
@@ -238,83 +257,100 @@ Produce: `{Company}_{Ticker}_Valuation_Analysis_{Date}.md`
 
 > Date: YYYY-MM-DD
 > Analyst: Kimi Research (AI-Assisted)
-> Rating: [BUY / HOLD / SELL]
 > Current Price: $XXX.XX
-> Target Price: $XXX.XX (XX% upside/downside)
-> Probability-Weighted Price: $XXX.XX
+> user_requested_rating: false
+> data_quality_grade: [High / Medium / Low / Insufficient]
+> source_manifest_status: [sufficient / insufficient]
+> valuation_method_router_result: [selected / caution / disabled summary]
 
 ---
 
-## I. Price Target Summary
+## I. Valuation View Summary
 
-[2-3 sentences: final recommendation, target price, key driver]
+[2-3 sentences: valuation range/view, key drivers, key limitations. Do not provide buy/sell advice or target-price conclusion by default.]
 
-## II. DCF Analysis
+## II. Method Router Result
+
+| Method | Status | Reason | Required Data | Missing Data |
+|--------|--------|--------|---------------|--------------|
+| DCF | allowed/caution/disabled | | | |
+| Comps | selected/caution/disabled | | | |
+| rNPV/SOTP/NAV/Residual Income/DDM | selected/caution/disabled | | | |
+
+## III. DCF Analysis (only if allowed/caution)
 
 [WACC: X.X%, Terminal Growth: X.X%, Implied value: $XXX]
 [Key sensitivity: ±1% WACC = ±$XX per share]
 [TV as % of EV: XX% — comment if high]
 
-## III. Comparable Companies
+If DCF is disabled, replace this section with `disabled_reason` and the method selected instead.
+
+## IV. Comparable Companies
 
 [Peer set: [list], Selection rationale: [1 sentence]]
 [Target trades at Xth percentile of peers on P/E]
 [Implied range from comps: $XX — $XX]
 
-## IV. Historical Valuation Band
+## V. Historical Valuation Band
 
 [PE currently at Xth percentile of 5Y range]
 [PB currently at Xth percentile of 5Y range]
 [Historical context: re-rating/de-rating drivers]
 
-## V. Cross-Method Synthesis
+## VI. Cross-Method Synthesis
 
 [Do methods converge? Which to weight more?]
-[Final valuation range: $XX — $XX]
-[Base case: $XX (methodology and weighting)]
+[Final valuation range: $XX — $XX when data gates pass]
+[Base case view: method weighting and confidence]
 
-## VI. Scenario Analysis
+## VII. Scenario Analysis
 
-### Bull Case (XX% probability)
+### Bull Case ([probability only if sourced])
 [Assumptions + implied price + what triggers this]
 
-### Base Case (XX% probability)
+### Base Case ([probability only if sourced])
 [Assumptions + implied price + default path]
 
-### Bear Case (XX% probability)
+### Bear Case ([probability only if sourced])
 [Assumptions + implied price + what triggers this]
 
-Probability-weighted target: $XXX.XX
+Probability-weighted value is omitted unless `probability_basis` is sourced.
 
-## VII. Key Catalysts
+## VIII. Key Catalysts
 
 [Top 3-5 catalysts that could move the stock toward bull or bear case]
 
-## VIII. Key Risks to Target
+## IX. Key Risks to Valuation View
 
 [Top 3-5 risks that could invalidate the valuation, with quantified impact where possible]
+
+## X. Optional Rating Section
+
+Include only when `user_requested_rating = true` and all data gates pass. Add non-investment-advice boundary. Otherwise omit.
 ```
 
 ---
 
 ## Step 5: Model Integrity Verification
 
-Run ALL 10 checks from `references/financial-model-spec.md` §Model Integrity Checks:
+Run the applicable checks from `references/financial-model-spec.md` §Model Integrity Checks plus the Phase 0 source/method checks below. This Phase 0 patch does not implement full `model_validator.py` or `source_manifest_validator.py`; until those scripts exist, perform the checks manually and record pass/fail in the model notes.
 
 | # | Check | Pass? |
 |---|-------|-------|
-| 1 | BS balances (all periods) | ☐ |
-| 2 | Cash ties (CF ending = BS cash) | ☐ |
-| 3 | Revenue ties (Rev Model = IS) | ☐ |
-| 4 | Historical accuracy (vs Raw Data <1%) | ☐ |
-| 5 | WACC in normal range | ☐ |
-| 6 | TV < 80% of EV | ☐ |
-| 7 | Sensitivity center = DCF base | ☐ |
-| 8 | Comps stats no errors | ☐ |
-| 9 | Scenario probs = 100% | ☐ |
-| 10 | FCF positive (base case) | ☐ |
+| 1 | Source manifest exists and every critical number has `source_id` or `missing` | ☐ |
+| 2 | Official-source coverage exists for latest critical financial statements | ☐ |
+| 3 | `valuation_method_router_result` exists with selected/caution/disabled methods | ☐ |
+| 4 | Disabled methods are not accidentally modeled as valuation conclusions | ☐ |
+| 5 | BS balances (all periods, if 3-statement model is applicable) | ☐ |
+| 6 | Cash ties (CF ending = BS cash, if 3-statement model is applicable) | ☐ |
+| 7 | Revenue ties (Rev Model = IS, if applicable) | ☐ |
+| 8 | Historical accuracy vs Raw Data <1% and source IDs match | ☐ |
+| 9 | DCF checks pass only if DCF allowed: WACC in range or explained, WACC > g, TV/EV disclosed | ☐ |
+| 10 | Sensitivity center equals base case for selected method | ☐ |
+| 11 | Comps stats no errors; minimum 3 usable peers or downgrade | ☐ |
+| 12 | Scenario probabilities have `probability_basis`; otherwise no probability-weighted value | ☐ |
 
-**All 10 must pass before delivery.** If any fail, fix and re-verify.
+**All applicable checks must pass before delivery to Task 3.** If a critical source/method check fails, do not fix by inventing data; deliver `data_insufficient_memo` and STOP.
 
 ---
 
@@ -324,16 +360,16 @@ Run ALL 10 checks from `references/financial-model-spec.md` §Model Integrity Ch
 2. Save `{Company}_{Ticker}_Valuation_Analysis_{Date}.md` to output directory
 3. Report:
    - Model summary (# tabs, # years projected)
-   - Key outputs: Revenue CAGR, terminal margin, WACC, DCF price, comps range, target price
-   - All 10 integrity checks passed
+   - Key outputs: Revenue CAGR, selected valuation methods, method-specific ranges, data quality grade
+   - Source/method/model integrity checks passed, or data insufficient memo delivered
 4. Provide **continuation-ready message** to user:
 
    **Chinese:**
    > ✅ Step 2 完成 — 财务模型与估值分析已生成。
    > - Excel 模型: {N} 张工作表, {M} 年预测
-   > - DCF 目标价: ¥XXX (XX% 上行/下行空间)
-   > - 可比公司区间: ¥XX — ¥XX
-   > - 10/10 完整性检查通过
+   > - 选用估值方法: {selected_methods}
+   > - 估值视角区间: ¥XX — ¥XX（如数据门禁通过）
+   > - 来源/方法/模型检查通过
    >
    > 接下来进入 Step 3：生成最终 PDF 研报（≥25页）。
    > 你只需要说 **"下一步"**、**"继续"** 或 **"continue"**，我将自动读取本步骤和前面步骤生成的所有文件并继续。
@@ -341,9 +377,9 @@ Run ALL 10 checks from `references/financial-model-spec.md` §Model Integrity Ch
    **English:**
    > ✅ Step 2 complete — Financial model and valuation analysis generated.
    > - Excel model: {N} tabs, {M} years projected
-   > - DCF target: $XXX (XX% upside/downside)
-   > - Comps range: $XX — $XX
-   > - 10/10 integrity checks passed
+   > - Selected valuation methods: {selected_methods}
+   > - Valuation view range: $XX — $XX (if data gates pass)
+   > - Source/method/model checks passed
    >
    > Next: Step 3 — Generate final PDF report (≥25 pages).
    > Just say **"next"**, **"continue"**, or **"下一步"** and I'll automatically proceed using all files generated in this session.
@@ -351,4 +387,3 @@ Run ALL 10 checks from `references/financial-model-spec.md` §Model Integrity Ch
 5. **STOP.** Wait for user's continuation signal. Do not continue until user says "下一步"/"继续"/"continue"/"next".
 
 ---
-

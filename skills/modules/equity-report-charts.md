@@ -159,15 +159,15 @@ python scripts/chart_generator.py \
 
 ### C5: Scenario Comparison (Grouped Bar)
 
-**Purpose**: Side-by-side visual comparison of Bull/Base/Bear cases — makes the investment decision framework tangible.
+**Purpose**: Side-by-side visual comparison of Bull/Base/Bear cases — makes the scenario framework tangible without implying buy/sell advice.
 
 **Data Requirements**:
 - Three scenarios: Bull, Base, Bear
-- 2-4 metrics per scenario (e.g., Revenue, Net Income, EPS, Implied Price)
+- 2-4 metrics per scenario (e.g., Revenue, Net Income, EPS, Valuation Range Midpoint)
 - Values must be specific numbers (not vague)
 
 **Visual Spec**:
-- X-axis: Metrics (Revenue, Net Income, EPS, Target Price)
+- X-axis: Metrics (Revenue, Net Income, EPS, Valuation Range Midpoint)
 - Each metric has 3 grouped bars: Bull (green), Base (blue), Bear (red/orange)
 - Value labels on top of each bar
 - Y-axis: primary axis for revenue/income, secondary axis for EPS/price if scale differs significantly
@@ -178,7 +178,7 @@ python scripts/chart_generator.py \
 ```bash
 python scripts/chart_generator.py \
   --chart_type scenario_comparison \
-  --data '{"scenarios":["Bull","Base","Bear"],"metrics":{"Revenue ($B)":[420,395,370],"Net Income ($B)":[110,100,88],"EPS ($)":[7.20,6.50,5.70],"Target Price ($)":[260,230,195]},"probabilities":[25,50,25]}' \
+  --data '{"scenarios":["Bull","Base","Bear"],"metrics":{"Revenue ($B)":[420,395,370],"Net Income ($B)":[110,100,88],"EPS ($)":[7.20,6.50,5.70],"Valuation Range Midpoint ($)":[260,230,195]},"probability_basis":"not_quantified"}' \
   --currency '$' \
   --output scenario_comparison.svg \
   --json

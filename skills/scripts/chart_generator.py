@@ -514,9 +514,9 @@ def chart_scenario_comparison(data, currency='$', **kwargs):
             "Revenue ($B)": [420, 395, 370],
             "Net Income ($B)": [110, 100, 88],
             "EPS ($)": [7.20, 6.50, 5.70],
-            "Target Price ($)": [260, 230, 195]
+            "Valuation Range Midpoint ($)": [260, 230, 195]
         },
-        "probabilities": [25, 50, 25]
+        "probability_basis": "not_quantified"
     }
     """
     apply_style()

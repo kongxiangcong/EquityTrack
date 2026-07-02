@@ -6,6 +6,58 @@
 
 ---
 
+## DCF Applicability Gate
+
+Run this gate before any DCF tab, WACC table, terminal value, or DCF-derived per-share value is created. DCF is one possible valuation method, not the default L2 method.
+
+### Gate Output
+
+```yaml
+dcf_applicability:
+  status: allowed | caution | disabled
+  reason:
+  required_source_ids:
+  missing_data:
+  terminal_value_risk: low | medium | high | not_applicable
+```
+
+### Allowed
+
+DCF may be used only when all conditions are satisfied:
+
+- Company is non-financial, or a special case where operating debt and financing debt can be cleanly separated.
+- Operating FCFF is positive, stable, or has a credible and source-supported path to positive cash flow within the explicit forecast period.
+- Revenue, EBIT, tax, D&A, CapEx, working capital, share count, net debt, minority interest, lease debt, preferred stock, and non-operating assets have `source_id` coverage or documented assumptions.
+- Forecast period reaches a mature state where growth, margin, ROIC, and reinvestment are internally consistent.
+- `WACC > terminal_growth`.
+- Terminal growth does not exceed long-term nominal economic growth for the relevant currency/market.
+- Terminal value share of EV is disclosed; if >70%, explain; if >80%, mark high risk and require strong cross-checks.
+
+### Caution
+
+DCF may be used only as a secondary/cross-check method when:
+
+- Company has volatile or cyclical cash flows but mid-cycle assumptions are source-supported.
+- Company is early in profitability transition and requires explicit financing/runway assumptions.
+- Terminal value, margin, or reinvestment assumptions drive most of the value.
+- Peer-implied terminal multiples or reverse DCF do not corroborate the base case.
+
+### Disabled
+
+Do not use ordinary FCFF/WACC DCF when any condition applies:
+
+- Banks, insurers, brokers, asset managers, and other financial firms. Use P/B x ROE/COE, DDM, residual income, or excess return models instead.
+- Pre-revenue or pipeline-driven biopharma. Use rNPV/SOTP and cash runway analysis.
+- Real estate developers where NAV/RNAV or project cash flow is the primary framework.
+- Resource/cyclical companies where current commodity price or peak margin would be extrapolated into perpetuity without mid-cycle normalization.
+- Long-term negative FCFF or funding-dependent businesses without a source-supported path to self-funding.
+- Missing official-source coverage for critical DCF inputs.
+- `WACC <= terminal_growth`.
+
+If disabled, write `disabled_reason` and route to `valuation/valuation-method-router.md`. Do not output DCF implied value, DCF target price, or WACC x terminal growth sensitivity.
+
+---
+
 ## Why One File
 
 DCF, historical valuation band, and sensitivity analysis are mechanically inseparable:
@@ -22,7 +74,7 @@ Keeping them in one file removes redundant scaffolding (WACC definitions repeate
 
 ### Overview
 
-The Discounted Cash Flow model estimates intrinsic value by projecting future Free Cash Flows (FCF) and discounting them to present value. This is the **absolute** valuation method in the three-lens framework (the other two being relative-to-peers via `comparable.md` and relative-to-self via Part 2 below).
+The Discounted Cash Flow model estimates intrinsic value by projecting future Free Cash Flows (FCF) and discounting them to present value. It is an **absolute** valuation method only when the applicability gate passes. The other lenses are relative-to-peers via `comparable.md`, relative-to-self via Part 2 below, and any industry-specific method selected by `valuation-method-router.md`.
 
 ### Model Structure
 
@@ -44,18 +96,24 @@ Step 7: Sensitivity Analysis          → See Part 3 below
 WACC = E/(E+D) × Ke + D/(E+D) × Kd × (1 - Tax Rate)
 ```
 
+Use market-value weights where available. Include preferred stock when material:
+
+```
+WACC = Ke * E/V + Kd * (1 - Tax Rate) * D/V + Kps * PS/V
+```
+
 **Component details:**
 
-| Component | Method | Data Source |
+| Component | Method | Source Requirement |
 |-----------|--------|-------------|
-| **Ke (Cost of Equity)** | CAPM: Rf + β × ERP + Size Premium | See below |
-| **Risk-Free Rate (Rf)** | 10-year government bond yield of company's market | A股: China 10Y; US: US 10Y Treasury; HK: US 10Y |
-| **Beta (β)** | 2-year weekly returns vs. benchmark | iFind or Yahoo Finance |
-| **Equity Risk Premium (ERP)** | Market-specific | A股: 6-7%; US: 4.5-5.5%; HK: 5.5-6.5% |
-| **Size Premium** | Based on market cap | Mega-cap: 0%; Large: 0.5-1%; Mid: 1-2%; Small: 2-3% |
-| **Kd (Cost of Debt)** | Weighted average interest rate on debt | Financial statements or bond yields |
-| **E, D** | Market cap of equity; book value of debt | Latest financial data |
-| **Tax Rate** | Effective tax rate (3-year average) | Financial statements |
+| **Ke (Cost of Equity)** | CAPM: Rf + β × ERP + Size Premium | `source_id` for each component |
+| **Risk-Free Rate (Rf)** | 10-year government bond yield of company's market | `source_id`, currency, date |
+| **Beta (β)** | Prefer peer unlever/relever; own regression only as cross-check | raw beta source, leverage/source assumptions |
+| **Equity Risk Premium (ERP)** | Market-specific | `source_id`; avoid double-counting country/size premiums |
+| **Size/Country Premium** | Only if not already included in ERP | explicit rationale and `source_id` |
+| **Kd (Cost of Debt)** | Weighted average interest rate on debt | financial statement/bond source_id |
+| **E, D, PS** | Market cap of equity; debt; preferred stock | latest source_id and date |
+| **Tax Rate** | Effective tax rate (3-year average) or statutory normalized | source_id and rationale |
 
 **WACC reasonability check:**
 
@@ -80,6 +138,8 @@ Or equivalently:
 ```
 FCFF = Operating Cash Flow - CapEx + Interest × (1 - Tax Rate)
 ```
+
+Do not subtract interest from FCFF. If using FCFE, discount with cost of equity, not WACC, and document the switch.
 
 **Historical metrics to calculate (3-5 years):**
 
@@ -160,21 +220,26 @@ Enterprise Value = Σ PV(FCF_Year1-5) + PV(Terminal Value)
 
 ```
 Equity Value = Enterprise Value
-  - Net Debt (Total Debt - Cash & Equivalents)
-  - Minority Interest
+  - Gross Debt
+  - Lease Debt
   - Preferred Stock
+  - Minority Interest
+  - Pension Deficit
+  + Cash & Equivalents
   + Associates & JVs (at fair value)
   + Excess Cash (if identified)
   + Non-operating Assets (at fair value)
 
-Equity Value per Share = Equity Value / Diluted Shares Outstanding
+Equity Value per Share = Equity Value / Fully Diluted Shares Outstanding
 ```
+
+Handle stock options/SBC dilution where material. Every bridge item must have `source_id` or be marked `missing`; missing critical bridge items prohibit per-share valuation.
 
 ### Step 7: Sensitivity Analysis
 
-The DCF model must produce at minimum:
+When the DCF applicability gate returns `allowed` or `caution`, the DCF model must produce at minimum:
 
-1. **WACC vs. Terminal Growth Rate** matrix (primary — mandatory)
+1. **WACC vs. Terminal Growth Rate** matrix (primary — mandatory for allowed/caution DCF)
 2. **Revenue Growth vs. EBIT Margin** matrix (secondary — optional)
 
 Full specification in **Part 3** below.
@@ -219,7 +284,7 @@ Choose 2-3 metrics based on industry (refer to `comparable.md` §Valuation Metri
 | **Adjustment** | Forward-adjusted (前复权) prices for PE/PB calculations |
 | **Outlier handling** | Exclude periods where PE is negative or >200x (label as "N/M") |
 
-Data source: iFind `ifind_get_stock_financial_index` with date range parameters.
+Data source: exchange/terminal/Yahoo/iFind or another market data source with retrieval timestamp, adjustment method, field definition, and `source_id`. Historical market data does not replace official financial statement sources.
 
 **Step 3: Calculate statistical bands**
 
@@ -301,9 +366,9 @@ Sensitivity analysis quantifies how changes in key assumptions affect the valuat
 
 ### Matrix Types
 
-**Primary matrix: WACC × Terminal Growth Rate (DCF-linked — mandatory)**
+**Primary matrix: WACC × Terminal Growth Rate (DCF-linked — mandatory for allowed/caution DCF)**
 
-This is the mandatory sensitivity matrix for any DCF valuation.
+This is the mandatory sensitivity matrix for any DCF valuation that passed the applicability gate.
 
 ```markdown
 | Equity Value/Share | g = 1.5% | g = 2.0% | g = 2.5% | g = 3.0% | g = 3.5% |
@@ -373,7 +438,7 @@ After each matrix, include a brief interpretation:
 ```markdown
 **Sensitivity Interpretation:**
 • Under base case assumptions (WACC [X]%, terminal growth [Y]%), implied equity
-  value is ¥[Z] per share, representing [upside/downside]% vs. current price of ¥[P].
+  value is ¥[Z] per share; note the relative position vs. current price of ¥[P].
 • The valuation is [more/less] sensitive to [variable A] than [variable B]:
   a 1% change in [A] moves equity value by [±X]%, while a 1% change in [B]
   moves it by [±Y]%.
@@ -419,24 +484,24 @@ Use `.row-highlight` class for the base case row, and `<b>` for the base case ce
 - [ ] **DCF**: Terminal Value as % of EV disclosed (flag if >80%)
 - [ ] **Historical Band**: ≥2 metrics (typically PE + PB), 5-year window, summary table with percentile
 - [ ] **Historical Band**: Narrative interpreting current position vs. own history, with cyclical-trap check
-- [ ] **Sensitivity**: Primary matrix (WACC × terminal growth) — mandatory
+- [ ] **Sensitivity**: Primary matrix (WACC × terminal growth) — mandatory only for allowed/caution DCF
 - [ ] **Sensitivity**: Base case cell clearly highlighted, ranges symmetric, corner values plausible
 - [ ] **Sensitivity**: Interpretation narrative included, scenarios linked where applicable
-- [ ] **Cross-method synthesis** (DCF + Band + Comps): Written up in §XIII of `research-document-template.md`
+- [ ] **Cross-method synthesis** (selected methods only): Written up in §XIII of `research-document-template.md`
 
 ---
 
 ## Data Sources
 
-| Data Type | Source | API |
-|-----------|--------|-----|
-| Financial statements | iFind | `ifind_get_financial_statements` |
-| Beta | iFind | `ifind_get_stock_financial_index` |
-| Historical PE/PB/PS | iFind | `ifind_get_stock_financial_index` (with date range) |
-| Historical stock prices | iFind | `ifind_get_price` |
-| Risk-free rate | Web Search | Country-specific 10Y bond yield |
-| Consensus estimates | iFind | `ifind_get_forecast` |
-| Share count | iFind | `ifind_get_stock_info` |
+| Data Type | Source | API / Retrieval |
+|-----------|--------|-----------------|
+| Financial statements | Official filings/company IR first | SEC EDGAR/XBRL, CNINFO/SSE/SZSE/BSE, HKEXnews, company reports |
+| Beta | Peer set / market data | terminal/Yahoo/iFind/exchange data with source_id |
+| Historical PE/PB/PS | Market data source with timestamp | terminal/Yahoo/iFind/exchange data |
+| Historical stock prices | Market data source with timestamp | terminal/Yahoo/iFind/exchange data |
+| Risk-free rate | Government bond source | country-specific 10Y bond yield with source_id |
+| Consensus estimates | Licensed/clearly labeled consensus source | iFind/terminal/secondary; estimate tier |
+| Share count | Official filings/company IR first | SEC/CNINFO/HKEX/company reports; terminal cross-check |
 
 ---
 
@@ -444,7 +509,7 @@ Use `.row-highlight` class for the base case row, and `<b>` for the base case ce
 
 - **`comparable.md`** — Relative-to-peers. Companion file; use valuation metric selection guide from there.
 - **`research-document-template.md` §VIII** — Valuation table population (both L1 and L2).
-- **`research-document-template.md` §XIII** — Cross-method valuation synthesis narrative.
+- **`research-document-template.md` §XIII** — Cross-method valuation view narrative.
 - **`references/financial-model-spec.md`** Tab 7 (DCF), Tab 9 (Sensitivity) — Excel implementation in L2's Task 2.
 - **`modules/equity-report-charts.md`** C4 — Historical PE band chart specification.
 - **`analysis/scenario-deep-dive.md`** — Scenario-linked sensitivity (tertiary PE × EPS matrix).

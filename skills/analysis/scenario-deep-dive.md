@@ -2,7 +2,7 @@
 
 > **Scope**: This file is read ONLY when `output_type = EQUITY_REPORT`.
 > It supplements the base scenario/risk section from `modules/tables.md` by requiring
-> fully quantified, probability-weighted scenario analysis with catalyst mapping.
+> fully quantified scenario analysis with catalyst mapping. Probability weighting is allowed only when a sourced probability basis exists.
 
 ---
 
@@ -11,8 +11,8 @@
 The tear sheet scenario section uses compact bullet points in a two-column layout.
 The equity report must expand this into a rigorous framework where each scenario has:
 - Specific quantified assumptions (not vague directional statements)
-- A probability weight that sums to 100%
-- A valuation outcome per scenario
+- A probability basis, or explicit `not_quantified`
+- A valuation range/view per scenario
 - Catalyst triggers with timing
 - Monitoring signals that would cause us to shift between scenarios
 
@@ -24,23 +24,23 @@ The equity report must expand this into a rigorous framework where each scenario
 
 | Element | Bull Case | Base Case | Bear Case |
 |---------|-----------|-----------|-----------|
-| **Probability** | 15-25% | 45-60% | 20-30% |
+| **Probability Basis** | sourced / not_quantified | sourced / not_quantified | sourced / not_quantified |
 | **Revenue growth (FY+1)** | Specific % | Specific % | Specific % |
 | **Revenue growth (FY+2)** | Specific % | Specific % | Specific % |
 | **EBIT margin (FY+2)** | Specific % | Specific % | Specific % |
 | **Terminal PE or EV/EBITDA** | Specific x | Specific x | Specific x |
-| **Target price** | $XXX | $XXX | $XXX |
-| **Upside/downside vs current** | +XX% | ±XX% | -XX% |
+| **Implied valuation range** | $XX-$XX | $XX-$XX | $XX-$XX |
+| **Relative position vs current** | premium/discount/range | premium/discount/range | premium/discount/range |
 
-**Hard constraint**: Probabilities must sum to 100%. Base case must be 45-60%.
+**Hard constraint**: Probabilities may be assigned only when `probability_basis` is sourced (historical frequency, market-implied, consensus distribution, clinical PoS, commodity curve, or explicit user-defined basis). If not sourced, mark `not_quantified` and do not calculate probability-weighted value.
 
-### Probability-Weighted Target
+### Probability Basis
 
 ```
-Weighted Target = P(Bull) × Bull Price + P(Base) × Base Price + P(Bear) × Bear Price
+probability_basis = historical_frequency | market_implied | consensus_distribution | clinical_pos | commodity_curve | user_defined | not_quantified
 ```
 
-Document this calculation explicitly. Compare to current price for expected return.
+Document the basis explicitly before assigning probabilities. If `not_quantified`, present scenario ranges only.
 
 ---
 
@@ -66,7 +66,7 @@ For EACH of the three scenarios, write a dedicated subsection with:
 1. **Headline thesis**: Most likely trajectory
 2. **Key assumptions** (3-5 items): Conservative consensus-aligned
 3. **What's already priced in**: Which assumptions are consensus
-4. **Valuation method**: Primary method used for base target
+4. **Valuation method**: Primary method used for base valuation range
 5. **Key risks to base case**: What could push to Bull or Bear
 
 ### 2.3 Bear Case (~250-400 words)
@@ -95,9 +95,9 @@ EBIT Margin FY+2    | xx.x%    | xx.x%    | xx.x%    | xx.x%
 EPS FY+2            | $x.xx    | $x.xx    | $x.xx    | $x.xx
 FCF Yield FY+2      | x.x%     | x.x%     | x.x%    | x.x%
 Terminal PE          | xx.x     | xx.x     | xx.x     | xx.x
-Target Price         | $xxx     | $xxx     | $xxx     | $xxx (current)
-Return               | +xx%     | ±xx%     | -xx%     |
-Probability          | xx%      | xx%      | xx%      |
+Implied Valuation    | $xx-$xx  | $xx-$xx  | $xx-$xx  | $xxx (current)
+Relative Position    | premium/discount/range | premium/discount/range | premium/discount/range |
+Probability Basis    | sourced/not_quantified | sourced/not_quantified | sourced/not_quantified |
 ```
 
 ### "Current Implied" Column

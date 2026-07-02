@@ -48,7 +48,7 @@ Place these invisible elements inside `.report-container` at the top of the HTML
 ### Cover Page — Left-Right Split (P1, v2) — Kimi Research Branded
 
 **v2 additions:**
-- Cover rating line → `.price-target-bar` (Current → Target → Upside)
+- Cover valuation-view line → data quality + valuation range / key uncertainty summary
 - Right-column Key Data → `.key-data-grid` (denser 2-col grid)
 - **Kimi Research header branding** — every cover page is authored by Kimi Research
 - All numbers use tabular-nums for clean vertical alignment
@@ -91,23 +91,22 @@ Place these invisible elements inside `.report-container` at the top of the HTML
     <h1 class="header-main-title">[Core Judgment — 8-15 words]</h1>
 
     <div class="cover-rating-line">
-      <span class="cover-rating-badge">[Rating e.g. BUY / HOLD / SELL]</span>
+      <span class="cover-rating-badge">[Data Quality: High / Medium / Low / Insufficient]</span>
     </div>
 
-    <!-- NEW v2: Price Target Bar (replaces simple Target label) -->
+    <!-- Valuation View Bar: no default rating, target price, or buy/sell advice -->
     <div class="price-target-bar">
       <div class="ptb-cell">
         <div class="ptb-label">Current</div>
         <div class="ptb-value">[$XXX.XX]</div>
       </div>
       <div class="ptb-cell">
-        <div class="ptb-label">12m Target</div>
-        <div class="ptb-value">[$XXX.XX]</div>
+        <div class="ptb-label">Valuation View</div>
+        <div class="ptb-value">[$XX-XX / data insufficient]</div>
       </div>
       <div class="ptb-cell">
-        <div class="ptb-label">Upside</div>
-        <div class="ptb-value ptb-upside-positive">[+XX.X%]</div>
-        <!-- Use ptb-upside-negative for downside, ptb-upside-neutral for ≤2% -->
+        <div class="ptb-label">Key Uncertainty</div>
+        <div class="ptb-value ptb-upside-neutral">[Top driver]</div>
       </div>
     </div>
 
@@ -157,7 +156,7 @@ Place these invisible elements inside `.report-container` at the top of the HTML
 ```
 
 **Key rules**:
-- Left side (`.cover-main`): rating badge, Price Target Bar, core viewpoint
+- Left side (`.cover-main`): data quality badge, valuation view bar, core viewpoint
 - Right side (`.cover-sidebar`): Key Data Grid (2×N) + 3-year earnings forecast mini-table
 - All bracketed `[...]` values MUST be populated from real data (Task 1 research + Task 2 Excel); never leave placeholders, never fabricate, never copy sample tickers (AAPL/BYD/TSLA/MSFT)
 - The `.header-top` bar spans only the left column (inside `.cover-main`)
@@ -168,7 +167,7 @@ Place these invisible elements inside `.report-container` at the top of the HTML
 Place this section **inside** `.report-container`, immediately **after** the closing `</div>` of `.cover-split` and **before** any `<h2>` content body sections. The CSS `page-break-after: always` on `.exec-summary` ensures page 1 ends here.
 
 **Language**: Title and labels follow `report_language`:
-- `zh`: `摘要` (not "Executive Summary"), labels: `投资论点`, `财务亮点`, `估值与目标价`, `关键风险`
+- `zh`: `摘要` (not "Executive Summary"), labels: `投资论点`, `财务亮点`, `估值视角`, `关键风险`
 - `en`: `Executive Summary`, labels as shown below
 
 ```html
@@ -184,8 +183,8 @@ Place this section **inside** `.report-container`, immediately **after** the clo
       <span class="es-content">[1-2 sentences: latest revenue/growth, margin trend, earnings quality signal — pull key numbers from Task 2 model]</span>
     </div>
     <div class="exec-summary-item">
-      <span class="es-label">[Valuation & Target / 估值与目标价]</span>
-      <span class="es-content">[1-2 sentences: valuation method summary, target price derivation, upside/downside vs. current price]</span>
+      <span class="es-label">[Valuation View / 估值视角]</span>
+      <span class="es-content">[1-2 sentences: selected methods, valuation range/view, data quality, and key uncertainty]</span>
     </div>
     <div class="exec-summary-item">
       <span class="es-label">[Key Risks / 关键风险]</span>
@@ -197,9 +196,9 @@ Place this section **inside** `.report-container`, immediately **after** the clo
 
 **Content Rules**:
 - Each item is **1-2 sentences max** — concise, data-driven, no filler
-- Use specific numbers (e.g., "Revenue +15.7% YoY to RMB 174B", "DCF implies 28% upside")
+- Use specific source-linked numbers (e.g., "Revenue +15.7% YoY to RMB 174B", "Comps range is below peer median on sourced FY1 P/E"). Do not write target price or upside/downside by default.
 - Language matches `report_language` (Chinese report → Chinese content, English report → English content)
-- Content is distilled from: Research Document §I (thesis), Task 2 model (financials), Valuation Analysis (target), Risk Framework (risks)
+- Content is distilled from: Research Document §I (thesis), Task 2 model (financials), Valuation Analysis (`valuation_view`), Risk Framework (risks)
 - The entire cover page (`.cover-split` + `.exec-summary`) must fit on a single A4 page — if it overflows, shorten the `cover-viewpoint` paragraph first, then trim exec summary items
 
 ---
@@ -527,7 +526,7 @@ The equity report is a **≥25 page institutional deep-dive**. Every module must
 - ✅ Each major module should span **at least 1.5-2 full pages** of content
 - ✅ Include data tables, charts, and exhibits generously — aim for **≥15 exhibits total**
 - ✅ Write analytical paragraphs (3-5 sentences each) with specific data points, not generic observations
-- ✅ **Actively research** during report writing — the Task 1/2 deliverables are a starting framework, not the ceiling
+- ✅ Enrich narrative with source-manifested data and clearly labeled secondary context — the Task 1/2 deliverables are a starting framework, not the ceiling
 - ✅ Add **company-specific sub-sections** where the business warrants it (e.g., a tech company might need a "Product Roadmap" sub-section; a consumer company might need "Brand Portfolio Analysis")
 - ❌ Do NOT copy-paste from Task 1/2 deliverables verbatim — synthesize, expand, and add new research
 - ❌ Do NOT produce a report that reads like an expanded tear sheet
@@ -548,10 +547,10 @@ The equity report is a **≥25 page institutional deep-dive**. Every module must
 | 8 | **Supply Chain & Industry Chain** | **产业链全景** | Full-Width | 400-600 | Pre-rendered SVG supply chain diagram + narrative. See `modules/industry-chain.md` §Rendering Pipeline. |
 | 9 | **Upstream/Downstream Analysis** | **上下游分析** | Full-Width | 300-500 | Supplier concentration, customer concentration, bargaining power, key supply chain risks. |
 | 10 | **Financial Analysis & Projections** | **财务分析与预测** | Full-Width | 1,000-1,500 | **DEEP VERSION**: Revenue decomposition by segment, margin bridge (historical → projected), DuPont decomposition, FCF analysis, earnings quality, balance sheet quality, working capital trends. Multiple tables from Excel model. This module should be 3-4 pages minimum. |
-| 11 | **Valuation Analysis** | **估值分析** | Full-Width | 800-1,200 | Full spec in §4.5: Comps + Historical Band + DCF + Sensitivity + Cross-Method Synthesis |
+| 11 | **Valuation Analysis** | **估值分析** | Full-Width | 800-1,200 | Full spec in §4.5: method router result + selected/caution/disabled methods + valuation view; DCF only if applicability gate passes |
 | 12 | **Management & Governance** | **管理层与公司治理** | Full-Width | 400-600 | CEO/CFO/key exec profiles (150-200 words each), management track record, compensation alignment, insider ownership, board independence, succession considerations. |
 | 13 | **ESG & Sustainability** | **ESG与可持续发展** | Full-Width | 300-500 | Environmental metrics/targets, social (workforce, supply chain), governance quality. Specific KPIs, not just narrative. |
-| 14 | **Scenario Analysis** | **情景分析** | Full-Width | 600-800 | Quantified Bull/Base/Bear with probability weights, scenario comparison table, probability-weighted target price, key assumptions per scenario. |
+| 14 | **Scenario Analysis** | **情景分析** | Full-Width | 600-800 | Quantified Bull/Base/Bear scenario comparison table and key assumptions. Probability weighting only when probability basis is sourced; no probability-weighted target by default. |
 | 15 | **Risk Assessment** | **风险评估** | Full-Width | 500-700 | 8-12 categorized risks with Probability × Impact scoring, risk mitigation factors, key monitoring signals. Structured risk table + narrative. |
 | 16 | **Shareholder & Capital Structure** | **股东与资本结构** | Full-Width | 300-500 | Top institutional holders, insider activity, buyback programs, float analysis, recent 13F/shareholding changes. |
 | 17 | **References & Data Sources** | **参考文献与数据来源** | Full-Width | — | See §4.8 below. Every data source cited in the report must be listed here. |
@@ -613,33 +612,33 @@ Use market-appropriate language:
 
 When writing each module, the agent MUST actively seek to enrich the content beyond what the research document and Excel model provide:
 
-- ✅ **Web Search**: For each major module, do **at least 1 web search** to find the latest data, news, or competitive intelligence. No cap on total searches — use as many as needed.
+- ✅ **Source Use**: For each major module, use source-manifested data first. Ordinary web search may add context, news, or competitive intelligence, but cannot replace missing official financial data.
 - ✅ **Additional Charts**: Beyond the 5 required charts (C1-C5), generate **additional charts** wherever they add value. Aim for **≥15 total exhibits** (charts + tables). Good candidates: revenue waterfall, margin bridge, market share trend, competitive positioning scatter, historical PE band chart, scenario comparison.
 - ✅ **Company-Specific Sub-Sections**: If the company has unique characteristics (e.g., a unique business model, regulatory dynamics, technology moat), create custom sub-sections under the relevant module.
 - ✅ **Cross-Reference**: When writing about financials, reference the competitive landscape. When writing about competition, reference the financial implications. The report should feel integrated, not siloed.
 - ❌ **DO NOT say "as noted in the research document"** or "per the analysis brief" — synthesize the content and add to it.
 - ❌ **DO NOT skip modules because the research document section was thin** — this is exactly when you should research more.
 
-**Research Budget**: Unlimited web searches. Up to 10 additional API calls for financial data. The goal is institutional-grade depth — do not optimize for speed at the expense of quality.
+**Research Budget**: Official filings, company IR, source manifest artifacts, and documented terminal/API calls are primary. If critical official financial data is missing, degrade to `data_insufficient_memo`; do not keep searching indefinitely to justify a valuation conclusion.
 
 ---
 
 ## 4.5 Valuation Section Specification (L1 vs L2)
 
-The valuation section adapts based on `valuation_depth`:
+The valuation section adapts based on `valuation_depth`, `source_manifest_status`, and `valuation_method_router_result`:
 
 | Sub-section | L1 (Streamlined) | L2 (Full) |
 |-------------|-------------------|-----------|
 | 4.5.1 Comparable Company Table | ✅ Table + premium/discount narrative | ✅ Same |
-| 4.5.2 Historical Valuation Band | ❌ Skip | ✅ 5Y PE/PB band with percentiles |
-| 4.5.3 DCF Model | ❌ Skip | ✅ WACC/FCF/Terminal Value/Equity Bridge |
-| 4.5.4 Sensitivity Matrix | ❌ Skip | ✅ WACC × Growth matrix |
-| 4.5.5 Cross-Method Synthesis | ✅ Comps + Consensus only | ✅ DCF + Comps + Historical combined |
+| 4.5.2 Historical Valuation Band | Conditional if sourced/selected | Conditional if sourced/selected |
+| 4.5.3 DCF Model | ❌ Skip | Conditional: only if DCF gate is allowed/caution |
+| 4.5.4 Sensitivity Matrix | Scenario table / selected-method variables | Selected-method sensitivity; WACC × g only for allowed/caution DCF |
+| 4.5.5 Cross-Method Synthesis | Selected L1 methods only | Selected/caution methods only |
 
 ---
 
 ### 4.5.1 Comparable Company Table (L1 + L2)
-Comparable company valuation table + premium/discount narrative. Data from iFind/Yahoo Finance (NOT Web Search). See `valuation/comparable.md` §Data Sources.
+Comparable company valuation table + premium/discount narrative. Financials should tie to official filings or source-manifested secondary data; market data may use iFind/Yahoo/terminal with timestamp. See `valuation/comparable.md` §Data Sources.
 
 ---
 
@@ -651,52 +650,55 @@ Comparable company valuation table + premium/discount narrative. Data from iFind
 
 ---
 
-### 4.5.3 DCF Model (L2 Only)
+### 4.5.3 DCF Model (L2 Conditional)
+
+Before including this section, confirm `dcf_applicability = allowed` or documented `caution`. If DCF is disabled, show the disabled reason and selected alternative method instead.
+
 - Assumption summary table (WACC, growth rates, margins, CapEx intensity)
 - 5-year FCF projection table
 - Equity bridge table (EV → Equity Value → Per Share)
-- Per-share value conclusion with comparison to current price
+- Valuation range/view with comparison to current price; no target price conclusion by default
 - **L1**: Skip entirely. Do not include DCF assumptions or FCF projections.
 
 ---
 
-### 4.5.4 Sensitivity Matrix (L2 Only)
-- WACC × Terminal Growth (mandatory) — use `.sensitivity-matrix` class, `.base-case` for center cell
+### 4.5.4 Sensitivity Matrix (L2 Conditional)
+- WACC × Terminal Growth (mandatory only when DCF is allowed/caution) — use `.sensitivity-matrix` class, `.base-case` for center cell
 - Revenue × Margin (optional)
 - Interpretation narrative per `valuation/dcf-and-sensitivity.md` §Part 3 (Sensitivity Analysis)
-- **L1**: Replace with a simple scenario table (Bull/Base/Bear with assumptions and implied prices, no matrix).
+- **L1**: Replace with a simple scenario table (Bull/Base/Bear with assumptions and implied valuation ranges, no matrix).
 
 ---
 
 ### 4.5.5 Cross-Method Synthesis (L1 + L2)
 
-**L2 Version** (3 methods):
+**L2 Version** (selected methods only):
 ```html
 <div class="valuation-synthesis">
   <div class="valuation-range">
     <strong>Valuation Range Summary:</strong>
     <ul>
-      <li>Comparable Companies: ¥XX – ¥XX per share</li>
-      <li>DCF (base case): ¥XX per share</li>
-      <li>Historical Band (median): ¥XX implied</li>
+      <li>Comparable Companies: ¥XX – ¥XX per share (if selected)</li>
+      <li>DCF: allowed/caution/disabled; ¥XX – ¥XX if allowed</li>
+      <li>Historical Band / rNPV / SOTP / NAV / Residual Income: ¥XX – ¥XX if selected</li>
     </ul>
     <p>Cross-method convergence analysis: [narrative]</p>
-    <p>Final valuation judgment: [narrative]</p>
+    <p>Valuation view and key uncertainty: [narrative]</p>
   </div>
 </div>
 ```
 
-**L1 Version** (comps + consensus only):
+**L1 Version** (selected L1 methods):
 ```html
 <div class="valuation-synthesis">
   <div class="valuation-range">
     <strong>Valuation Summary (Comparable-Company Based):</strong>
     <ul>
-      <li>Comparable Companies: ¥XX – ¥XX per share</li>
-      <li>Consensus Target Price: ¥XX per share</li>
+      <li>Comparable Companies: ¥XX – ¥XX per share (if selected)</li>
+      <li>Consensus Price View: ¥XX – ¥XX per share (reference only, if sourced)</li>
     </ul>
     <p>Premium/discount drivers: [narrative]</p>
-    <p>Final valuation judgment: [narrative]</p>
+    <p>Valuation view and key uncertainty: [narrative]</p>
   </div>
 </div>
 ```

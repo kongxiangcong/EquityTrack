@@ -19,7 +19,10 @@ description: "Tear Sheet workflow for equity-research skill. Generates a concise
 - ✅ Include ≥4 catalyst events with specific dates
 - ✅ Include 3 scenarios (Bull/Base/Bear) with specific numbers, not vague descriptions
 - ✅ Analysis brief must be ≥1,500 words before entering Phase 4
-- ❌ Do not fabricate data — if a data point is unavailable, note it and explain why
+- ✅ Every critical number must be source-manifested or explicitly marked missing
+- ✅ Default output uses `valuation_view`, `risk_reward_summary`, and `data_quality_grade`, not rating/target-price advice
+- ❌ Do not fabricate data — if a critical data point is unavailable from official or documented secondary sources, degrade to `data_insufficient_memo`
+- ❌ Do not output BUY/HOLD/SELL, buy/sell advice, target price, or probability-weighted target by default
 - ❌ Do not skip any dimension or leave sections as "N/A"
 - ❌ Do not use placeholder text ("TBD", "to be determined", "[insert here]")
 
@@ -53,6 +56,8 @@ Before each Phase begins, complete the corresponding pre-inspection. **Any uncom
 
 | Phase     | Pre-Inspection Item                                                          | Action if Incomplete                        |
 | --------- | ---------------------------------------------------------------------------- | ------------------------------------------- |
+| Phase 1   | Confirmed `references/source-manifest.md` is read                            | Immediately ReadFile, then continue         |
+| Phase 1   | Confirmed `valuation/valuation-method-router.md` is read                     | Immediately ReadFile, then continue         |
 | Phase 1   | Confirmed `references/data-sources.md` is read                               | Immediately ReadFile, then continue         |
 | Phase 1   | Confirmed `references/data-sources-detail.md` is read (if API params needed) | Immediately ReadFile or Grep, then continue |
 | Phase 2.1 | Confirmed `modules/industry-chain.md` is read                                | Immediately ReadFile, then continue         |
@@ -131,7 +136,7 @@ Benchmark index codes in `references/data-sources.md` §Benchmark Index Codes.
 
 ### 1.1 Data Source Priority
 
-Brief priority: iFind > Yahoo Finance > 天眼查 > Web Search. Details in `references/data-sources.md`.
+Brief priority: official disclosure first for financial data; iFind/Yahoo/terminal sources are optional secondary sources for structuring, market data, and cross-checking; web search is for news/background/source discovery. Details in `references/data-sources.md`.
 
 ### 1.1a Web Search Budget
 
@@ -139,21 +144,23 @@ Brief priority: iFind > Yahoo Finance > 天眼查 > Web Search. Details in `refe
 > tends to loop on "let me find one more confirming source" — wasting time without
 > meaningfully improving the report.
 
-**Cap: ≤12 web searches per tear sheet session.** This budget covers Phases 1-3 combined
-(data collection + analysis + recent news for catalysts). API calls (iFind, Yahoo) do
-NOT count against this cap; only `WebSearch` and `WebFetch` calls do.
+**Cap: ≤12 ordinary web searches per tear sheet session.** This budget covers Phases 1-3 combined
+(data collection + analysis + recent news for catalysts). Official filings, company IR downloads,
+source manifest artifacts, and documented terminal/API calls do NOT count against this cap.
 
 **When approaching the cap (≥10 used)**:
 - Stop searching for "the perfect source"; consolidate what you have
 - A 90% answer with one source is better than a 95% answer that took 5 more searches
-- Genuine data gaps should flow to §IX Risks as "data limitation" disclosure, not block delivery
+- Non-critical data gaps should flow to §IX Risks as "data limitation" disclosure
+- Critical financial, share-count, peer, or selected-method input gaps block valuation conclusions and trigger `data_insufficient_memo`
 
-**When the cap is hit**: Proceed with available data. Note any unresolved questions in
-the analysis brief's §IX Risks section.
+**When the cap is hit**: Proceed with available non-critical data. If critical data is still missing, produce `data_insufficient_memo` instead of a valuation conclusion.
 
 ### 1.2 Data Collection Checklist
 
 - [ ] Company fundamentals (financial statements, business structure, management)
+- [ ] Official financial filings and source manifest summary (`source_id` or `missing`)
+- [ ] Valuation method router result (`selected_methods`, `disabled_methods`, `missing_data`)
 - [ ] Industry and competitive landscape (CR concentration, pricing power, supply chain)
 - [ ] Equity structure (Chinese companies: 天眼查 `shareholder_info`; others: annual reports/SEC)
 - [ ] Valuation and comparables (PE/PB/PS/EV, 3-5 comparable companies)

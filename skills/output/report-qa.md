@@ -149,16 +149,16 @@ LOOP END
 | B8 | Earnings Quality | Financial section includes OCF/NI, DuPont, FCF analysis |
 | B9 | Consensus Expectation | Valuation section includes sell-side expectations |
 | B10 | Competitive Landscape | Industry section has CR concentration, pricing power |
-| B11 | **Historical Band** | 5Y PE/PB band summary table with percentile present |
-| B12 | **DCF Projection Table** | 5-year FCF projection + equity bridge table present |
-| B13 | **Sensitivity Matrix** | At least WACC × Terminal Growth matrix present |
+| B11 | **Historical Band** | Present only if selected/sourceable; otherwise disabled reason recorded |
+| B12 | **DCF Projection Table** | Present only if DCF gate allowed/caution; otherwise disabled reason recorded |
+| B13 | **Sensitivity Matrix** | Selected-method sensitivity present; WACC × Terminal Growth only for allowed/caution DCF |
 | B14 | **Module Depth** | Each of the 21 mandatory modules has ≥2 substantive paragraphs + ≥1 table/exhibit (where applicable) |
 | B15 | **Revenue Decomposition** | Financial section includes segment-level revenue table with volume × price (from `analysis/revenue-model.md`) |
 | B16 | **Competitive Depth** | Industry section includes ≥5 named competitors with profile table + market share data (from Research Doc §IV Competitive Landscape) |
 | B17 | **TAM/SAM/SOM** | Industry section includes quantified market sizing with sources (from Research Doc §IV TAM/SAM/SOM) |
 | B18 | **Projection Assumptions** | Financial section includes margin bridge table + CapEx/WC assumptions (from `analysis/projection-assumptions.md`) |
 | B19 | **Risk Count** | Scenario/Risk section includes ≥8 distinct risks across ≥3 categories (from `analysis/risk-framework.md`) |
-| B20 | **Scenario Quantification** | Each scenario has specific financial metrics (revenue, margin, EPS, target price), not vague statements (from `analysis/scenario-deep-dive.md`) |
+| B20 | **Scenario Quantification** | Each scenario has specific financial metrics and implied valuation range; probability weighting only when basis is sourced |
 
 ---
 
@@ -239,29 +239,30 @@ Same requirements: Pre-rendered SVG default (via rendering cascade), ≥4 layers
 
 ### Valuation Section (L1 vs L2 Checklist)
 
-**L2 (Full Version — DCF + Comps + Historical + Sensitivity)**:
+**L2 (Full Version — Method-routed model + selected methods)**:
 ```
-□ DCF: WACC calculation documented with all components
-□ DCF: 5-year FCF projection with revenue/margin/CapEx assumptions
-□ DCF: Terminal value method stated (Gordon Growth or Exit Multiple)
-□ DCF: Equity bridge complete (EV → Net Debt → Equity → Per Share)
-□ Historical Band: ≥2 metrics (PE + PB minimum)
-□ Historical Band: Current percentile calculated and interpreted
+□ Source Manifest: critical numbers have source_id or missing
+□ Method Router: selected/caution/disabled methods shown
+□ DCF: included only if dcf_applicability is allowed/caution
+□ DCF: if disabled, disabled_reason shown and no DCF-derived value shown
+□ Historical Band: included only if selected/sourceable
 □ Sensitivity: Base case highlighted with bold or .base-case class
-□ Sensitivity: Ranges are symmetric and use reasonable step sizes
-□ Synthesis: DCF + Comps + Historical all compared, convergence/divergence noted
-□ Synthesis: Final valuation judgment stated
+□ Sensitivity: selected-method ranges are reasonable
+□ Synthesis: selected methods compared, convergence/divergence noted
+□ Synthesis: valuation view stated without default rating/target price
 □ Number cross-checks: ≥10 numbers verified against Excel model
 ```
 
 **L1 (Streamlined Version — Comps + Consensus only)**:
 ```
-□ Comparable Company Table: 3-5 peers with real data (iFind/Yahoo Finance)
+□ Source Manifest: critical numbers have source_id or missing
+□ Method Router: selected/caution/disabled methods shown
+□ Comparable Company Table: target 5 peers, minimum 3 usable peers with source IDs
 □ Comps: Statistical summary (Max/75th/Median/25th/Min) present
 □ Comps: Premium/discount narrative with drivers
-□ Scenario Table: Bull/Base/Bear with assumptions and implied prices
-□ Synthesis: Comps range + consensus target compared
-□ Synthesis: Final valuation judgment stated
+□ Scenario Table: Bull/Base/Bear with assumptions and implied valuation ranges
+□ Synthesis: selected L1 method range + consensus price view if sourced
+□ Synthesis: valuation view stated without default rating/target price
 □ ⛔ DCF/Historical Band/Sensitivity: NOT present (correct for L1)
 □ Number cross-checks: ≥5 numbers verified against research document
 ```
@@ -272,14 +273,14 @@ Same requirements: Pre-rendered SVG default (via rendering cascade), ≥4 layers
 
 | Data Type | Primary Source | Verification Source | Acceptable Variance |
 |----------|------|--------|-----------|
-| Revenue / Net Income | iFind | Yahoo Finance | <5% |
-| PE / PB | iFind | Yahoo Finance | <10% |
-| Earnings Forecast | iFind | — | — |
-| Business Breakdown | iFind | Web Search | <10% |
-| Industry Data | 财新 | Web Search | <15% |
+| Revenue / Net Income | Official filing/company IR | iFind/Yahoo/terminal | Official source wins |
+| PE / PB | Market data source with timestamp | alternate market data source | <10% after adjustment/currency checks |
+| Earnings Forecast | Licensed/clearly labeled consensus source | company guidance if available | estimate tier; do not treat as official history |
+| Business Breakdown | Official filing/company IR | terminal/web secondary | Official source wins |
+| Industry Data | official statistics/association/company filing/reputable research | Web Search | annotate methodology |
 | Next Earnings Date | Web Search | Exchange Calendar | No variance |
-| Beta | iFind | Yahoo Finance | <20% |
-| Risk-Free Rate | Web Search | Central bank data | No variance |
+| Beta | peer/market data source with source_id | alternate market data source | <20% |
+| Risk-Free Rate | government bond source | central bank/treasury data | No variance |
 
 ---
 
@@ -290,7 +291,7 @@ Same requirements: Pre-rendered SVG default (via rendering cascade), ≥4 layers
 | Report too short (<25 pages) | Phase 2.7 not fully executed | Return to Phase 2.7, complete all 6 sub-steps with minimum word counts |
 | Industry section thin | Competitive deep dive / TAM not integrated | Expand Research Doc §IV (Industry Overview, TAM/SAM/SOM, Competitive Landscape, Entry Barriers) and re-render |
 | Financial section lacks depth | Revenue model / projection assumptions not integrated | Incorporate segment tables from `analysis/revenue-model.md` and margin bridge from `analysis/projection-assumptions.md` |
-| Scenario section vague | Scenarios lack specific metrics | Each scenario needs exact revenue, margin, EPS, target price per `analysis/scenario-deep-dive.md` |
+| Scenario section vague | Scenarios lack specific metrics | Each scenario needs revenue, margin, EPS, and valuation range; probability weighting requires sourced basis |
 | Risk list too short (<8 risks) | Risk framework not fully applied | Follow 4-category structure from `analysis/risk-framework.md` |
 | Report too long (>20 pages) | Over-expanded modules | Tighten prose, merge related paragraphs, move secondary detail to footnotes |
 | Valuation section disjointed | Methods not cross-referenced | Add synthesis narrative comparing all results |

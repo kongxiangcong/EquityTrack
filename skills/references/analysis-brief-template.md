@@ -77,8 +77,11 @@ Example: `{Company}_{Ticker}_analysis_brief.md`
 | `report_date` | [YYYY-MM-DD] |
 | `latest_financial_report` | [e.g., "FY2025 Q3" or "2024 Annual Report"] |
 | `current_price` | [e.g., $198.50 or ¥1,850.00] |
-| `rating` | [BUY / HOLD / SELL / NOT RATED] |
-| `target_price` | [e.g., $220.00 or ¥2,100.00, or "N/A" if not rated] |
+| `user_requested_rating` | false unless explicitly requested |
+| `source_manifest_status` | [sufficient / insufficient / draft] |
+| `data_quality_grade` | [High / Medium / Low / Insufficient] |
+| `valuation_method_router_result` | [selected_methods / caution_methods / disabled_methods / missing_data] |
+| `valuation_view` | [research view / range / data insufficient] |
 
 ### Supply Chain Structure (for Mermaid Rendering)
 
@@ -134,7 +137,7 @@ Avoid: adjectives without data ("strong growth"), vague time references ("recent
 
 **Growth Sustainability Assessment** (3-5 sentences, 80-120 words): How much TAM whitespace remains (penetration % today)? Is growth coming from volume, price, or mix? What's the management execution track record (2-3 recent guidance vs. actuals)? Flag any single factor that could break the trajectory.
 
-**So What for Report**: [How growth trajectory affects target price and scenario probabilities]
+**So What for Report**: [How growth trajectory affects valuation view, scenario framing, and key uncertainty]
 
 ### 2.3 Earnings Quality (H3)
 
@@ -160,7 +163,7 @@ Avoid: adjectives without data ("strong growth"), vague time references ("recent
 
 **Market Expectation Gap** (3-5 sentences, 80-120 words): What specifically is the market pricing in (revenue growth, margin)? Where does your analysis disagree? What catalyst could close the gap, and on what timeline? This is where alpha thinking happens — if you can't identify a mispricing, say so honestly.
 
-**So What for Report**: [Direct implication for target price range]
+**So What for Report**: [Direct implication for valuation range/view and what evidence would change it]
 
 ### 2.5 Geopolitics/Policy (H5)
 
@@ -216,7 +219,7 @@ Avoid: adjectives without data ("strong growth"), vague time references ("recent
 
 ## V. Key Financial Data At-a-Glance
 
-| Metric | Latest Value | YoY Change | QoQ Change | Data Source | Note |
+| Metric | Latest Value | YoY Change | QoQ Change | Source ID / Missing | Note |
 |--------|-------------|------------|------------|-------------|------|
 | Revenue (TTM) | | | | | |
 | Net Income (TTM) | | | | | |
@@ -268,15 +271,13 @@ Minimum: 4 events. At least 1 must be the next earnings report. At least 2 must 
 
 > **Length: Every scenario's `Key Assumptions` cell must be 25-50 words — specific and testable (not "strong macro"). The `Trigger Conditions` cell must name an observable signal, 15-30 words.**
 
-| Scenario | Probability | Revenue | Net Income | EPS | Target Price | Key Assumptions | Trigger Conditions |
-|----------|-------------|---------|------------|-----|-------------|-----------------|-------------------|
-| Bull | XX% | | | | | [25-50 words] | [15-30 words — observable signal] |
-| Base | XX% | | | | | [25-50 words] | [15-30 words — default path] |
-| Bear | XX% | | | | | [25-50 words] | [15-30 words — observable signal] |
+| Scenario | Probability Basis | Revenue | Net Income | EPS | Implied Valuation Range | Key Assumptions | Trigger Conditions |
+|----------|-------------------|---------|------------|-----|-------------------------|-----------------|-------------------|
+| Bull | [sourced / not_quantified] | | | | | [25-50 words] | [15-30 words — observable signal] |
+| Base | [sourced / not_quantified] | | | | | [25-50 words] | [15-30 words — default path] |
+| Bear | [sourced / not_quantified] | | | | | [25-50 words] | [15-30 words — observable signal] |
 
-**Rules**: Bull + Base + Bear = 100%. Base probability: 45-60%.
-
-**Probability-Weighted Target**: Σ(probability × target price) = ¥/$ XX (compute this explicitly — it anchors the headline rating).
+**Rules**: Only assign probabilities when `probability_basis` is sourced. If not sourced, show scenario ranges without probability weighting.
 
 ---
 
@@ -295,10 +296,10 @@ Minimum: 4 events. At least 1 must be the next earnings report. At least 2 must 
 
 ## X. Information Sources
 
-| Data Type | Source | Retrieval Date | Reliability Note |
-|-----------|--------|----------------|-----------------|
-| Stock Price Data | [iFind / Yahoo Finance] | | |
-| Financial Statements | [iFind / Yahoo Finance] | | [Reporting period: YYYY-MM-DD] |
+| Data Type | Source ID | Source Tier | Retrieval Date | Reliability Note |
+|-----------|-----------|-------------|----------------|-----------------|
+| Stock Price Data | [source_id] | [terminal / secondary] | | |
+| Financial Statements | [source_id] | [official] | | [Reporting period: YYYY-MM-DD] |
 | Earnings Forecasts | [iFind consensus] | | [# analysts in consensus] |
 | Industry Data | [Source name] | | |
 | Company Announcements | [Source] | | |
@@ -317,8 +318,10 @@ Before Phase 4 begins, the agent must self-check the analysis brief against thes
 - [ ] **§V Financials**: All 10 metrics filled with actual data (no placeholders); financial snapshot commentary included (40-80 words)
 - [ ] **§VI Valuation**: Each filled row has a 30-50 word judgment; cross-method takeaway present (40-80 words)
 - [ ] **§VII Catalysts**: ≥4 events with specific dates (≥1 earnings, ≥2 High importance)
-- [ ] **§VIII Scenarios**: All 3 rows have specific numbers; key assumptions at 25-50 words; triggers at 15-30 words; probability-weighted target computed
+- [ ] **§VIII Scenarios**: All 3 rows have specific numbers; key assumptions at 25-50 words; triggers at 15-30 words; probability basis documented before any probability weighting
 - [ ] **§IX Risks**: 4-6 risks, each 30-60 words with mechanism + trigger + impact × probability tags
+- [ ] **Source Manifest**: every critical number has `source_id` or is marked `missing`
+- [ ] **Safety Boundary**: no default BUY/HOLD/SELL, target price conclusion, buy/sell advice, or probability-weighted target
 - [ ] **Total word count**: ≥2,500 words (target range 2,500-3,500)
 
 **If any check fails**: Return to Phase 2/3 to fill the gap. Do NOT proceed to Phase 4 with an incomplete brief. A compact-looking PDF still needs institutional-depth analysis underneath — the layout compresses the text, not the thinking.

@@ -22,10 +22,13 @@ description: "Task 3 of equity report workflow. Generates the final PDF report. 
 - ✅ Write every section with **full depth** — each major module should span at least 1.5-2 pages
 - ✅ **L2**: ALL financial numbers extracted from Task 2 Excel model via openpyxl; ≥10 numbers cross-checked
 - ✅ **L1**: Financial numbers extracted from Task 1 Research Document; valuation section uses comparable-company method (no DCF/sensitivity/historical band)
+- ✅ Before report generation, verify `source_manifest_status`, `valuation_method_router_result`, and `data_quality_grade`
+- ✅ If source/method/model gates fail, generate a `data_insufficient_memo` report instead of a full valuation report
+- ✅ Default final output uses `valuation_view`, `risk_reward_summary`, `data_quality_grade`, `key_uncertainties`, and `what_would_change_the_view`
 - ✅ Generate the required charts AND **additional charts** — aim for ≥15 total exhibits (L2) or ≥10 (L1)
 - ✅ C6 stock chart: data from real market APIs ONLY (iFind/Yahoo Finance). **If price data unavailable → skip, insert note. ⛔ Never use mock/simulated price data.**
 - ✅ **Page 2 is reserved for the Data Summary page** — mandatory 2-column dense financial summary (see `output/report-layout.md`)
-- ✅ **Actively research** during report writing — web search for each major module to enrich content
+- ✅ During report writing, use only source-manifested data or clearly labeled secondary context. Do not use web search to replace missing official critical financial data.
 - ✅ Create **company-specific sub-sections** (Business Segment Deep Dives: 2-4 sub-sections)
 - ✅ Include a **References & Data Sources** section listing ALL sources with URLs
 - ✅ Include a **Glossary** section with 6-12 sector-relevant terms (see `output/report-layout.md`)
@@ -33,15 +36,16 @@ description: "Task 3 of equity report workflow. Generates the final PDF report. 
 - ❌ Do not say "see financial model for details" — EXTRACT AND INCLUDE the details
 - ❌ Do not skip any module — ALL modules are mandatory (L1: ~18 modules, L2: 21 modules)
 - ❌ Do NOT include any analyst byline. Do NOT copy placeholder tickers.
+- ❌ Do NOT add BUY/HOLD/SELL, buy/sell advice, target price, or upside/downside by default. Rating language requires `user_requested_rating = true`.
 
 ### L1 vs L2 Module Differences
 
 | Module | L2 | L1 |
 |--------|-----|-----|
-| DCF Model Section | ✅ Full DCF with WACC/FCF/Terminal Value | ❌ Skip. Use comps-based valuation instead |
-| Sensitivity Matrix | ✅ Full WACC × Growth matrix | ❌ Skip. Include simple scenario table |
-| Historical Valuation Band | ✅ 5-year PE/PB band with percentiles | ❌ Skip |
-| Cross-Method Synthesis | ✅ DCF + Comps + Historical combined | ✅ Comps + Consensus only |
+| DCF Model Section | Conditional: only if DCF gate allowed/caution | ❌ Skip. Use selected L1 method instead |
+| Sensitivity Matrix | Conditional: selected-method sensitivity | ❌ Skip DCF matrix. Include simple scenario table |
+| Historical Valuation Band | Conditional: only if sourceable and selected | ❌ Skip unless included in Task 1 inputs |
+| Cross-Method Synthesis | ✅ Applicable selected methods only | ✅ Applicable selected L1 methods only |
 | Financial data source | Task 2 Excel (openpyxl) | Task 1 Research Document |
 | Charts C1-C5 | ✅ From Excel model | ✅ From research document data |
 | Number cross-checks | ≥10 vs Excel | ≥5 vs research doc |
@@ -72,6 +76,7 @@ When the user says "下一步"/"继续"/"continue" to enter Task 3, all previous
 | **L1 & L2** | Task 1 Research Document | `*_Research_Document_*.md` |
 | **L2 only** | Task 2 Financial Model | `*_Financial_Model_*.xlsx` |
 | **L2 only** | Task 2 Valuation Analysis | `*_Valuation_Analysis_*.md` |
+| **L1 & L2** | Source manifest summary | Embedded in research/valuation docs or `source_manifest.*` if created |
 | **L1 & L2** | Stock chart SVG | Path from research doc metadata |
 | **L1 & L2** | Stock price CSV + Benchmark CSV | From Task 1 assets |
 
@@ -88,11 +93,13 @@ Also verify these asset files exist (from Task 1):
 | # | File | Purpose | L1 | L2 |
 |---|------|---------|-----|-----|
 | 1 | Task 1 Research Document | Narrative content, six-dimension analysis | ✅ | ✅ |
-| 2 | Task 2 Valuation Analysis (.md) | Rating, target price, DCF summary | ❌ | ✅ |
-| 3 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
-| 4 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
-| 5 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
-| 6 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
+| 2 | Task 2 Valuation Analysis (.md) | Method router result, valuation view, data quality, selected method summaries | ❌ | ✅ |
+| 3 | `references/source-manifest.md` | Source manifest schema and coverage expectations | ✅ | ✅ |
+| 4 | `valuation/valuation-method-router.md` | Confirms report uses only selected/caution methods | ✅ | ✅ |
+| 5 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
+| 6 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
+| 7 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
+| 8 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
 
 **Task 2 Financial Model (.xlsx)** (L2 only): Read via Python/openpyxl during report generation. Do NOT read it all upfront — read specific tabs as needed for each module.
 
@@ -111,13 +118,20 @@ From the Research Document's `## Task Handoff Metadata` section, extract:
 | `page_target` | QA page count validation |
 | `module_count` | L2: all 21 modules mandatory. L1: 18 mandatory modules — DCF Model, Sensitivity Matrix, and Historical Valuation Band are skipped because the Excel model is not produced in L1. |
 | `current_price` | Cover sidebar |
+| `source_manifest_status` | Whether full report or data insufficient memo is allowed |
+| `valuation_method_router_result` | Which valuation methods may appear in the report |
+| `data_quality_grade` | Data quality section and gating |
+| `user_requested_rating` | Rating section may appear only if true |
 
 From the Valuation Analysis, extract:
 | Field | Used For |
 |-------|----------|
-| Rating (BUY/HOLD/SELL) | Cover page badge |
-| Target Price | Cover page + valuation section |
-| Probability-Weighted Price | Scenario section |
+| Valuation View | Cover page valuation view and executive summary |
+| Selected / Disabled Methods | Valuation section and method rationale |
+| Valuation Range | Valuation section, if data gates pass |
+| Probability Basis | Scenario section; omit probability-weighted value if missing |
+
+If `source_manifest_status = insufficient` or the valuation analysis is a `data_insufficient_memo`, stop the full report workflow and generate a data insufficient memo report with missing sources, unavailable tools, disabled methods, and next data requirements.
 
 ---
 
@@ -132,14 +146,15 @@ wb = openpyxl.load_workbook('{model_path}', data_only=True)
 # Extract data needed for report modules:
 # 1. Income Statement tab → Financial Analysis module tables
 # 2. Revenue Model tab → Revenue segment chart (C1)
-# 3. DCF tab → DCF section tables
-# 4. Comps tab → Comparable companies table
-# 5. Sensitivity tab → Sensitivity matrix
-# 6. Scenarios tab → Scenario comparison table + chart (C5)
-# 7. Operating Drivers tab → Key assumptions for margin/growth narrative
+# 3. Valuation Method Router tab → selected/disabled methods
+# 4. DCF tab → DCF section tables only if DCF gate passed
+# 5. Comps / rNPV / SOTP / NAV / Residual Income tabs → selected method tables
+# 6. Sensitivity tab → selected-method sensitivity matrix
+# 7. Scenarios tab → scenario comparison table + chart (C5)
+# 8. Operating Drivers tab → Key assumptions for margin/growth narrative
 ```
 
-**CRITICAL RULE**: Every financial number in the report MUST come from the Excel model. Do NOT type numbers from memory or the research document's §VI. Extract from Excel to guarantee consistency.
+**CRITICAL RULE**: Every financial number in the report MUST come from the Excel model or source-manifested Task 1 data. Do NOT type numbers from memory or invent missing fields. Extract from Excel/source manifest to guarantee consistency.
 
 ---
 
@@ -153,7 +168,7 @@ Read `output/report-layout.md` NOW and follow it exactly.
 
 | # | Module | Content Source | Data Source |
 |---|--------|---------------|-------------|
-| 0 | Cover Page (`.cover-split` with `.price-target-bar` + `.key-data-grid`) | Research Doc §I + Valuation Analysis rating/target | Excel: key financial metrics |
+| 0 | Cover Page (`.cover-split` with valuation-view summary + `.key-data-grid`) | Research Doc §I + Valuation Analysis `valuation_view` | Excel/research doc: key financial metrics with source IDs |
 | 0b | Executive Summary (`.exec-summary`) | Distilled from all sections | Excel: headline metrics |
 | **0c** | **Page 2 Data Summary Page** (`.data-summary-page`, 2-col grid) | Ratios/Valuation + Growth/Margins + C6 Price Perf + perf-table (LEFT) + IS/BS/CF (RIGHT) | Excel: all core tabs + **real market price data for C6 (strictly no mock)** |
 | 0d | TOC + Figure Index | Auto-generated from module list | — |
@@ -166,8 +181,8 @@ Read `output/report-layout.md` NOW and follow it exactly.
 | 7 | TAM / Market Sizing | Research Doc §IV (TAM/SAM/SOM + Market Opportunity Narrative) + **web search** | — |
 | 8 | Supply Chain | Research Doc §V (Mermaid → SVG) | — |
 | 9 | Upstream/Downstream Analysis | Research Doc §V | — |
-| 10 | Financial Analysis & Projections | Research Doc §VII + **Excel model data** + **web search for comps** | Excel: IS, Revenue Model, CF, Operating Drivers |
-| 11 | Valuation Analysis | Valuation Analysis §II-§V | Excel: DCF, Comps, Sensitivity tabs |
+| 10 | Financial Analysis & Projections | Research Doc §VII + **Excel model data** + source-manifested context | Excel: IS, Revenue Model, CF, Operating Drivers |
+| 11 | Valuation Analysis | Valuation Analysis method router + selected-method sections | Excel: selected valuation tabs only |
 | 12 | Management & Governance | Research Doc §III + **web search** | — |
 | 13 | ESG & Sustainability | **Web search** (ESG data, sustainability reports) | — |
 | 14 | Scenario Analysis | Valuation Analysis §VI | Excel: Scenarios tab |
@@ -177,7 +192,7 @@ Read `output/report-layout.md` NOW and follow it exactly.
 | **18** | **Glossary** (`.glossary-section`, 6-12 sector-filtered terms) | Sector term bank from `output/report-layout.md` | — |
 | 19 | Compliance Disclaimer | Market-specific boilerplate | — |
 
-> **⚠️ RESEARCH DURING REPORT WRITING**: For modules marked with **web search**, the agent MUST perform at least 1 web search to find the latest data. The Task 1/2 deliverables provide a framework — the agent should actively expand and deepen content beyond what they contain. There is NO cap on web searches. See `output/report-layout.md` §4.4.3 for full rules.
+> **⚠️ SOURCE DISCIPLINE DURING REPORT WRITING**: The report may enrich context, but every critical number must already be in the source manifest or be added with a `source_id`. Ordinary web search cannot repair missing official financial data. If a critical source gap appears during report writing, degrade to `data_insufficient_memo` instead of filling the gap narratively.
 
 ### Key Extraction Patterns
 
@@ -304,8 +319,8 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 | Latest Revenue | Cover sidebar | IS tab, FY0 | Exact |
 | FY+1 Revenue estimate | Earnings forecast table | IS tab, FY+1E | Exact |
 | FY+1 EPS estimate | Earnings forecast table | IS tab, FY+1E EPS | Exact |
-| DCF price per share | Valuation section | DCF tab, equity/share | Exact |
-| WACC | DCF narrative | DCF tab, WACC cell | Exact |
+| DCF value per share (if allowed) | Valuation section | DCF tab, equity/share | Exact |
+| WACC (if DCF allowed) | DCF narrative | DCF tab, WACC cell | Exact |
 | Comps median PE | Comps table | Comps tab, median row | Exact |
 | Sensitivity center cell | Sensitivity matrix | Sensitivity tab, center | Exact |
 | Bull case price | Scenario section | Scenarios tab, Bull | Exact |
@@ -317,14 +332,14 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 ### 6.3 Manual QA (Key Items)
 
 **A-tier (Must Pass)**:
-- [ ] Cover has rating badge + target price (using `.price-target-bar` Current/Target/Upside)
+- [ ] Cover has valuation view, data quality grade, and key uncertainty summary; no rating/target price unless `user_requested_rating = true`
 - [ ] Cover has `.key-data-grid` (Market / Return / Valuation groups + Earnings Forecast)
 - [ ] Executive Summary present with all 4 items (Thesis, Financials, Valuation, Risks)
 - [ ] Cover page (cover-split + exec-summary) fits on page 1 — no overflow
 - [ ] **Page 2 Data Summary present** (A21): 2-column grid, all `.ds-table-dense` populated, forecast columns shaded
 - [ ] All financial tables populated (no blank cells, no orphan `[…]` placeholders)
-- [ ] DCF section: WACC + FCF + Terminal + Equity Bridge all present
-- [ ] Sensitivity matrix: `.base-case` highlighted
+- [ ] DCF section appears only if DCF gate passed; otherwise disabled reason appears
+- [ ] Sensitivity matrix for selected method has `.base-case` highlighted where applicable
 - [ ] Cross-method synthesis narrative present
 - [ ] ≥15 total exhibits (charts + tables)
 - [ ] Supply chain is SVG (not raw Mermaid)
@@ -333,7 +348,7 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 - [ ] Number cross-check: ≥10 numbers verified against Excel
 - [ ] All required modules present (L2: 21 modules · L1: 18 modules — Cover through Disclaimer, including Page 2 Data Summary and Glossary; L1 omits DCF Model, Sensitivity Matrix, Historical Valuation Band)
 - [ ] Business Segment Deep Dives has ≥2 company-specific sub-sections
-- [ ] References & Data Sources section present with ≥10 cited sources
+- [ ] References & Data Sources section present with source manifest summary and every critical number covered or marked `missing`
 
 **B-tier (Should Pass)**:
 - [ ] Running headers/footers on non-cover pages
@@ -356,8 +371,8 @@ Before delivering, confirm ALL items pass:
 |---|-------------|-----------|--------|
 | 1 | **Equity Report PDF** (≥25 pages) | All A-tier checks passed, B-tier ≤3 failures | This task (Step 6) |
 | 2 | **Equity Report HTML** (source file) | HTML integrity verified (1× `</body>`, 1× `</html>`) | This task (Step 6) |
-| 3 | **Financial Model (.xlsx)** | All 10 integrity checks passed (BS balance, cash tie-out, revenue tie, etc.) | Task 2 output — re-verify the file still opens and key numbers match |
-| 4 | **Valuation Analysis (.md)** | Target price, DCF, comps range, scenarios all present | Task 2 output |
+| 3 | **Financial Model (.xlsx)** | Source/method/model checks passed; selected method tabs reconcile | Task 2 output — re-verify the file still opens and key numbers match |
+| 4 | **Valuation Analysis (.md)** | Method router result, selected-method valuation view, source status, scenarios all present | Task 2 output |
 | 5 | **Research Document (.md)** | ≥6,000 words, all sections complete | Task 1 output |
 
 **If ANY deliverable fails its check**: Fix it before delivery. Do NOT deliver a partial package.
@@ -376,7 +391,7 @@ Provide ALL files with links:
    {tab_count} tabs, {projection_years}Y projections, all integrity checks passed
 
 3. 📝 Valuation Analysis — [link]
-   Rating: {rating}, Target: ${target_price} ({upside}% upside/downside)
+   Valuation view: {valuation_view}; data quality: {data_quality_grade}; selected methods: {selected_methods}
 
 4. 📑 Research Document — [link]
    {word_count} words, comprehensive analysis

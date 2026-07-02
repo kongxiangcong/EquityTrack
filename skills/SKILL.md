@@ -1,13 +1,13 @@
 ---
 name: equity-researcher
-description: 机构级投研报告生成技能。覆盖中国A股、港股、美股上市公司。输出模式：1）投资速览：3-5页，含公司概览、核心财务指标、估值倍数、投资逻辑与风险因素；2）深度研报：≥25页，含行业分析、产业链图谱、三表模型、DCF估值、情景分析与敏感性测试。触发条件：1）直接请求：分析/看看/研究/调研/介绍一下 + 公司名或股票；2）投资询问：你怎么看/能不能买/值得投吗/帮我看看/扒一扒 + 公司或股票；3）关键词：研报、投资简报、投资速览、公司一页纸、深度研报、深度研究、深度分析、个股分析、一页纸、速览、公司速览、投研报告；4）股票代码：标准格式（如 600519.SH、0700.HK、AAPL、TSLA、BYD）。意图不明确时主动询问输出模式，禁止默认推断。
+description: 投研辅助技能，覆盖中国A股、港股、美股上市公司，用于教育性研究、资料整理、估值框架和风险分析，不直接提供个性化买卖建议。输出模式：1）投资速览：3-5页，含公司概览、核心财务指标、估值视角、研究逻辑与风险因素；2）深度研报：≥25页，含行业分析、产业链图谱、行业适配模型、估值方法路由、情景分析与敏感性测试。触发条件：1）直接请求：分析/看看/研究/调研/介绍一下 + 公司名或股票；2）研究询问：你怎么看/帮我看看/扒一扒 + 公司或股票；3）关键词：研报、投资简报、投资速览、公司一页纸、深度研报、深度研究、深度分析、个股分析、一页纸、速览、公司速览、投研报告；4）股票代码：标准格式（如 600519.SH、0700.HK、AAPL、TSLA、BYD）。用户问“能不能买/值得投吗/买入/卖出”时，改为说明研究框架、估值视角和风险，不输出默认买卖建议。意图不明确时主动询问输出模式，禁止默认推断。
 ---
 
 # Equity Research Skill 
 
-This skill generates institutional-grade investment research in two modes: **Tear Sheet** (3-5 page PDF, single session) and **Equity Report** (≥25 page PDF, 3-task architecture with financial model). Both modes share the same analytical philosophy — the difference is depth, scope, and delivery structure.
+This skill supports institutional-style equity research in two modes: **Tear Sheet** (3-5 page PDF, single session) and **Equity Report** (≥25 page PDF, 3-task architecture when data is sufficient). It is a research assistant, not an investment-advice engine. Both modes share the same analytical philosophy — the difference is depth, scope, and delivery structure.
 
-**Your first job: figure out what the user wants.** Then carry the Core Principles into the next file.
+**Your first job: figure out what the user wants and whether the data/method gates allow the requested output.** Then carry the Core Principles and Financial Safety Boundary into the next file.
 
 ---
 
@@ -42,8 +42,8 @@ Present 3 clear options (in the user's language):
 **Chinese example:**
 > 我可以用以下几种方式帮你分析 [公司名]:
 >
-> 1. **投资速览 (Tear Sheet)** — 3-5页专业机构级投资简报，包含估值、催化剂、产业链、情景分析等，适合快速决策参考
-> 2. **深度研究报告 (Equity Report)** — ≥25页机构级深度研报，包含完整财务模型、DCF估值、敏感性分析等，适合深入研究
+> 1. **投资速览 (Tear Sheet)** — 3-5页专业机构级研究简报，包含估值视角、催化剂、产业链、情景分析等，适合快速研究参考
+> 2. **深度研究报告 (Equity Report)** — ≥25页机构级深度研报，包含数据门禁、估值方法路由、行业适配模型和敏感性分析等，适合深入研究
 > 3. **简单回答** — 不生成报告，直接用对话回答你的问题，最节省时间
 >
 > 你想要哪种？
@@ -51,8 +51,8 @@ Present 3 clear options (in the user's language):
 **English example:**
 > I can analyze [company] at different levels of depth:
 >
-> 1. **Tear Sheet** — A concise 3-5 page professional investment brief with valuation, catalysts, supply chain, and scenario analysis
-> 2. **Full Equity Report** — An in-depth ≥25 page institutional report with a complete financial model, DCF valuation, and sensitivity analysis
+> 1. **Tear Sheet** — A concise 3-5 page professional research brief with valuation view, catalysts, supply chain, and scenario analysis
+> 2. **Full Equity Report** — An in-depth ≥25 page institutional report with data gates, valuation method routing, industry-adapted modeling, and sensitivity analysis
 > 3. **Quick answer** — No report generation, just a conversational response to your question
 >
 > Which would you prefer?
@@ -81,7 +81,7 @@ When the user wants an equity report, **ask one more question** before starting 
 **Chinese:**
 > 深度研报可以按两种估值深度生成：
 >
-> 1. **完整版（含财务模型）** — 构建完整的三表财务模型（利润表/资产负债表/现金流表）+ DCF绝对估值 + 可比公司估值 + 敏感性分析 + 历史估值带。适合需要深入研究、精确目标价的场景。大约需要 3 步完成。
+> 1. **完整版（含财务模型）** — 先做数据门禁和估值方法路由；数据充分时构建三表或行业适配模型 + 至少两种适用估值方法 + 敏感性/情景分析。DCF 仅在通过适用性门禁时使用。大约需要 3 步完成。
 > 2. **精简版（Level 1 估值）** — 基于可比公司估值（PE/PB/PS 倍数）+ 一致预期 + 情景分析，快速生成专业研报。无复杂 Excel 建模，速度更快。大约需要 2 步完成。
 >
 > 你选哪种？
@@ -89,7 +89,7 @@ When the user wants an equity report, **ask one more question** before starting 
 **English:**
 > The equity report can be built at two valuation depths:
 >
-> 1. **Full version (with financial model)** — Complete 3-statement financial model (IS/BS/CF) + DCF absolute valuation + comparable companies + sensitivity analysis + historical valuation band. Best for in-depth research with precise target price. Approximately 3 steps.
+> 1. **Full version (with financial model)** — Run data gates and valuation method routing first; if data is sufficient, build a 3-statement or industry-adapted model + at least two applicable valuation methods + sensitivity/scenario analysis. DCF is used only after the applicability gate passes. Approximately 3 steps.
 > 2. **Streamlined version (Level 1 valuation only)** — Comparable company valuation (PE/PB/PS multiples) + consensus expectations + scenario analysis, generating a professional report without complex Excel modeling. Faster turnaround. Approximately 2 steps.
 >
 > Which would you prefer?
@@ -98,11 +98,11 @@ When the user wants an equity report, **ask one more question** before starting 
 
 | User Choice | Valuation Depth | Variable | Task Architecture |
 |-------------|-----------------|----------|-------------------|
-| Full version / 完整版 / option 1 | Level 2 (DCF + Comps + Sensitivity) | `valuation_depth = L2` | 3 Tasks: Task 1 → Task 2 (Excel model) → Task 3 |
+| Full version / 完整版 / option 1 | Level 2 (method-routed model + applicable valuation methods + sensitivity) | `valuation_depth = L2` | 3 Tasks if gates pass: Task 1 → Task 2 (model) → Task 3 |
 | Streamlined version / 精简版 / option 2 | Level 1 (Comps + Multiples only) | `valuation_depth = L1` | 2 Tasks: Task 1 → Task 3 (L1 mode, no Task 2 Excel) |
 
 **Key difference**:
-- **L2**: Task 2 produces a real Excel model (8+ tabs) with DCF. Task 3 reads numbers from Excel via openpyxl.
+- **L2**: Task 2 produces a real model only after `source_manifest` and `valuation_method_router` gates pass. DCF is conditional, not default.
 - **L1**: Skip Task 2 entirely. Task 1's research document contains all valuation inputs. Task 3 generates valuation tables directly from the research document (no Excel model needed).
 
 **If `output_type = TEAR_SHEET`**: Skip this step entirely. Tear sheets always use Level 1.
@@ -116,11 +116,15 @@ When the user wants an equity report, **ask one more question** before starting 
 | Principle | Requirement |
 |-----------|-------------|
 | **Data Authenticity** | All data must have real sources; strictly prohibit fabrication. No placeholders, no "TBD". |
-| **Data Verification** | Critical data cross-verified by 2+ independent sources |
+| **Source Manifest** | Every critical number must map to `source_id` in `references/source-manifest.md` or be explicitly marked `missing`. |
+| **Data Verification** | Critical data cross-verified by official disclosure first, then optional terminal/secondary sources. |
 | **Timeliness** | Must use latest financial reports and real-time market data |
 | **Recent News Weight** | News within past 7 days affecting marginal expectations must be included |
-| **Authoritative Source Weight** | Prioritize official sources and professional financial institutions |
+| **Authoritative Source Weight** | Prioritize official filings, exchange disclosures, company IR, SEC/CNINFO/HKEX/SSE/SZSE sources. iFind/Yahoo are optional secondary sources, not primary financial-statement authority. |
 | **Source Attribution** | All data attributed. API data labels original source |
+| **Data Gate** | Missing official source for critical financial data → produce `data_insufficient_memo`; do not output valuation conclusion, target price, or rating. |
+| **Method Routing** | Run `valuation/valuation-method-router.md` before valuation. L2 does not mean default DCF. |
+| **DCF Gate** | DCF requires `valuation/dcf-and-sensitivity.md` applicability gate. Financial firms disable ordinary FCFF/WACC DCF. Pre-revenue biopharma uses rNPV/SOTP. |
 | **Deep Analysis** | Mandatory six-dimension framework; each data point answers "so what" |
 | **Bull/Bear Balance** | Both bullish and bearish viewpoints required — no one-sided analysis |
 | **Analysis First** | Complete Phase 2-3 analysis, THEN Phase 4 begins layout — never skip ahead |
@@ -131,6 +135,41 @@ When the user wants an equity report, **ask one more question** before starting 
 ### Data Authenticity Rule
 
 > Prohibit fabricating data, eliminate scaffold/placeholders. See `references/data-sources.md` §Data Missing Handling + quality checklist A6-A8.
+
+## Financial Safety and Output Boundary
+
+This skill must stay inside an educational research boundary.
+
+- Do **not** provide personalized investment advice or tell the user to buy, sell, add, reduce, hold, or avoid a security.
+- Default output must **not** contain `BUY`, `HOLD`, `SELL`, `Buy rating`, `Sell rating`, `买入`, `卖出`, `持有`, `可以买`, `不能买`, or a house-style target price conclusion.
+- Use these default fields instead: `valuation_view`, `risk_reward_summary`, `data_quality_grade`, `key_uncertainties`, `what_would_change_the_view`.
+- A rating section is allowed only when `user_requested_rating = true` and the user explicitly asks for institution-style rating language. Even then, include a non-investment-advice boundary and explain that the rating is a research-format label, not personal advice.
+- If critical official data, source manifest coverage, or required valuation inputs are missing, produce a `data_insufficient_memo` and stop before valuation conclusion language.
+
+## Source Feasibility and Valuation Method Gate
+
+Before Task 1 data collection or any valuation work:
+
+1. Identify market, listing venue, reporting currency, trading currency, reporting period, and accounting standard.
+2. Confirm official disclosure route:
+   - A-share: CNINFO, SSE/SZSE/BSE announcements, company IR annual/interim/quarterly reports.
+   - HK: HKEXnews and company IR reports.
+   - US: SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR reports.
+3. Create or update `source_manifest` using `references/source-manifest.md`. Every critical number is either linked to a `source_id` or marked `missing`.
+4. Run `valuation_method_router` using `valuation/valuation-method-router.md` and record `selected_methods`, `caution_methods`, `disabled_methods`, and `missing_data`.
+5. Run DCF applicability gate only if DCF is selected or requested. DCF is `allowed`, `caution`, or `disabled`; it is never assumed from L2 alone.
+6. If a required tool/API is unavailable, record the unavailable tool and degrade. Do not invent data or silently switch to unsupported assumptions.
+
+### Data Insufficient Memo Trigger
+
+Produce a `data_insufficient_memo` instead of a valuation conclusion when any of the following are true:
+
+- Latest financial statements cannot be tied to official filings or company disclosures.
+- Share count, net debt, minority interest, or reporting currency/unit cannot be verified for per-share valuation.
+- Biopharma pipeline stage, rights ownership, probability basis, or cash runway is missing for rNPV.
+- Financial company classification is present but only ordinary FCFF/WACC DCF data is available.
+- Peer market data lacks timestamp, currency/unit consistency, or at least 3 usable peers.
+- Tool/API access fails and no official fallback can be documented.
 
 ---
 
@@ -146,16 +185,16 @@ When the user wants an equity report, **ask one more question** before starting 
 
 **Chinese (L2):**
 > 我将为你生成深度研报（完整版），共 3 步：
-> - **第 1 步**：深度研究分析（数据收集 + 六维分析 + 行业研究）→ 输出研究文档
-> - **第 2 步**：财务建模与估值（Excel 三表模型 + DCF 估值 + 敏感性分析）
+> - **第 1 步**：来源可行性门禁 + 深度研究分析（数据收集 + source manifest + 估值方法路由 + 六维分析 + 行业研究）→ 输出研究文档
+> - **第 2 步**：财务建模与估值（行业适配模型 + 适用估值方法 + 敏感性分析；DCF 仅在门禁通过时使用）
 > - **第 3 步**：生成最终 PDF 研报（≥25页）
 >
 > 现在开始第 1 步。
 
 **English (L2):**
 > I'll generate the full equity report in 3 steps:
-> - **Step 1**: Deep research analysis (data collection + six-dimension analysis + industry research) → Research Document
-> - **Step 2**: Financial modeling & valuation (Excel 3-statement model + DCF + sensitivity)
+> - **Step 1**: Source feasibility gate + deep research analysis (data collection + source manifest + valuation method router + six-dimension analysis + industry research) → Research Document
+> - **Step 2**: Financial modeling & valuation (industry-adapted model + applicable valuation methods + sensitivity; DCF only if the gate passes)
 > - **Step 3**: Generate final PDF report (≥25 pages)
 >
 > Starting Step 1 now.
@@ -193,7 +232,7 @@ When the user wants an equity report, **ask one more question** before starting 
 | **Layout**          | Compact dual-box side-by-side                | Full-width, flexible single/dual-column                        |
 | **Module Count**    | 11 fixed modules                             | 21 mandatory modules                                           |
 | **Content Style**   | Condensed bullets, max info density          | Fully developed paragraphs with data                           |
-| **Valuation Depth** | Level 1 (comparable + multiples + consensus) | Level 2 (L1 + DCF + historical band + sensitivity + synthesis) |
+| **Valuation Depth** | Level 1 (comparable + multiples + consensus) | Level 2 (method-routed model + applicable methods + sensitivity + synthesis; DCF only if allowed) |
 | **CSS**             | `output/tearsheet.css`                       | `output/report.css`                                            |
 | **Target Audience** | Quick reference for decision-makers          | In-depth research for institutional investors                  |
 | **Phase 4 File**    | `output/tearsheet-layout.md`                 | `output/report-layout.md`                                      |
@@ -286,7 +325,9 @@ Task 3 (SKILL-task3-report.md):  Final PDF Report (≥25 pages, L1 mode)
 | File | Level | Content |
 |------|-------|---------|
 | `valuation/comparable.md` | L1 (both) | Comparable companies + metric selection |
-| `valuation/dcf-and-sensitivity.md` | L2 only | DCF methodology + historical valuation band + sensitivity matrix (single consolidated reference) |
+| `valuation/valuation-method-router.md` | All | Selects allowed/caution/disabled valuation methods before any model work |
+| `valuation/industry-valuation-matrix.md` | All | Industry-specific valuation method matrix and minimum data gates |
+| `valuation/dcf-and-sensitivity.md` | Conditional L2 | DCF applicability gate + DCF methodology + historical valuation band + sensitivity matrix |
 
 ### Report Module Specs
 | File | Content |
@@ -302,6 +343,7 @@ Task 3 (SKILL-task3-report.md):  Final PDF Report (≥25 pages, L1 mode)
 | File | Content |
 |------|---------|
 | `references/data-sources.md` | Data source priority + API overview |
+| `references/source-manifest.md` | Source manifest schema and critical-number coverage gate |
 | `references/data-sources-detail.md` | API detailed parameters |
 | `references/output-schema.md` | Output interface contract |
 | `references/analysis-brief-template.md` | Analysis brief template (tear sheet handoff to Phase 4) |
