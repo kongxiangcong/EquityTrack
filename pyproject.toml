@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-equity-research"
+version = "0.2.0"
+description = "Deterministic, capability-gated personal equity research core"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+equity-research = "equity_research.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

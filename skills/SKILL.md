@@ -9,6 +9,20 @@ This skill supports institutional-style equity research in two modes: **Tear She
 
 **Your first job: figure out what the user wants and whether the data/method gates allow the requested output.** Then carry the Core Principles and Financial Safety Boundary into the next file.
 
+## Default v2 Workflow
+
+For every new equity-research run, read **`SKILL-v2.md` now** and use its deterministic `ResearchRequest -> ResearchRun` workflow. Stop sequential reading in this file after loading v2.
+
+The Task 1/2/3 files below are retained as legacy migration references only. Use them only when the user explicitly asks to reproduce or continue an existing legacy Task run. Do not use the legacy `source_manifest_status` boolean as a global stop for a new run.
+
+In v2:
+
+- the Skill collects or explains evidence and writes structured context;
+- Python owns manifest integrity, capability readiness, method routing, DCF invariants, permissions, diagnostics, and HTML rendering;
+- missing data disables only the capabilities that depend on it;
+- `completed_with_limits` is a successful research outcome, not a failed Task 1;
+- HTML and JSON always come from the same immutable `ResearchRun` snapshot.
+
 ---
 
 ## Phase 0.0: Router — Intent Clarification + Output Type Detection

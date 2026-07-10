@@ -1,0 +1,121 @@
+{
+  "company_type": "cyclical_manufacturing",
+  "peer_count": 0,
+  "executive_summary": "核心研究矛盾不是是否能拼出一个估值点，而是连接器业务恢复能否抵消光伏支架低毛利体量、海外经营和资产负债压力。现有官方资料足以形成基础研究与验证计划，但不足以支持 DCF 或同业估值结论。",
+  "theses": [
+    {
+      "title": "连接器业务提供盈利弹性",
+      "detail": "通讯连接器和消费电子连接器的收入质量、客户验证与毛利率是后续盈利改善的主要观察变量。",
+      "evidence_fields": ["revenue", "net_income"]
+    },
+    {
+      "title": "光伏支架体量与利润率形成结构拉扯",
+      "detail": "规模贡献并不自动转化为利润贡献，需要在半年报中复核分部收入、毛利率和现金回收。",
+      "evidence_fields": ["revenue", "cfo", "working_capital"]
+    },
+    {
+      "title": "单季现金流较强，但不可直接外推",
+      "detail": "2026Q1 经营现金流明显高于归母净利润，说明单季回款较强；营运资本季节性使其不适合直接年化。",
+      "evidence_fields": ["cfo", "net_income", "working_capital"]
+    }
+  ],
+  "risks": [
+    {
+      "title": "海外需求、贸易与汇率波动",
+      "likelihood": 3,
+      "impact": 4,
+      "monitor": "海外收入、应收账款周转、汇兑损益和贸易政策变化",
+      "evidence_fields": ["revenue", "working_capital", "fx_rate"]
+    },
+    {
+      "title": "低毛利业务占比上升",
+      "likelihood": 3,
+      "impact": 4,
+      "monitor": "分部毛利率、产品结构和费用率",
+      "evidence_fields": ["revenue", "ebit", "net_income"]
+    },
+    {
+      "title": "债务与租赁口径不完整",
+      "likelihood": 4,
+      "impact": 3,
+      "monitor": "有息负债、租赁附注、利息支出和现金余额",
+      "evidence_fields": ["cash", "debt", "lease_debt"]
+    },
+    {
+      "title": "估值方法输入不足",
+      "likelihood": 5,
+      "impact": 3,
+      "monitor": "同源 peer 数据、WACC 证据链和季度 D&A",
+      "evidence_fields": ["d_and_a", "current_price", "diluted_shares"]
+    }
+  ],
+  "catalysts": [
+    {
+      "window": "2026H1 披露窗口",
+      "event": "半年报补齐 D&A、租赁负债和分部盈利数据",
+      "why_it_matters": "决定现金流桥、企业价值桥和盈利结构能否升级为更高置信度。"
+    },
+    {
+      "window": "后续订单验证",
+      "event": "连接器业务客户与订单进展",
+      "why_it_matters": "验证连接器收入恢复是否带来高于整体业务的利润弹性。"
+    },
+    {
+      "window": "季度经营更新",
+      "event": "海外回款、库存和毛利率变化",
+      "why_it_matters": "验证强单季现金流是否可持续，并观察低毛利业务的资金占用。"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "验证改善",
+      "tone": "positive",
+      "conditions": [
+        "连接器收入和毛利率改善",
+        "经营现金流保持与利润匹配",
+        "半年报补齐关键估值输入"
+      ],
+      "view_change": "提高盈利质量与估值方法可用性，但仍需同业数据交叉验证。"
+    },
+    {
+      "name": "等待确认",
+      "tone": "neutral",
+      "conditions": [
+        "收入结构变化有限",
+        "现金流正常化",
+        "关键字段仅部分补齐"
+      ],
+      "view_change": "维持研究跟踪，以业务结构和数据补全为主要复核线索。"
+    },
+    {
+      "name": "压力显现",
+      "tone": "negative",
+      "conditions": [
+        "低毛利业务占比继续上升",
+        "应收或库存占用扩大",
+        "债务与海外风险上升"
+      ],
+      "view_change": "下调盈利质量判断，并缩小可使用的估值方法范围。"
+    }
+  ],
+  "conditional_plan": [
+    {
+      "watch": "2026H1 分部收入、毛利率与 D&A",
+      "validation_trigger": "连接器利润贡献改善且缺失字段被官方披露覆盖",
+      "invalidation": "收入增长主要来自低毛利业务，或利润与现金流同步恶化",
+      "review_window": "2026H1 报告披露后"
+    },
+    {
+      "watch": "现金、债务、租赁负债与营运资本",
+      "validation_trigger": "现金转化维持、净债务压力可解释且租赁桥可审计",
+      "invalidation": "营运资本占用扩大或融资压力显著上升",
+      "review_window": "每次定期报告后"
+    },
+    {
+      "watch": "同源 peer 倍数与生命周期差异",
+      "validation_trigger": "至少三家同口径可比公司通过质量检查",
+      "invalidation": "样本不可比、分母口径冲突或异常值主导结论",
+      "review_window": "同业数据包完成后"
+    }
+  ]
+}

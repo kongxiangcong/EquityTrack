@@ -1,0 +1,36 @@
+{
+  "company": "意华股份",
+  "ticker": "002897.SZ",
+  "as_of_date": "2026-07-07",
+  "policy": "Estimates support exploratory scenarios only and never become source-covered facts.",
+  "estimates": [
+    {
+      "field_name": "d_and_a",
+      "period": "2026Q1",
+      "estimate_value": {
+        "total_depreciation_and_amortization": 63391629.16
+      },
+      "unit": "CNY",
+      "currency": "CNY",
+      "estimate_method": "FY2025 official D&A components divided by four, without seasonal adjustment.",
+      "basis_sources": ["SRC_CNINFO_2025AR"],
+      "confidence": "low",
+      "formal_gate_coverage": false
+    },
+    {
+      "field_name": "lease_debt",
+      "period": "2026Q1",
+      "estimate_value": {
+        "current_lease_liability": 64374850.51,
+        "non_current_lease_liability": 45377378.34,
+        "total_lease_liability": 109752228.85
+      },
+      "unit": "CNY",
+      "currency": "CNY",
+      "estimate_method": "Apply the FY2025 current-to-non-current lease ratio to the official 2026Q1 non-current balance.",
+      "basis_sources": ["SRC_CNINFO_2026Q1", "SRC_CNINFO_2025AR"],
+      "confidence": "low",
+      "formal_gate_coverage": false
+    }
+  ]
+}
