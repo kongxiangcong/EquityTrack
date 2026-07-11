@@ -6,13 +6,14 @@ from dataclasses import replace
 from typing import Any, Mapping
 
 from .evidence import EvidenceBook, build_evidence
-from .models import IntegrityIssue, MethodResult, ResearchRequest, ResearchRun
+from .models import AnalysisBundle, IntegrityIssue, MethodResult, ResearchRequest, ResearchRun
+from .narrative import build_professional_narrative
 from .output_policy import normalize_action_language
 from .policies import evaluate_capabilities
 from .valuation import route_methods
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 NARRATIVE_KEYS = {
     "executive_summary",
@@ -30,6 +31,29 @@ NARRATIVE_KEYS = {
     "monitor",
     "monitor_variable",
     "window",
+    "conclusion",
+    "key_findings",
+    "counterpoints",
+    "uncertainties",
+    "claim",
+    "thesis",
+    "manager_summary",
+    "key_disagreements",
+    "unresolved_questions",
+    "core_thesis",
+    "variant_view",
+    "business_quality",
+    "earnings_outlook",
+    "market_view",
+    "valuation_view",
+    "risk_reward_summary",
+    "key_uncertainties",
+    "what_would_change_the_view",
+    "value",
+    "label",
+    "note",
+    "response_to",
+    "text",
 }
 
 def _normalize_context_language(
@@ -129,6 +153,47 @@ class ResearchEngine:
                 as_of_date=request.as_of_date,
             )
 
+        analysis, debate, synthesis, report_mode = build_professional_narrative(
+            book,
+            context,
+        )
+        if integrity_errors:
+            analysis = AnalysisBundle(
+                dimensions={},
+                completeness="blocked",
+                missing_dimensions=tuple(analysis.dimensions),
+            )
+            debate = None
+            synthesis = None
+            report_mode = "audit_memo"
+        elif int(context.get("report_version", 0) or 0) >= 3:
+            report_capability = capabilities["research_report"]
+            dimension_statuses = [
+                item.status for item in analysis.dimensions.values()
+            ]
+            if synthesis is None or debate is None or not dimension_statuses or all(
+                status == "blocked" for status in dimension_statuses
+            ):
+                capabilities = {
+                    **capabilities,
+                    "research_report": replace(
+                        report_capability,
+                        status="blocked",
+                        context_gaps=("professional_analysis_and_synthesis",),
+                        explanation="V3 专业报告必须具备多维公司分析、证据约束质询和综合观点。",
+                    ),
+                }
+            elif any(status != "ready" for status in dimension_statuses):
+                capabilities = {
+                    **capabilities,
+                    "research_report": replace(
+                        report_capability,
+                        status="limited",
+                        context_gaps=analysis.missing_dimensions,
+                        explanation="V3 专业报告可生成，但部分分析维度只能形成有限判断。",
+                    ),
+                }
+
         permissions = self._permissions(
             integrity_errors=bool(integrity_errors),
             capabilities=capabilities,
@@ -165,6 +230,10 @@ class ResearchEngine:
             methods=methods,
             permissions=permissions,
             summary=summary,
+            analysis=analysis,
+            debate=debate,
+            synthesis=synthesis,
+            report_mode=report_mode,
             conditional_plan=plan,
             diagnostics=diagnostics,
         )

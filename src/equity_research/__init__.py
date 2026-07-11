@@ -6,6 +6,25 @@ adapt their inputs to this contract instead of reimplementing workflow state.
 """
 
 from .engine import ResearchEngine
-from .models import ResearchRequest, ResearchRun, SourceRecord
+from .models import (
+    AnalysisBundle,
+    AnalysisResult,
+    DebateResult,
+    EvidenceClaim,
+    ResearchRequest,
+    ResearchRun,
+    ResearchSynthesis,
+    SourceRecord,
+)
 
-__all__ = ["ResearchEngine", "ResearchRequest", "ResearchRun", "SourceRecord"]
+__all__ = [
+    "AnalysisBundle",
+    "AnalysisResult",
+    "DebateResult",
+    "EvidenceClaim",
+    "ResearchEngine",
+    "ResearchRequest",
+    "ResearchRun",
+    "ResearchSynthesis",
+    "SourceRecord",
+]

@@ -15,6 +15,7 @@ from equity_research import ResearchEngine, ResearchRequest  # noqa: E402
 
 
 EXAMPLE = ROOT / "examples" / "yihua-002897"
+DFD_EXAMPLE = ROOT / "examples" / "duofuduo-002407"
 
 
 def read_json(path: Path) -> dict:
@@ -65,6 +66,206 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertTrue(run.permissions["research_report"])
         self.assertTrue(run.permissions["conditional_research_plan"])
         self.assertFalse(run.permissions["formal_per_share_valuation"])
+
+    def test_v3_yihua_report_is_company_research_not_an_audit_dashboard(self) -> None:
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=self.context,
+                as_of_date="2026-07-07",
+                render_html=True,
+            )
+        )
+
+        self.assertEqual(3, run.schema_version)
+        self.assertEqual("professional", run.report_mode)
+        self.assertEqual(
+            {
+                "business",
+                "industry",
+                "fundamentals",
+                "technical",
+                "sentiment_events",
+                "valuation",
+                "governance_risk",
+            },
+            set(run.analysis.dimensions),
+        )
+        self.assertIsNotNone(run.debate)
+        self.assertIsNotNone(run.synthesis)
+        self.assertTrue(run.debate.bull.evidence_ids)
+        self.assertTrue(run.debate.bear.evidence_ids)
+        self.assertTrue(run.debate.resolved_disagreements)
+        self.assertTrue(any(item["response_to"] for item in run.debate.bull.arguments))
+        self.assertTrue(any(item["response_to"] for item in run.debate.bear.arguments))
+        for dimension in run.analysis.dimensions.values():
+            if dimension.status != "blocked":
+                self.assertTrue(dimension.key_findings, dimension.dimension_id)
+                self.assertTrue(dimension.counterpoints, dimension.dimension_id)
+                self.assertTrue(dimension.uncertainties, dimension.dimension_id)
+
+        for section_id in (
+            "company",
+            "industry",
+            "fundamentals",
+            "technical",
+            "sentiment-events",
+            "valuation",
+            "debate",
+            "synthesis",
+            "monitoring",
+            "audit-appendix",
+        ):
+            self.assertIn(f'id="{section_id}"', run.html)
+        self.assertNotIn("<h2>能力级门禁</h2>", run.html)
+        self.assertNotIn("<h2>证据台账</h2>", run.html)
+        self.assertNotIn("<h2>运行诊断</h2>", run.html)
+        self.assertIn("论点—证据映射", run.html)
+
+    def test_v3_downgrades_partial_or_estimate_only_narrative_support(self) -> None:
+        partial_context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        partial_context["analyses"]["business"]["evidence_fields"].append(
+            "unknown_professional_field"
+        )
+        partial_context["analyses"]["business"]["key_metrics"].append(
+            {"label": "无证据指标", "value": "99", "note": "不得进入报告"}
+        )
+        partial_run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=partial_context,
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertEqual("limited", partial_run.analysis.dimensions["business"].status)
+        self.assertNotIn(
+            "无证据指标",
+            {item["label"] for item in partial_run.analysis.dimensions["business"].key_metrics},
+        )
+
+        estimate_context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        estimate_context["analyses"]["business"]["evidence_fields"] = ["d_and_a"]
+        estimate_run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=estimate_context,
+                as_of_date="2026-07-07",
+            )
+        )
+        self.assertEqual("limited", estimate_run.analysis.dimensions["business"].status)
+
+    def test_v3_metrics_are_computed_and_free_form_numeric_claims_are_rejected(self) -> None:
+        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context["analyses"]["business"]["key_metrics"][0]["value"] = "9999 亿元"
+        context["analyses"]["business"]["key_findings"].append("收入 8888 亿元")
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=context,
+                as_of_date="2026-07-07",
+                render_html=True,
+            )
+        )
+
+        metrics = run.analysis.dimensions["business"].key_metrics
+        self.assertEqual("64.01 亿元", metrics[0]["value"])
+        self.assertNotIn("9999", run.html)
+        self.assertNotIn("8888", run.html)
+        self.assertTrue(all(claim.evidence_ids for claim in run.analysis.dimensions["business"].key_findings))
+
+    def test_v3_rejects_dangling_debate_responses(self) -> None:
+        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context["debate"]["bull"]["arguments"][2]["response_to"] = "BOGUS"
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=context,
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertIsNone(run.debate)
+        self.assertEqual("professional_limited", run.report_mode)
+
+    def test_v3_rejects_unbound_numbers_across_all_narrative_paths(self) -> None:
+        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context["analyses"]["business"]["conclusion"] = "收入 9999 亿元"
+        context["debate"]["bull"]["arguments"][0]["claim"] = "收入 8888 亿元"
+        context["synthesis"]["core_thesis"] = "利润 7777 亿元"
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=context,
+                as_of_date="2026-07-07",
+                render_html=True,
+            )
+        )
+
+        self.assertEqual("blocked", run.analysis.dimensions["business"].status)
+        self.assertIsNone(run.debate)
+        self.assertIsNone(run.synthesis)
+        for value in ("9999", "8888", "7777"):
+            self.assertNotIn(value, run.html)
+
+    def test_v3_metric_refs_require_exact_sources_and_compatible_units(self) -> None:
+        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        invalid_source_metric = context["analyses"]["business"]["key_metrics"][0]
+        invalid_source_metric["evidence_refs"][0]["source_id"] = "SRC_CNINFO_2026Q1"
+        incompatible_metric = context["analyses"]["business"]["key_metrics"][1]
+        incompatible_metric["display"] = "cny_per_share"
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=context,
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertEqual((), run.analysis.dimensions["business"].key_metrics)
+
+    def test_v3_does_not_call_two_financial_fields_a_complete_report(self) -> None:
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context={"report_version": 3, "company_type": "cyclical_manufacturing"},
+                as_of_date="2026-07-07",
+                render_html=True,
+            )
+        )
+
+        self.assertEqual("blocked", run.capabilities["research_report"].status)
+        self.assertFalse(run.permissions["research_report"])
+        self.assertEqual("professional_limited", run.report_mode)
+        self.assertIn("数据不足备忘录", run.html)
+
+    def test_v3_duofuduo_runs_end_to_end_with_a_professional_narrative(self) -> None:
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=read_json(DFD_EXAMPLE / "source_manifest.json"),
+                context=read_json(DFD_EXAMPLE / "research_context.json"),
+                as_of_date="2026-07-03",
+                render_html=True,
+            )
+        )
+
+        self.assertEqual("002407.SZ", run.company["ticker"])
+        self.assertEqual("professional", run.report_mode)
+        self.assertNotEqual("blocked", run.capabilities["research_core"].status)
+        self.assertTrue(run.permissions["research_report"])
+        self.assertIn("氟基新材料", run.analysis.dimensions["business"].conclusion)
+        self.assertIn("经营现金流", run.analysis.dimensions["fundamentals"].conclusion)
+        self.assertIn("id=\"debate\"", run.html)
+        self.assertIn("id=\"audit-appendix\"", run.html)
+        self.assertNotIn("<h2>能力级门禁</h2>", run.html)
 
     def test_estimates_never_become_official_facts(self) -> None:
         run = ResearchEngine().run(
@@ -399,9 +600,10 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         html = run.html
         self.assertIn("<!doctype html>", html.lower())
         self.assertIn('id="research-run-data"', html)
-        self.assertIn('id="capabilities"', html)
-        self.assertIn('id="methodology"', html)
-        self.assertIn('id="evidence-ledger"', html)
+        self.assertIn('id="company"', html)
+        self.assertIn('id="fundamentals"', html)
+        self.assertIn('id="debate"', html)
+        self.assertIn('id="audit-appendix"', html)
         self.assertGreaterEqual(html.count("<svg"), 2)
         for prohibited in ("BUY", "HOLD", "SELL", "买入", "卖出", "持有", "目标价"):
             self.assertNotIn(prohibited, html)
@@ -648,11 +850,15 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual("blocked", run.status)
         self.assertTrue(all(method.status == "blocked" for method in run.methods.values()))
         self.assertTrue(all(not method.metrics for method in run.methods.values()))
+        self.assertEqual("audit_memo", run.report_mode)
+        self.assertEqual({}, run.analysis.dimensions)
+        self.assertIsNone(run.debate)
+        self.assertIsNone(run.synthesis)
         self.assertNotIn("DCF 敏感性", run.html)
         self.assertNotIn("中位每股映射", run.html)
 
     def test_default_output_normalizes_prohibited_action_language(self) -> None:
-        context = dict(self.context)
+        context = json.loads(json.dumps(self.context, ensure_ascii=False))
         context["executive_summary"] = "ADD评级，建议增仓；BUY评级 / 买入 / 目标价 100"
         context["theses"] = [
             {
@@ -663,6 +869,13 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
                 "evidence_fields": [],
             }
         ]
+        context["analyses"]["business"]["conclusion"] = "BUY / 买入 / 目标价 100"
+        context["analyses"]["business"]["key_findings"][0]["text"] = "BUY评级"
+        context["analyses"]["technical"]["key_metrics"][0]["value"] = "SELL / 卖出"
+        context["analyses"]["technical"]["key_metrics"][0]["note"] = "HOLD / 持有"
+        context["analyses"]["technical"]["key_metrics"][0]["label"] = "BUY评级"
+        context["debate"]["bull"]["arguments"][0]["claim"] = "建议增仓并买入"
+        context["synthesis"]["core_thesis"] = "OUTPERFORM / BUY / 目标价 100"
         self.manifest["missing_critical_data"][0]["missing_reason"] = "建议买入并加仓"
         run = ResearchEngine().run(
             ResearchRequest(

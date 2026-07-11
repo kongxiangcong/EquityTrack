@@ -9,18 +9,21 @@ This skill supports institutional-style equity research in two modes: **Tear She
 
 **Your first job: figure out what the user wants and whether the data/method gates allow the requested output.** Then carry the Core Principles and Financial Safety Boundary into the next file.
 
-## Default v2 Workflow
+## Default V3 Workflow
 
-For every new equity-research run, read **`SKILL-v2.md` now** and use its deterministic `ResearchRequest -> ResearchRun` workflow. Stop sequential reading in this file after loading v2.
+For every new equity-research run, read **`SKILL-v3.md` now** and use its `Evidence Ledger -> AnalysisBundle -> DebateResult -> ResearchSynthesis -> ResearchRun` workflow. Stop sequential reading in this file after loading V3.
 
-The Task 1/2/3 files below are retained as legacy migration references only. Use them only when the user explicitly asks to reproduce or continue an existing legacy Task run. Do not use the legacy `source_manifest_status` boolean as a global stop for a new run.
+`SKILL-v2.md` and the Task 1/2/3 files below are retained as legacy migration references only. Use them only when the user explicitly asks to reproduce or continue an existing legacy run. Do not use the legacy `source_manifest_status` boolean as a global stop for a new run.
 
-In v2:
+In V3:
 
 - the Skill collects or explains evidence and writes structured context;
-- Python owns manifest integrity, capability readiness, method routing, DCF invariants, permissions, diagnostics, and HTML rendering;
+- structured company, industry, fundamental, technical, sentiment/event, valuation, and governance analyses are first-class outputs;
+- positive and negative cases must bind canonical evidence before Research Synthesis;
+- Python owns manifest integrity, capability readiness, method routing, DCF invariants, narrative contracts, permissions, diagnostics, and HTML rendering;
 - missing data disables only the capabilities that depend on it;
 - `completed_with_limits` is a successful research outcome, not a failed Task 1;
+- the public HTML leads with company research, while capability/source/runtime details live in a collapsed audit appendix;
 - HTML and JSON always come from the same immutable `ResearchRun` snapshot.
 
 ---

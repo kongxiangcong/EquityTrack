@@ -107,7 +107,7 @@ flowchart LR
 4. capability gap 只影响依赖它的能力。
 5. method router 先于任何数值计算。
 6. DCF 不使用默认 WACC、默认增长、默认 FCF conversion 或固定净债务比例。
-7. LLM 只能解释 frozen facts/calculations，不能修改它们。
+7. LLM 只能解释 frozen facts/calculations，不能修改它们；报告指标必须通过 exact evidence refs 直接格式化或确定性计算。
 8. HTML、JSON 和未来 PDF/XLSX 必须来自同一 ResearchRun。
 9. 默认不生成个性化投资指令。
 10. as-of 之后才公开可得的来源和 overlay 不得进入 run；`retrieved_at` 只用于采集审计。
@@ -122,17 +122,21 @@ flowchart LR
 - `EvidenceCollectionSkill`：发现来源并写 manifest 候选；
 - `RuleModule`：凡是影响数据门、估值、权限和数字的规则，必须落为 typed Python implementation。
 
-`skills/SKILL-v2.md` 是 agent 的操作规约，不再承载状态机。
+`skills/SKILL-v3.md` 是 agent 的多维分析与专业叙事规约，不再承载状态机。
 
 ## 当前完成与下一层
 
 ### 已完成
 
 - `ResearchRequest -> ResearchRun` 深 Module；
-- portable 意华股份 fixture；
+- portable 意华股份与多氟多 fixtures；
 - manifest integrity 与 estimate separation；
 - capability matrix；
 - observed multiples、peer comps、historical band、explicit-case DCF；
+- `AnalysisBundle -> DebateResult -> ResearchSynthesis` 内容链；
+- 逐条 `EvidenceClaim`、确定性 metric 计算和跨边质询关系校验；
+- 公司、行业、基本面、技术、情绪事件、估值和治理风险分析；
+- 专业研究正文与折叠审计附录分离；
 - conditional research plan；
 - JSON/HTML 单一事实源；
 - CLI 与行为测试。
@@ -141,7 +145,7 @@ flowchart LR
 
 1. `ResearchSystem.analyze/resume` facade、SQLite run journal 和 artifact hashes；
 2. CNINFO/SSE/SZSE/HKEX/SEC disclosure adapters 与 `available_at`；
-3. 行情 adapter、K 线/成交量和事件时间轴；
+3. 自动行情 adapter、K 线/成交量、新闻情绪采样和事件时间轴；
 4. linked statement builder、reverse DCF、mid-cycle、residual income、rNPV 和 NAV；
 5. PDF/XLSX renderer 与浏览器视觉回归；
 6. 独立的 portfolio/backtest Module。它不应塞进 equity research 根 Module。

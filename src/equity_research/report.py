@@ -404,6 +404,10 @@ footer {{ padding:20px 42px; color:var(--muted); }} @media(max-width:600px) {{ h
 def render_html_report(run: ResearchRun) -> str:
     if not run.permissions.get("research_report", False):
         return _render_data_insufficient_memo(run)
+    if run.report_mode in {"professional", "professional_limited"}:
+        from .professional_report import render_professional_report
+
+        return render_professional_report(run)
     company_name = run.company.get("name", "未确认公司")
     ticker = run.company.get("ticker", "—")
     grade = run.summary.get("data_quality_grade", "—")

@@ -1,9 +1,10 @@
 # Personal Equity Research System
 
-这是一个面向个人研究流程的、可审计的股票投研内核。它把原先完全由长篇 Skills 驱动的 Task 1/2/3，重构为确定性的：
+这是一个面向个人研究流程的、可审计的股票投研内核。V3 将公司研究设为主产品，把来源、门禁和诊断保留在后台审计附录：
 
 ```text
-ResearchRequest -> ResearchRun -> JSON + HTML
+Evidence Ledger -> AnalysisBundle -> DebateResult -> ResearchSynthesis
+                -> ResearchRun -> JSON + Professional HTML
 ```
 
 Skills 仍可用于寻找资料和撰写受证据约束的研究叙事；来源完整性、能力门禁、估值方法、DCF invariant、权限、诊断和报告渲染由 Python 实现。
@@ -16,10 +17,15 @@ Skills 仍可用于寻找资料和撰写受证据约束的研究叙事；来源�
 - as-of 日期按公开可得时间执行；overlay 标的身份和所有结构化 evidence refs 都会确定性校验；
 - DCF 只接受显式 FCFF、WACC、终值和股权桥，不使用无来源默认值；
 - 完整性错误 fail-closed 为数据不足备忘录，不执行或展示数值估值；
+- 公司、行业、基本面、技术、情绪事件、估值、治理风险成为一等分析维度；
+- 正反质询必须绑定 evidence IDs，Research Manager 记录分歧与未解决问题；
+- HTML 正文以公司研究为主，能力、方法、来源和诊断收进折叠审计附录；
 - HTML 和 JSON 从同一个 `ResearchRun` 生成；
 - 默认输出条件研究计划，不生成个性化投资指令。
 
-## 一条命令运行意华股份样例
+## 运行双股票 V3 样例
+
+意华股份：
 
 ```powershell
 python scripts\research.py run `
@@ -27,13 +33,23 @@ python scripts\research.py run `
   --estimates examples\yihua-002897\estimate_overlay.json `
   --context examples\yihua-002897\research_context.json `
   --as-of-date 2026-07-07 `
-  --output-dir outputs\yihua-v2
+  --output-dir outputs\yihua_002897_20260707\v3
+```
+
+多氟多：
+
+```powershell
+python scripts\research.py run `
+  --manifest examples\duofuduo-002407\source_manifest.json `
+  --context examples\duofuduo-002407\research_context.json `
+  --as-of-date 2026-07-03 `
+  --output-dir outputs\dfd_002407_20260703\v3
 ```
 
 产物：
 
-- `research_run.json`：canonical evidence、capability matrix、method registry、permissions、plans 和 diagnostics；
-- `research_report.html`：自包含、响应式、可打印的研究报告。
+- `research_run.json`：canonical evidence、`AnalysisBundle`、多空质询、综合观点、能力与方法状态；
+- `research_report.html`：自包含、响应式、可打印的专业公司研究报告；审计信息默认折叠。
 
 样例预期结果：
 
@@ -44,7 +60,7 @@ python scripts\research.py run `
 | 财务模型与情景 | `ready_with_estimates` |
 | DCF | `blocked`，只限制该方法 |
 | 可比公司法 | `blocked`，缺合格 peer set |
-| 研究报告 | `ready` |
+| 专业研究报告 | `ready` 或 `limited`，取决于多维分析完整度 |
 | 总运行 | `completed_with_limits` |
 
 ## 代码结构
@@ -55,18 +71,24 @@ src/equity_research/
   evidence.py     # manifest integrity、字段规范化、事实与估算分层
   policies.py     # capability matrix
   valuation.py    # method registry、DCF、comps、历史带
+  narrative.py    # AnalysisBundle、证据约束质询与 ResearchSynthesis
   output_policy.py # 默认金融语言边界
   engine.py       # 唯一确定性执行入口
-  report.py       # canonical ResearchRun -> self-contained HTML
+  report.py       # 报告模式路由与审计备忘录
+  professional_report.py # 公司研究正文 + 折叠审计附录
   cli.py          # 文件系统 adapter
 
 skills/
-  SKILL-v2.md     # agent/skill 的 v2 操作规约
+  SKILL-v3.md     # agent/skill 的 V3 多维分析与叙事规约
   references/capability-matrix.md
 
 examples/yihua-002897/
   source_manifest.json
   estimate_overlay.json
+  research_context.json
+
+examples/duofuduo-002407/
+  source_manifest.json
   research_context.json
 
 tests/
@@ -122,7 +144,7 @@ python -m unittest discover -s tests -v
 - [当前系统审计](docs/architecture/current-system-audit.md)
 - [目标架构](docs/architecture/target-architecture.md)
 - [估值与分析方法论复核](docs/research/methodology-assessment.md)
-- [v2 Skill 工作流](skills/SKILL-v2.md)
+- [V3 Skill 工作流](skills/SKILL-v3.md)
 
 ## 研究边界
 

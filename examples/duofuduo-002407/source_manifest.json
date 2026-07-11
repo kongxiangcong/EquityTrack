@@ -1,0 +1,550 @@
+{
+  "source_manifest_version": 1,
+  "company": {
+    "name": "多氟多新材料股份有限公司",
+    "ticker": "002407.SZ",
+    "market": "a-share",
+    "reporting_currency": "CNY",
+    "trading_currency": "CNY",
+    "accounting_standard": "China Accounting Standards for Business Enterprises",
+    "latest_financial_period": "2026Q1"
+  },
+  "as_of_date": "2026-07-03",
+  "workflow": {
+    "output_type": "EQUITY_REPORT",
+    "valuation_depth": "L2",
+    "task": "Task 1 research document and source gate only",
+    "financial_output_boundary": "No personalized advice, no investment-action conclusion, no price conclusion."
+  },
+  "sources": [
+    {
+      "source_id": "SRC_CNINFO_2026Q1",
+      "tier": "official",
+      "market": "a-share",
+      "publisher": "CNINFO / SZSE disclosure platform",
+      "title": "多氟多新材料股份有限公司2026年第一季度报告",
+      "official_or_secondary": "official",
+      "url_or_api": "https://static.cninfo.com.cn/finalpage/2026-04-24/1225159579.PDF",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "ticker": "002407",
+        "report_date": "2026-04-24"
+      },
+      "filing_period": "2026Q1",
+      "report_date": "2026-04-24",
+      "currency": "CNY",
+      "unit": "yuan",
+      "raw_file_path": "raw/q1_2026.pdf",
+      "raw_file_sha256": "B5DD81CBC42FDD9529D61AC22B07CCB40B3D57E6A5E9AD78823F1A5BB1B35179",
+      "page_or_table": "主要会计数据和财务指标、合并资产负债表、合并利润表、合并现金流量表",
+      "extracted_fields": [
+        {
+          "field_name": "revenue",
+          "period": "2026Q1",
+          "value": 3215501075.67,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "营业收入，2026年第一季度报告主要会计数据。"
+        },
+        {
+          "field_name": "ebit",
+          "period": "2026Q1",
+          "value": 556614513.99,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from profit before tax plus interest expense in official Q1 income statement",
+          "confidence": "medium",
+          "note": "497,220,036.79 + 59,394,477.20; used as EBIT proxy because EBIT is not directly reported."
+        },
+        {
+          "field_name": "net_income",
+          "period": "2026Q1",
+          "value": 375528935.28,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "归属于上市公司股东的净利润。"
+        },
+        {
+          "field_name": "eps",
+          "period": "2026Q1",
+          "value": 0.32,
+          "unit": "CNY/share",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "稀释每股收益。"
+        },
+        {
+          "field_name": "tax",
+          "period": "2026Q1",
+          "value": 65589820.97,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "所得税费用。"
+        },
+        {
+          "field_name": "capex",
+          "period": "2026Q1",
+          "value": 123650898.51,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "购建固定资产、无形资产和其他长期资产支付的现金。"
+        },
+        {
+          "field_name": "cfo",
+          "period": "2026Q1",
+          "value": -687984411.21,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "经营活动产生的现金流量净额。"
+        },
+        {
+          "field_name": "fcf",
+          "period": "2026Q1",
+          "value": -811635309.72,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated as CFO minus capex from official Q1 cash flow statement",
+          "confidence": "medium",
+          "note": "-687,984,411.21 - 123,650,898.51."
+        },
+        {
+          "field_name": "working_capital",
+          "period": "2026Q1",
+          "value": 5530275758.83,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated as current assets minus current liabilities from official Q1 balance sheet",
+          "confidence": "medium",
+          "note": "13,911,696,903.09 - 8,381,421,144.26."
+        },
+        {
+          "field_name": "cash",
+          "period": "2026Q1",
+          "value": 6812057270.78,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "货币资金。"
+        },
+        {
+          "field_name": "debt",
+          "period": "2026Q1",
+          "value": 9414229946.23,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official Q1 balance-sheet debt lines",
+          "confidence": "medium",
+          "note": "短期借款 + 一年内到期的非流动负债 + 长期借款; Q1 text does not split current lease portion inside one-year due non-current liabilities."
+        },
+        {
+          "field_name": "preferred_stock",
+          "period": "2026Q1",
+          "value": 0,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "Q1 balance sheet shows no amount under preferred shares. Treated as zero for manifest coverage."
+        },
+        {
+          "field_name": "minority_interest",
+          "period": "2026Q1",
+          "value": 2693875118.85,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "少数股东权益。"
+        },
+        {
+          "field_name": "associates_jv_value",
+          "period": "2026Q1",
+          "value": 351062764.7,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "长期股权投资。"
+        },
+        {
+          "field_name": "pension_deficit",
+          "period": "2026Q1",
+          "value": 0,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "manual reconciliation from official Q1 balance sheet and 2025 annual employee-benefit notes",
+          "confidence": "medium",
+          "note": "Q1 balance sheet places 3,207,900.00 under long-term payables, while long-term employee benefits payable is blank. 2025 annual employee-benefit notes disclose defined-contribution plan balances only and no defined-benefit obligation or pension deficit."
+        },
+        {
+          "field_name": "non_operating_assets",
+          "period": "2026Q1",
+          "value": 328877223.13,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "model classification from official Q1 balance sheet line items",
+          "confidence": "medium",
+          "note": "Selected sum = trading financial assets 137,875,117.37 + other equity instrument investments 129,885,470.21 + other non-current financial assets 60,000,000.00 + investment property 1,116,635.55. Excludes cash and long-term equity investments; long-term equity investments remain separately captured as associates_jv_value to avoid double counting."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_CNINFO_2025AR",
+      "tier": "official",
+      "market": "a-share",
+      "publisher": "CNINFO / SZSE disclosure platform",
+      "title": "多氟多新材料股份有限公司2025年年度报告全文",
+      "official_or_secondary": "official",
+      "url_or_api": "https://static.cninfo.com.cn/finalpage/2026-04-16/1225107815.pdf",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "ticker": "002407",
+        "report_date": "2026-04-16"
+      },
+      "filing_period": "2025FY",
+      "report_date": "2026-04-16",
+      "currency": "CNY",
+      "unit": "yuan",
+      "raw_file_path": "raw/annual2025.pdf",
+      "raw_file_sha256": "C5FDE446155139DA966A5F78092C710585D8DB4325900DB8E226083A846E92FC",
+      "page_or_table": "主要会计数据、合并资产负债表、合并现金流量表补充资料、分部信息",
+      "extracted_fields": [
+        {
+          "field_name": "revenue",
+          "period": "2025FY",
+          "value": 9434247610.47,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "年度报告主要会计数据。"
+        },
+        {
+          "field_name": "net_income",
+          "period": "2025FY",
+          "value": 212784849.4,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "归属于上市公司股东的净利润。"
+        },
+        {
+          "field_name": "eps",
+          "period": "2025FY",
+          "value": 0.18,
+          "unit": "CNY/share",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "稀释每股收益。"
+        },
+        {
+          "field_name": "cfo",
+          "period": "2025FY",
+          "value": 199089470.35,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "经营活动产生的现金流量净额。"
+        },
+        {
+          "field_name": "capex",
+          "period": "2025FY",
+          "value": 1056712029.23,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "购建固定资产、无形资产和其他长期资产支付的现金。"
+        },
+        {
+          "field_name": "fcf",
+          "period": "2025FY",
+          "value": -857622558.88,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated as CFO minus capex from official 2025 cash flow statement",
+          "confidence": "medium"
+        },
+        {
+          "field_name": "depreciation_and_amortization",
+          "period": "2025FY",
+          "value": 1057319278.58,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official cash-flow reconciliation depreciation and amortization lines",
+          "confidence": "medium",
+          "note": "固定资产折旧 + 使用权资产折旧 + 无形资产摊销 + 长期待摊费用摊销。"
+        },
+        {
+          "field_name": "cash",
+          "period": "2025FY",
+          "value": 5030602303.23,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "货币资金。"
+        },
+        {
+          "field_name": "debt",
+          "period": "2025FY",
+          "value": 6708875673.5,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from short-term borrowings, one-year due non-current liabilities and long-term borrowings",
+          "confidence": "medium"
+        },
+        {
+          "field_name": "lease_debt",
+          "period": "2025FY",
+          "value": 700861812.14,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from current and non-current lease liabilities in annual report",
+          "confidence": "medium",
+          "note": "75,428,257.68 + 625,433,554.46."
+        },
+        {
+          "field_name": "minority_interest",
+          "period": "2025FY",
+          "value": 2594330853.91,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "少数股东权益。"
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_YAHOO_20260703",
+      "tier": "terminal",
+      "market": "a-share",
+      "publisher": "Yahoo Finance chart API",
+      "title": "002407.SZ 1-year daily market data and metadata as of 2026-07-03",
+      "official_or_secondary": "secondary",
+      "url_or_api": "https://query1.finance.yahoo.com/v8/finance/chart/002407.SZ",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "range": "1y",
+        "interval": "1d",
+        "symbol": "002407.SZ"
+      },
+      "filing_period": "2026-07-03",
+      "report_date": "2026-07-03",
+      "currency": "CNY",
+      "unit": "yuan/share",
+      "raw_file_path": "assets/002407_SZ_yahoo_metadata.json",
+      "raw_file_sha256": "0E45D020A82EA92C8FD29173142ACAE323225C98B1D6F2EB9F2ABADC8C5407D1",
+      "page_or_table": "chart metadata",
+      "extracted_fields": [
+        {
+          "field_name": "current_price",
+          "period": "2026-07-03",
+          "value": 49.34,
+          "unit": "CNY/share",
+          "currency": "CNY",
+          "extraction_method": "Yahoo Finance chart API metadata",
+          "confidence": "medium",
+          "note": "Regular market price / close on 2026-07-03."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_MARKET_SNAPSHOT_20260703",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Local calculation from official share capital and terminal close",
+      "title": "多氟多002407.SZ market-cap snapshot calculation",
+      "official_or_secondary": "secondary",
+      "url_or_api": "local calculation asset",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "price_source": "SRC_YAHOO_20260703",
+        "share_source": "SRC_CNINFO_2026Q1"
+      },
+      "filing_period": "2026-07-03",
+      "report_date": "2026-07-03",
+      "currency": "CNY",
+      "unit": "yuan",
+      "raw_file_path": "assets/market_snapshot_002407_20260703.json",
+      "raw_file_sha256": "C4F6A03D92FAA51B61EEE5F9717EA4AD2D3E398356B9366BA57EBDB98A9B312A",
+      "page_or_table": "market snapshot JSON",
+      "extracted_fields": [
+        {
+          "field_name": "market_cap",
+          "period": "2026-07-03",
+          "value": 58735942954.46,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from terminal close and official share capital",
+          "confidence": "medium",
+          "note": "49.34 * 1,190,432,569; see market snapshot asset."
+        },
+        {
+          "field_name": "fx_rate",
+          "period": "2026-07-03",
+          "value": 1.0,
+          "unit": "CNY/CNY",
+          "currency": "CNY",
+          "extraction_method": "same reporting and trading currency",
+          "confidence": "high"
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_SZSE_NINGXIA_TRANSFER_20260617",
+      "tier": "official",
+      "market": "a-share",
+      "publisher": "SZSE disclosure platform",
+      "title": "多氟多关于宁夏天霖新材料科技有限公司70%股权转让暨被动形成对参股公司财务资助、对外担保的公告",
+      "official_or_secondary": "official",
+      "url_or_api": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-06-17/6cfefb76-936c-4af7-bf13-78ca66801fda.PDF",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "announcement_date": "2026-06-17"
+      },
+      "filing_period": "2026 event",
+      "report_date": "2026-06-17",
+      "currency": "CNY",
+      "unit": "yuan",
+      "raw_file_path": "raw/sell_ningxia_20260617.pdf",
+      "raw_file_sha256": "399FAFEC3657021A586109FAEEC2B2AE29297D268DA507DF63E22F3B62056861",
+      "page_or_table": "transaction summary and financial assistance sections",
+      "extracted_fields": [
+        {
+          "field_name": "transaction_consideration",
+          "period": "2026 event",
+          "value": 229600000,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "Consideration for 70% equity transfer of Ningxia Tianlin; non-critical event field."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_IR_20260625",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Company investor relations record via Eastmoney disclosure mirror",
+      "title": "多氟多投资者关系活动记录表",
+      "official_or_secondary": "secondary",
+      "url_or_api": "https://pdf.dfcfw.com/pdf/H2_AN202606261824919913_1.pdf",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "activity_date": "2026-06-25"
+      },
+      "filing_period": "2026 event",
+      "report_date": "2026-06-25",
+      "currency": "CNY",
+      "unit": "text",
+      "raw_file_path": "raw/ir_20260625.pdf",
+      "raw_file_sha256": "453525045684BB55EA588A08A8B9D3ED8FE8DEA40C1C50A433F214F8A6AAB669",
+      "page_or_table": "investor Q&A",
+      "extracted_fields": [
+        {
+          "field_name": "lipf6_capacity_tpy",
+          "period": "2026 event",
+          "value": 65000,
+          "unit": "tons/year",
+          "currency": "N/A",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "medium",
+          "note": "Company IR statement; non-critical operating context field."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_ABNORMAL_20260702",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Sina Finance disclosure mirror",
+      "title": "多氟多股票交易异常波动公告",
+      "official_or_secondary": "secondary",
+      "url_or_api": "http://file.finance.sina.com.cn/211.154.219.97:9494/MRGG/CNSESZ_STOCK/2026/2026-7/2026-07-02/12427135.PDF",
+      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "query_params": {
+        "announcement_date": "2026-07-02"
+      },
+      "filing_period": "2026 event",
+      "report_date": "2026-07-02",
+      "currency": "CNY",
+      "unit": "text",
+      "raw_file_path": "raw/abnormal_20260702.pdf",
+      "raw_file_sha256": "3E43B8E7C4556EA482E52DC321B623A2DE6EE9EC78197CD582006BF755F70EAC",
+      "page_or_table": "risk clarification and abnormal-volatility sections",
+      "extracted_fields": [
+        {
+          "field_name": "semiconductor_grade_hf_revenue_share_upper_bound",
+          "period": "2025FY/2026Q1",
+          "value": 0.02,
+          "unit": "ratio_upper_bound",
+          "currency": "N/A",
+          "extraction_method": "numeric upper bound from disclosed less-than-two-percent statement",
+          "confidence": "high",
+          "note": "The filing states the share was below 2%; 0.02 records the ceiling, not a point estimate."
+        }
+      ],
+      "cross_checks": []
+    }
+  ],
+  "missing_critical_data": [
+    {
+      "field_name": "depreciation_and_amortization",
+      "period": "2026Q1",
+      "reason": "The Q1 report provides only the direct-method cash-flow statement and does not disclose cash-flow supplemental reconciliation lines for fixed-asset depreciation, right-of-use asset depreciation, intangible amortization, or long-term prepaid expense amortization. 2025FY D&A is sourced but cannot replace 2026Q1 D&A.",
+      "required_for": "L2 financial model and EV/EBITDA normalization",
+      "next_source_required": "2026 interim/annual cash-flow notes, management-provided latest-period D&A bridge, or a documented TTM/annualized model policy if source gate is relaxed"
+    },
+    {
+      "field_name": "lease_debt",
+      "period": "2026Q1",
+      "reason": "Q1 balance sheet discloses non-current lease liabilities of 629,404,406.85 and one-year due non-current liabilities of 1,381,052,087.46, but does not separately identify the current lease-liability component. 2025YE current lease-liability reference of 75,428,257.68 cannot be carried forward without estimation.",
+      "required_for": "net debt and enterprise value bridge",
+      "next_source_required": "2026 interim/annual lease-liability note with current and non-current split"
+    },
+    {
+      "field_name": "diluted_shares",
+      "period": "2026Q1",
+      "reason": "Q1 discloses attributable net profit, basic/diluted EPS, share capital, treasury-stock carrying amount, and shareholder data, but does not directly disclose diluted weighted-average shares or a fully diluted share-count bridge. EPS is rounded to two decimals, so net profit divided by diluted EPS is not an official precise share count.",
+      "required_for": "per-share model outputs",
+      "next_source_required": "latest directly disclosed diluted weighted-average share count or full dilution bridge; supporting values include share capital 1,190,432,569 and treasury shares 34,439,271 from the dividend implementation announcement"
+    },
+    {
+      "field_name": "sbc_options_dilution",
+      "period": "2026Q1",
+      "reason": "Official filings show treasury shares and repurchased shares intended for equity incentive or employee stock ownership plans, but no latest official bridge from outstanding options/restricted stock/repurchases/convertibles to incremental dilution. Capital reserve 'unexercised share payment' relates to subsidiary Zhejiang Zhongning Silicon's allocated share-payment cost and is not itself a parent-company A-share dilution bridge.",
+      "required_for": "fully diluted per-share model outputs",
+      "next_source_required": "latest equity incentive and repurchase/dilution schedule"
+    }
+  ],
+  "method_gate": {
+    "company_type": "cyclical industrial / fluorochemical and new-energy-material manufacturing",
+    "valuation_method_router_result": "Do not default to DCF. Preferred later-stage methods, if data gates pass, are cycle-normalized PE/EV-EBITDA, historical-band context, and SOTP by fluorochemical/new-energy-material/electronic-chemical/battery activities. DCF is disabled for now because latest-period FCFF is negative, commodity/material pricing is cyclical, and required equity-bridge inputs remain incomplete.",
+    "dcf_applicability_status": "disabled_for_current_workflow",
+    "comps_status": "blocked_until_same-source peer market and financial data are collected"
+  }
+}

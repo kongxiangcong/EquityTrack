@@ -179,6 +179,134 @@ class MethodResult:
 
 
 @dataclass(frozen=True)
+class EvidenceClaim:
+    """A qualitative claim with explicit, resolved evidence references."""
+
+    text: str
+    evidence_fields: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "evidence_fields": list(self.evidence_fields),
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True)
+class AnalysisResult:
+    """One evidence-constrained company-research lens."""
+
+    dimension_id: str
+    title: str
+    status: str
+    conclusion: str
+    key_findings: tuple[EvidenceClaim, ...] = ()
+    counterpoints: tuple[EvidenceClaim, ...] = ()
+    uncertainties: tuple[EvidenceClaim, ...] = ()
+    key_metrics: tuple[Mapping[str, Any], ...] = ()
+    evidence_fields: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dimension_id": self.dimension_id,
+            "title": self.title,
+            "status": self.status,
+            "conclusion": self.conclusion,
+            "key_findings": [item.to_dict() for item in self.key_findings],
+            "counterpoints": [item.to_dict() for item in self.counterpoints],
+            "uncertainties": [item.to_dict() for item in self.uncertainties],
+            "key_metrics": [dict(item) for item in self.key_metrics],
+            "evidence_fields": list(self.evidence_fields),
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True)
+class AnalysisBundle:
+    """The complete multi-lens analysis presented to synthesis and reporting."""
+
+    dimensions: Mapping[str, AnalysisResult]
+    completeness: str
+    missing_dimensions: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "completeness": self.completeness,
+            "missing_dimensions": list(self.missing_dimensions),
+            "dimensions": {
+                key: value.to_dict() for key, value in self.dimensions.items()
+            },
+        }
+
+
+@dataclass(frozen=True)
+class DebateCase:
+    side: str
+    thesis: str
+    arguments: tuple[Mapping[str, Any], ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "side": self.side,
+            "thesis": self.thesis,
+            "arguments": [dict(item) for item in self.arguments],
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True)
+class DebateResult:
+    bull: DebateCase
+    bear: DebateCase
+    manager_summary: str
+    key_disagreements: tuple[str, ...] = ()
+    resolved_disagreements: tuple[str, ...] = ()
+    unresolved_questions: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "bull": self.bull.to_dict(),
+            "bear": self.bear.to_dict(),
+            "manager_summary": self.manager_summary,
+            "key_disagreements": list(self.key_disagreements),
+            "resolved_disagreements": list(self.resolved_disagreements),
+            "unresolved_questions": list(self.unresolved_questions),
+        }
+
+
+@dataclass(frozen=True)
+class ResearchSynthesis:
+    core_thesis: str
+    variant_view: str
+    business_quality: str
+    earnings_outlook: str
+    market_view: str
+    valuation_view: str
+    risk_reward_summary: str
+    key_uncertainties: tuple[str, ...] = ()
+    what_would_change_the_view: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "core_thesis": self.core_thesis,
+            "variant_view": self.variant_view,
+            "business_quality": self.business_quality,
+            "earnings_outlook": self.earnings_outlook,
+            "market_view": self.market_view,
+            "valuation_view": self.valuation_view,
+            "risk_reward_summary": self.risk_reward_summary,
+            "key_uncertainties": list(self.key_uncertainties),
+            "what_would_change_the_view": list(self.what_would_change_the_view),
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True)
 class ResearchRun:
     schema_version: int
     run_id: str
@@ -194,6 +322,10 @@ class ResearchRun:
     methods: Mapping[str, MethodResult]
     permissions: Mapping[str, bool]
     summary: Mapping[str, Any]
+    analysis: AnalysisBundle
+    debate: DebateResult | None
+    synthesis: ResearchSynthesis | None
+    report_mode: str
     conditional_plan: tuple[Mapping[str, Any], ...]
     diagnostics: tuple[str, ...]
     html: str = ""
@@ -227,6 +359,10 @@ class ResearchRun:
             "methods": method_payload,
             "permissions": dict(self.permissions),
             "summary": dict(self.summary),
+            "analysis": self.analysis.to_dict(),
+            "debate": self.debate.to_dict() if self.debate else None,
+            "synthesis": self.synthesis.to_dict() if self.synthesis else None,
+            "report_mode": self.report_mode,
             "conditional_plan": [dict(item) for item in self.conditional_plan],
             "diagnostics": list(self.diagnostics),
         }
