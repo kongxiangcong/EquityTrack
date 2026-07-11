@@ -1,5 +1,7 @@
 # Equity Research Skill Audit Report
 
+> Historical audit: this document describes the retired pre-V3 skill graph. Refer to `skills/SKILL.md` for the current workflow; referenced legacy Skill entry files have been removed.
+
 审计日期：2026-07-02  
 审计范围：`E:/workspace/tradingSystem/skills/` 下的 `SKILL.md`、`references/`、`analysis/`、`valuation/`、`modules/`、`scripts/` 及相关输出模板。  
 审计性质：方法论与 Codex 技能工程审计，不生成股票研报，不给出真实投资建议。

@@ -1,5 +1,7 @@
 # Equity Research Skill Patch Plan
 
+> Historical plan: this document records the pre-V3 remediation proposal. It is not an executable workflow. The current single entrypoint is `skills/SKILL.md`.
+
 审计日期：2026-07-02  
 范围：`E:/workspace/tradingSystem/skills/`  
 约束：本文件只给修改方案，不直接修改任何技能源文件。

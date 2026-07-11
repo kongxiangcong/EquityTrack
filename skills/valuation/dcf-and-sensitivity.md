@@ -1,6 +1,6 @@
 # DCF, Historical Band & Sensitivity — Absolute & Relative-to-Self Valuation
 
-> **Level 2 only** — Consumed by `equity-report` skill (full version with Task 2 Excel model). Not used by `tear-sheet` or by `equity-report` L1 (streamlined).
+> **Conditional method reference** — Read only when the valuation router selects DCF or the user explicitly requests a DCF applicability assessment. The deterministic engine remains the authority for execution and output permission.
 >
 > **Companion file**: `comparable.md` covers relative-to-peers valuation. Together these two files form the complete valuation methodology layer.
 
@@ -340,7 +340,7 @@ Historical Valuation Analysis:
 
 ### Visual Specification (for chart generation)
 
-If the equity-report skill generates a valuation band chart (see `modules/equity-report-charts.md` C4):
+If a renderer generates a valuation band chart:
 
 1. **Chart type**: Line chart with shaded bands
 2. **X-axis**: Time (5 years, monthly ticks)
@@ -507,9 +507,6 @@ Use `.row-highlight` class for the base case row, and `<b>` for the base case ce
 
 ## Integration With Other Files
 
-- **`comparable.md`** — Relative-to-peers. Companion file; use valuation metric selection guide from there.
-- **`research-document-template.md` §VIII** — Valuation table population (both L1 and L2).
-- **`research-document-template.md` §XIII** — Cross-method valuation view narrative.
-- **`references/financial-model-spec.md`** Tab 7 (DCF), Tab 9 (Sensitivity) — Excel implementation in L2's Task 2.
-- **`modules/equity-report-charts.md`** C4 — Historical PE band chart specification.
-- **`analysis/scenario-deep-dive.md`** — Scenario-linked sensitivity (tertiary PE × EPS matrix).
+- **`comparable.md`** — Relative-to-peers method selection.
+- **`valuation-method-router.md`** — Applicability and method-state authority.
+- **`industry-valuation-matrix.md`** — Industry-specific method constraints.

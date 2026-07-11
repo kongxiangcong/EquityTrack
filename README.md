@@ -79,7 +79,7 @@ src/equity_research/
   cli.py          # 文件系统 adapter
 
 skills/
-  SKILL-v3.md     # agent/skill 的 V3 多维分析与叙事规约
+  SKILL.md        # 唯一入口：V3 多维分析、质询、综合与交付规约
   references/capability-matrix.md
 
 examples/yihua-002897/
@@ -144,7 +144,7 @@ python -m unittest discover -s tests -v
 - [当前系统审计](docs/architecture/current-system-audit.md)
 - [目标架构](docs/architecture/target-architecture.md)
 - [估值与分析方法论复核](docs/research/methodology-assessment.md)
-- [V3 Skill 工作流](skills/SKILL-v3.md)
+- [统一 Skill 工作流](skills/SKILL.md)
 
 ## 研究边界
 

@@ -112,7 +112,7 @@ When this trigger fires, the skill must not output target price, rating, buy/sel
 
 ## Executable Validation
 
-Run the validator before Task 2 modeling and before any final report generation:
+Run the validator before method execution and before publishing any research report:
 
 ```bash
 python skills/scripts/source_manifest_validator.py --manifest path/to/source_manifest.json --pretty

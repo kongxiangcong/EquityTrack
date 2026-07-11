@@ -122,7 +122,7 @@ flowchart LR
 - `EvidenceCollectionSkill`：发现来源并写 manifest 候选；
 - `RuleModule`：凡是影响数据门、估值、权限和数字的规则，必须落为 typed Python implementation。
 
-`skills/SKILL-v3.md` 是 agent 的多维分析与专业叙事规约，不再承载状态机。
+`skills/SKILL.md` 是唯一 Agent 入口和专业叙事规约。它直接描述 V3 工作流，不再跳转到版本化 Skill，也不再承载旧式多 Task 状态机。
 
 ## 当前完成与下一层
 
