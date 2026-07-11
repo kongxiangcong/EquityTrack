@@ -23,6 +23,7 @@ description: "Task 3 of equity report workflow. Generates the final PDF report. 
 - ✅ **L2**: ALL financial numbers extracted from Task 2 Excel model via openpyxl; ≥10 numbers cross-checked
 - ✅ **L1**: Financial numbers extracted from Task 1 Research Document; valuation section uses comparable-company method (no DCF/sensitivity/historical band)
 - ✅ Before report generation, verify `source_manifest_status`, `valuation_method_router_result`, and `data_quality_grade`
+- ✅ Before full L2 report generation, read both `source_manifest_validation_result` and `model_validation_result`
 - ✅ If source/method/model gates fail, generate a `data_insufficient_memo` report instead of a full valuation report
 - ✅ Default final output uses `valuation_view`, `risk_reward_summary`, `data_quality_grade`, `key_uncertainties`, and `what_would_change_the_view`
 - ✅ Generate the required charts AND **additional charts** — aim for ≥15 total exhibits (L2) or ≥10 (L1)
@@ -76,6 +77,7 @@ When the user says "下一步"/"继续"/"continue" to enter Task 3, all previous
 | **L1 & L2** | Task 1 Research Document | `*_Research_Document_*.md` |
 | **L2 only** | Task 2 Financial Model | `*_Financial_Model_*.xlsx` |
 | **L2 only** | Task 2 Valuation Analysis | `*_Valuation_Analysis_*.md` |
+| **L2 only** | Model validation result | Explicit path in valuation analysis or `*_model_validation_*.json` |
 | **L1 & L2** | Source manifest summary | Embedded in research/valuation docs or `source_manifest.*` if created |
 | **L1 & L2** | Source manifest validation result | Explicit path in research doc or `*_source_manifest_validation_*.json` |
 | **L1 & L2** | Stock chart SVG | Path from research doc metadata |
@@ -83,7 +85,7 @@ When the user says "下一步"/"继续"/"continue" to enter Task 3, all previous
 
 **If files cannot be found in session**: Ask the user to confirm filenames. Do NOT start Task 3 without required inputs.
 
-**Source validation hard gate**: Before report generation, read the source manifest validation result JSON. If it cannot be found, cannot be parsed, has `passed = false`, has `source_manifest_status != sufficient`, or has `data_insufficient_memo_required = true`, do not generate the full equity report. Generate only a data insufficient memo report containing missing critical data, validator issue codes, unavailable tools, disabled methods, and next data requirements.
+**Source/model validation hard gate**: Before report generation, read the source manifest validation result JSON and, for L2, the model validation result JSON. If either cannot be found, cannot be parsed, has `passed = false`, or blocks report generation, do not generate the full equity report. Generate only a data insufficient memo / model blocked memo report containing blocked reason, missing critical data, validator issue codes, unavailable tools, disabled methods, and next data requirements.
 
 Also verify these asset files exist (from Task 1):
 - Stock chart SVG (path in research document metadata)
@@ -97,13 +99,14 @@ Also verify these asset files exist (from Task 1):
 |---|------|---------|-----|-----|
 | 1 | Task 1 Research Document | Narrative content, six-dimension analysis | ✅ | ✅ |
 | 2 | Source manifest validation result JSON | Executable source gate; determines full report vs data insufficient memo | ✅ | ✅ |
-| 3 | Task 2 Valuation Analysis (.md) | Method router result, valuation view, data quality, selected method summaries | ❌ | ✅ |
-| 4 | `references/source-manifest.md` | Source manifest schema and coverage expectations | ✅ | ✅ |
-| 5 | `valuation/valuation-method-router.md` | Confirms report uses only selected/caution methods | ✅ | ✅ |
-| 6 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
-| 7 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
-| 8 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
-| 9 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
+| 3 | Model validation result JSON | Executable model gate; determines full report vs model blocked memo | ❌ | ✅ |
+| 4 | Task 2 Valuation Analysis (.md) | Method router result, valuation view, data quality, selected method summaries | ❌ | ✅ |
+| 5 | `references/source-manifest.md` | Source manifest schema and coverage expectations | ✅ | ✅ |
+| 6 | `valuation/valuation-method-router.md` | Confirms report uses only selected/caution methods | ✅ | ✅ |
+| 7 | `output/report-layout.md` | HTML structure, module order, CSS, L1/L2 layout differences | ✅ | ✅ |
+| 8 | `modules/equity-report-charts.md` | Chart specs + embedding protocol | ✅ | ✅ |
+| 9 | `modules/tables.md` | Table templates (P2 Dense, Growth & Margins, etc.) | ✅ | ✅ |
+| 10 | `output/report-qa.md` | QA checklist (A/B/C tier, with L1/L2 variants) | ✅ | ✅ |
 
 **Task 2 Financial Model (.xlsx)** (L2 only): Read via Python/openpyxl during report generation. Do NOT read it all upfront — read specific tabs as needed for each module.
 
@@ -127,6 +130,11 @@ From the Research Document's `## Task Handoff Metadata` section, extract:
 | `source_manifest_validation_result.passed` | Whether full report generation is allowed |
 | `source_manifest_status` | Whether full report or data insufficient memo is allowed |
 | `data_insufficient_memo_required` | Whether full report generation is blocked |
+| `model_validation_result_path` | L2 model validator JSON path |
+| `model_validation_result.passed` | L2 workbook integrity gate |
+| `model_validation_status` | `passed`, `failed`, `not_run`, or `not_available` |
+| `model_blocked_reason` | Validator reasons to show in a model blocked memo |
+| `report_generation_allowed` | True only when source and model gates pass |
 | `valuation_method_router_result` | Which valuation methods may appear in the report |
 | `data_quality_grade` | Data quality section and gating |
 | `user_requested_rating` | Rating section may appear only if true |
@@ -140,6 +148,8 @@ From the Valuation Analysis, extract:
 | Probability Basis | Scenario section; omit probability-weighted value if missing |
 
 If source manifest validation failed, `source_manifest_status = insufficient`, `data_insufficient_memo_required = true`, or the valuation analysis is a `data_insufficient_memo`, stop the full report workflow and generate a data insufficient memo report with missing sources, validator issue codes, unavailable tools, disabled methods, and next data requirements.
+
+If model validation failed, `model_validation_status = failed`, `report_generation_allowed = false`, or `model_blocked_reason` is non-empty, stop the full report workflow and generate a model blocked memo report with blocked reason, missing critical data, disabled valuation methods, and next data requirements.
 
 ---
 
@@ -309,7 +319,13 @@ Read `output/report-qa.md` for full checklist.
 
 ### 6.1 Run Automated Validator
 ```bash
-python scripts/report_validator.py --html report.html --mode equity_report --json
+python scripts/report_validator.py \
+  --html report.html \
+  --mode equity_report \
+  --source-validation-result {source_manifest_validation_result_path} \
+  --model-validation-result {model_validation_result_path} \
+  --report-type {full_report|data_insufficient_memo|model_blocked_memo} \
+  --json
 ```
 
 ### 6.1a Chart-Count Verification (A22) — MANDATORY
@@ -372,7 +388,7 @@ This is the **most important QA step** in the 3-Task architecture. Spot-check at
 
 > ⚠️ **Deliver ALL project deliverables together**, not just the PDF. The user should receive the complete research package in one handoff.
 
-If source manifest validation failed and this task generated a `data_insufficient_memo` report, deliver only the memo report, source manifest path, source manifest validation result path, Research Document, and any already-generated non-valuation assets. Do not require a Financial Model or Valuation Analysis deliverable in this blocked path.
+If source manifest validation failed or model validation failed and this task generated a `data_insufficient_memo` / `model_blocked_memo` report, deliver only the memo report, source manifest path, source manifest validation result path, model validation result path if available, Research Document, and any already-generated non-valuation assets. Do not require a full Financial Model or Valuation Analysis deliverable in this blocked path.
 
 ### 7.1 Pre-Delivery Checklist
 

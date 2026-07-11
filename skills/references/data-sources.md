@@ -90,6 +90,70 @@ iFind is an optional connector/terminal source. Use it for structuring, market d
 
 ---
 
+## Kimi Code CLI / kimi-datasource Missing-Data Workflow
+
+Use this workflow when official-source extraction leaves critical gaps, or when the user explicitly asks to collect gap data with Kimi. Kimi Code CLI is a structured retrieval assistant around its built-in `kimi-datasource`; it is not an authority that can override official disclosure.
+
+### When to Use
+
+| Trigger | Allowed Use | Not Allowed |
+|---------|-------------|-------------|
+| Official filings were parsed but specific fields remain missing | Ask Kimi to search `kimi-datasource` for the exact missing fields, source table, period, unit, and disclosure trail | Fill model inputs from guesses, averages, placeholders, or generic industry defaults |
+| Terminal/API data is needed for market, peer, or consensus fields | Use Kimi to retrieve structured secondary data and save the raw response | Treat Kimi/terminal data as the sole source for official financial statements when official filings are required |
+| Task 2 is blocked by missing source-manifest fields | Run a focused Kimi gap-fill pass, then re-run source validation before deciding whether Task 2 can proceed | Start workbook construction from ambiguous or unvalidated Kimi output |
+
+### Command Pattern
+
+Discover the installed executable first when needed; a common Windows path is `C:\Users\72449\.kimi-code\bin\kimi.exe`. Use small prompt files and save raw output:
+
+```powershell
+$prompt = Get-Content -LiteralPath outputs\<run_id>\kimi_requests\<request>.md -Raw
+kimi.exe --prompt $prompt --output-format text |
+  Out-File -LiteralPath outputs\<run_id>\kimi_results\<request>.raw.txt -Encoding utf8
+```
+
+Do not combine `--prompt` with `--yolo`. If one large prompt times out or returns an empty file, split the request into smaller field groups.
+
+Recommended artifact layout:
+
+| Directory | Contents |
+|-----------|----------|
+| `outputs/<run_id>/kimi_requests/` | Prompt files, one focused request per file |
+| `outputs/<run_id>/kimi_results/` | Raw Kimi responses, parsed JSON, QA notes, conflict logs |
+
+### Prompt Contract
+
+Each Kimi request should tell Kimi exactly:
+
+- Use only the built-in `kimi-datasource` or explicitly named local/terminal data source; do not infer missing values.
+- Return one strict JSON object or array, even if the answer is `missing`.
+- For every requested field, return:
+  - `field_name`
+  - `period`
+  - `status`: `found`, `missing`, or `ambiguous`
+  - `value`
+  - `unit`
+  - `currency`
+  - `source_name`
+  - `source_table_or_field`
+  - `source_date`
+  - `url_or_api`: use `kimi-datasource:<dataset/tool/query>` when no public URL is available
+  - `confidence`: `high`, `medium`, or `low`
+  - `notes`
+  - `remaining_blockers`
+- If a field is not found, set `status = "missing"` and leave `value = null`.
+- If the returned value conflicts with official disclosure, set `status = "ambiguous"` and describe the conflict.
+
+### Acceptance Rules
+
+- Official disclosure wins for critical financials. If Kimi returns a value that conflicts with official PDF/XBRL/filing text, keep the official value, record the conflict, and do not promote the Kimi value into model inputs.
+- A Kimi value can enter `source_manifest` only after local parsing and QA confirm field meaning, period, unit, currency, and source provenance.
+- If Kimi returns `missing`, `ambiguous`, low-provenance, or inconsistent data for a critical field, keep the field `missing` in `source_manifest` and trigger the required degraded output.
+- Never replace missing values with zero, peer averages, historical averages, management-style assumptions, placeholders, or default values unless the official source explicitly states zero or not applicable.
+- After integrating any usable Kimi output, re-run `scripts/source_manifest_validator.py`. Task 2 may restart only if the validator passes and selected-method inputs are complete.
+
+---
+
 ## Yahoo Finance Data Source (Optional Secondary)
 
 Yahoo Finance is acceptable for price, market cap, trading data, and a secondary view of financials. It is not the sole source of authority for financial-statement history in this skill.
@@ -168,6 +232,7 @@ Must collect the following data in Phase 1 for subsequent 六维分析 and short
 | Scenario | Handling Method | Annotation |
 |----------|-----------------|------------|
 | Single source missing | Try official source route first, then optional secondary/cross-check | Annotate actual source and source tier |
+| Critical field still missing after official extraction | Run the Kimi Code CLI / `kimi-datasource` missing-data workflow when available or user-requested | Save prompt/raw/parsed artifacts; accept only validated, sourceable values |
 | Dual source conflict | Official disclosure wins for financials; latest restatement wins when applicable | Annotate difference, period, currency, unit |
 | **Critical financial data missing official source** | **Mark `missing` in source manifest → produce `data_insufficient_memo`** | **No valuation conclusion, target price, or rating** |
 | **Critical stock price data missing** | **Multi-attempt retry → then skip price/chart module** | **See §Stock Price Data Retry Protocol below** |

@@ -557,7 +557,41 @@ Upside/(Downside)           formula
 
 ## Model Integrity Checks (Agent Must Verify)
 
-Before declaring Task 2 complete, the agent MUST verify:
+Before declaring Task 2 complete, the agent MUST run the workbook-level validator and verify:
+
+```bash
+python skills/scripts/model_validator.py \
+  --workbook path/to/Financial_Model.xlsx \
+  --dcf-status allowed|caution|disabled|not_selected \
+  --company-type general|financial|biopharma|pre_revenue_biopharma \
+  --pretty > path/to/model_validation_result.json
+```
+
+The validator output is the engineering gate for Task 3. A full HTML/PDF report is allowed only when:
+
+- `passed = true`
+- `model_validation_status = passed`
+- `report_generation_allowed = true`
+- `summary.errors = 0`
+
+If the validator fails, write a `data_insufficient_memo` / `model_blocked_memo`; do not emit a full valuation report, target-price-style conclusion, rating, or probability-weighted target.
+
+Executable validator coverage:
+
+- Required workbook sheets exist
+- Raw Data rows have `source_id` coverage
+- Historical financial cells trace to Raw Data formulas
+- Balance Sheet balance checks are zero
+- Cash Flow cash tie-outs are zero
+- Forecast cells in operating statements are formula-driven, not hardcoded
+- DCF allowed/caution: FCFF, WACC, terminal value, equity bridge, WACC > g, and sensitivity center checks exist
+- DCF disabled/not selected: no DCF target-price-style output
+- Financial firms: no ordinary FCFF/WACC DCF
+- Pipeline-driven biopharma: no target-price-style output without rNPV/SOTP
+
+Manual review should still verify business reasonableness, but manual review cannot override a failed validator.
+
+Before declaring Task 2 complete, verify the following gate summary:
 
 | # | Check | Method | Pass Criteria |
 |---|-------|--------|---------------|
@@ -566,13 +600,14 @@ Before declaring Task 2 complete, the agent MUST verify:
 | 3 | Revenue ties | =Revenue Model Total - IS Revenue | = 0 for all periods |
 | 4 | Historical accuracy | Compare IS/BS/CF to Raw Data | Difference < 1% |
 | 5 | Source manifest validation | Read validation result JSON | `passed = true`, `source_manifest_status = sufficient`, `data_insufficient_memo_required = false` |
-| 6 | Source annotation coverage | Check Raw Data, share count, net debt, WACC inputs, peer data | Every critical input has `source_id` or explicit `missing`; missing critical inputs block valuation outputs |
-| 7 | WACC range | Check vs market-typical range | Within normal range (flag if outside) |
-| 8 | TV % of EV | =PV(TV) / EV | < 80% (flag if higher) |
-| 9 | Sensitivity center | =Sensitivity center cell - DCF base | = 0 |
-| 10 | Comps stats | Check PERCENTILE formulas work | No #N/A or #REF errors |
-| 11 | Scenarios sum | =Bull% + Base% + Bear% | = 100% |
-| 12 | FCF sign | Check FCF is positive for base case | Positive (flag if negative with explanation) |
+| 6 | Model validation | Run `scripts/model_validator.py` | `passed = true`, `model_validation_status = passed`, `report_generation_allowed = true` |
+| 7 | Source annotation coverage | Check Raw Data, share count, net debt, WACC inputs, peer data | Every critical input has `source_id` or explicit `missing`; missing critical inputs block valuation outputs |
+| 8 | WACC range | Check vs market-typical range | Within normal range (flag if outside) |
+| 9 | TV % of EV | =PV(TV) / EV | < 80% (flag if higher) |
+| 10 | Sensitivity center | =Sensitivity center cell - DCF base | = 0 |
+| 11 | Comps stats | Check PERCENTILE formulas work | No #N/A or #REF errors |
+| 12 | Scenarios sum | =Bull% + Base% + Bear% | = 100% |
+| 13 | FCF sign | Check FCF is positive for base case | Positive (flag if negative with explanation) |
 
 **If any check fails**: Fix the model before proceeding. Do NOT deliver a broken model.
 

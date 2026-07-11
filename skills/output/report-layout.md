@@ -623,18 +623,22 @@ When writing each module, the agent MUST actively seek to enrich the content bey
 
 ---
 
-## 4.4.4 Source Manifest Validation Gate
+## 4.4.4 Source and Model Validation Gate
 
-Before building the full report HTML, read `source_manifest_validation_result_path` from the Research Document metadata and parse the validator JSON.
+Before building the full report HTML, read `source_manifest_validation_result_path` from the Research Document metadata and, for L2, `model_validation_result_path` from the Valuation Analysis / Task 2 handoff metadata. Parse both validator JSON files.
 
-Full report generation is allowed only when all are true:
+Full L2 report generation is allowed only when all are true:
 
 - `passed = true`
 - `source_manifest_status = sufficient`
 - `data_insufficient_memo_required = false`
 - `summary.errors = 0`
+- `model_validation_result.passed = true`
+- `model_validation_status = passed`
+- `model_validation_result.report_generation_allowed = true`
+- `model_validation_result.summary.errors = 0`
 
-If any check fails, render a `data_insufficient_memo` report instead of the full report. The memo may include source gaps, validator issue codes, unavailable tools, disabled valuation methods, and next data requirements. It must not include a target price, rating, buy/sell advice, probability-weighted target, DCF-derived value, or full valuation conclusion.
+If any source check fails, render a `data_insufficient_memo` report instead of the full report. If any model check fails, render a `model_blocked_memo` report instead of the full report. The memo must include blocked reason, missing critical data, disabled valuation methods, validator issue codes, and next data requirements. It must not include a target price, rating, buy/sell advice, probability-weighted target, DCF-derived value, or full valuation conclusion.
 
 ---
 
@@ -816,11 +820,13 @@ Every data point, statistic, quote, and external source cited anywhere in the re
 <div class="module-row module-newpage">
   <h2 class="section-heading">References & Data Sources / 参考文献与数据来源</h2>
 
-  <h3 class="subsection-heading">Source Manifest Validation</h3>
+  <h3 class="subsection-heading">Source and Model Validation</h3>
   <div class="references-list">
     <div class="ref-item">Source manifest: [source_manifest_path]</div>
-    <div class="ref-item">Validation result: [source_manifest_validation_result_path]</div>
-    <div class="ref-item">Validation status: passed=[true/false], source_manifest_status=[sufficient/insufficient/invalid], errors=[N], warnings=[N]</div>
+    <div class="ref-item">Source validation result: [source_manifest_validation_result_path]</div>
+    <div class="ref-item">Source validation status: passed=[true/false], source_manifest_status=[sufficient/insufficient/invalid], errors=[N], warnings=[N]</div>
+    <div class="ref-item">Model validation result: [model_validation_result_path]</div>
+    <div class="ref-item">Model validation status: passed=[true/false], model_validation_status=[passed/failed/not_available], report_generation_allowed=[true/false], errors=[N], warnings=[N]</div>
   </div>
   
   <h3 class="subsection-heading">Financial Data</h3>

@@ -1,0 +1,27 @@
+{
+  "validator": "model_validator",
+  "validator_version": 1,
+  "input_path": "fixtures/model_workbooks/generated/wacc_le_terminal_growth.xlsx",
+  "passed": false,
+  "model_validation_status": "failed",
+  "report_generation_allowed": false,
+  "model_blocked_reason": [
+    {
+      "code": "DCF_WACC_NOT_GREATER_THAN_G",
+      "message": "DCF terminal value requires WACC greater than terminal growth.",
+      "path": "$.sheets.DCF"
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "issues": [
+    {
+      "severity": "error",
+      "code": "DCF_WACC_NOT_GREATER_THAN_G",
+      "message": "DCF terminal value requires WACC greater than terminal growth.",
+      "path": "$.sheets.DCF"
+    }
+  ]
+}

@@ -7,7 +7,7 @@
 
 ## 5.1 Automated Pre-Check
 
-Run `scripts/report_validator.py --html [report.html] --json` → structured failure list. Fix validator-reported problems first.
+Run `scripts/report_validator.py --html [report.html] --source-validation-result [source_validation.json] --model-validation-result [model_validation.json] --report-type [full_report|data_insufficient_memo|model_blocked_memo] --json` → structured failure list with source/model gate results. Fix validator-reported problems first.
 
 ---
 
@@ -117,7 +117,9 @@ LOOP END
 | A5 | Page Margins | **Top/bottom 18mm, left/right 20mm** consistent | Measure PDF margins |
 | A6 | No Scaffold Data | All data from real sources, no fabrication | Spot-check data, verify sources |
 | A7 | Source Manifest Validation Gate | `source_manifest_validation_result_path` exists; JSON parsed; `passed=true`, `source_manifest_status=sufficient`, `data_insufficient_memo_required=false`, `summary.errors=0` before full report delivery. If failed, only data insufficient memo is allowed. | Read validation JSON and compare to report mode |
-| A7b | Data Cross-Validation | Key data verified from dual sources | Check official source vs terminal/secondary cross-check |
+| A7b | Model Validation Gate | `model_validation_result_path` exists for L2; JSON parsed; `passed=true`, `model_validation_status=passed`, `report_generation_allowed=true`, `summary.errors=0` before full report delivery. If failed, only data insufficient memo / model blocked memo is allowed. | Read validation JSON and compare to report mode |
+| A7c | Blocked Memo Completeness | If source/model validation failed, memo includes blocked reason, missing critical data, disabled valuation methods, and no target price/rating/buy-sell/probability-weighted target language. | Run report validator with `--report-type data_insufficient_memo` or `--report-type model_blocked_memo` |
+| A7d | Data Cross-Validation | Key data verified from dual sources | Check official source vs terminal/secondary cross-check |
 | A8 | Model Data Tags | Calculated data labeled (especially DCF assumptions) | Check labels |
 | A9 | Narrative Consistency | All sections align with Phase 3 core narrative | Read through report |
 | A10 | 投资论点综合分析表 | 4 rows with bull/bear arguments + key assumptions + pivot signals | Check table completeness |
@@ -243,9 +245,10 @@ Same requirements: Pre-rendered SVG default (via rendering cascade), ≥4 layers
 **L2 (Full Version — Method-routed model + selected methods)**:
 ```
 □ Source Manifest Validation: validation JSON exists and passed before full report generation
+□ Model Validation: model validation JSON exists and passed before full report generation
 □ Source Manifest: critical numbers have source_id or missing
 □ Method Router: selected/caution/disabled methods shown
-□ Data Insufficient Gate: if validation failed, report is a data insufficient memo with no target price/rating/full valuation conclusion
+□ Data Insufficient / Model Blocked Gate: if source/model validation failed, report is a memo with blocked reason, missing critical data, disabled methods, and no target price/rating/full valuation conclusion
 □ DCF: included only if dcf_applicability is allowed/caution
 □ DCF: if disabled, disabled_reason shown and no DCF-derived value shown
 □ Historical Band: included only if selected/sourceable
@@ -259,9 +262,10 @@ Same requirements: Pre-rendered SVG default (via rendering cascade), ≥4 layers
 **L1 (Streamlined Version — Comps + Consensus only)**:
 ```
 □ Source Manifest Validation: validation JSON exists and passed before full report generation
+□ Model Validation: if no L2 workbook exists, model_validation_status is not_available; if L2 workbook exists, model validation JSON exists and passed
 □ Source Manifest: critical numbers have source_id or missing
 □ Method Router: selected/caution/disabled methods shown
-□ Data Insufficient Gate: if validation failed, report is a data insufficient memo with no target price/rating/full valuation conclusion
+□ Data Insufficient / Model Blocked Gate: if source/model validation failed, report is a memo with blocked reason, missing critical data, disabled methods, and no target price/rating/full valuation conclusion
 □ Comparable Company Table: target 5 peers, minimum 3 usable peers with source IDs
 □ Comps: Statistical summary (Max/75th/Median/25th/Min) present
 □ Comps: Premium/discount narrative with drivers

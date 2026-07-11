@@ -7,4 +7,5 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+outputs/
 skills/scripts/fixtures/model_workbooks/generated/

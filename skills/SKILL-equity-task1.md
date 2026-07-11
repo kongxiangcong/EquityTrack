@@ -217,11 +217,21 @@ Brief priority: official disclosure first, then optional terminal/secondary sour
 
 **When the cap is hit**: Proceed with available non-critical data. If critical data is still missing, do not proceed to valuation conclusion; produce `data_insufficient_memo` and list the exact missing official sources.
 
+### 1.1b Kimi Missing-Data Fallback
+
+If critical fields remain missing after official-source extraction, run the Kimi Code CLI / `kimi-datasource` missing-data workflow in `references/data-sources.md` before finalizing the unresolved gap, unless the user disallows Kimi or the tool is unavailable.
+
+Kimi is only a fact-retrieval and structuring layer. Save prompt files, raw responses, parsed JSON, and QA notes beside the run artifacts. Do not paste Kimi output directly into the Research Document or model inputs. Every usable value must still pass local field, period, unit, currency, and source-provenance checks before entering `source_manifest`.
+
+If Kimi returns `missing`, `ambiguous`, conflicting, or low-provenance data for a critical field, keep the field marked `missing`, record the blocker, and produce the required degraded output. Do not fill placeholders, zeros, averages, or default assumptions to keep the workflow moving.
+
 ### 1.2 Data Collection Checklist (Core)
 
 - [ ] Company fundamentals (financial statements, business structure, management)
 - [ ] Official financial filings and raw artifacts saved/referenced in `source_manifest`
 - [ ] Source manifest draft with `source_id`, publisher, URL/API, retrieved_at, period, currency, unit, raw_file_path/hash, page/table reference
+- [ ] Critical missing fields have either gone through the Kimi Code CLI / `kimi-datasource` missing-data workflow, or the workflow was explicitly skipped with reason (`tool_unavailable`, user disallowed, or not applicable)
+- [ ] Kimi prompts, raw responses, parsed JSON, and QA/conflict notes are saved for any Kimi-assisted data collection
 - [ ] Source manifest JSON saved to disk and validator JSON saved to disk
 - [ ] Source manifest validation result read back; blocking issues copied into the Research Document metadata and §XI
 - [ ] Industry and competitive landscape (CR concentration, pricing power, supply chain)

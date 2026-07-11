@@ -71,7 +71,14 @@ Critical financial statement data must prioritize official disclosure:
 | HK | HKEXnews, company IR annual/interim reports |
 | US | SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR annual/quarterly reports |
 
-iFind, Yahoo, and other terminals are optional secondary sources for structure, market data, and cross-checking. They cannot be the sole source for critical financial statement history.
+iFind, Yahoo, Kimi Code CLI / `kimi-datasource`, and other terminals are optional secondary sources for structure, market data, gap filling, and cross-checking. They cannot be the sole source for critical financial statement history.
+
+For Kimi-assisted gap filling:
+- Set `tier: terminal` when Kimi retrieves terminal-style structured data, otherwise set `tier: secondary`.
+- Set `official_or_secondary: secondary` unless the manifest also stores the underlying official filing artifact and page/table reference.
+- Set `url_or_api` to `kimi-datasource:<dataset/tool/query>` when Kimi does not provide a public URL.
+- Set `raw_file_path` and `raw_file_sha256` to the saved raw Kimi response, and keep parsed JSON/QA notes beside it.
+- Add `cross_checks` against official filings when the field is critical. If the cross-check is `mismatch`, `conflict`, or `not_checked` for a critical field that requires official support, keep the field in `missing_critical_data`.
 
 ---
 

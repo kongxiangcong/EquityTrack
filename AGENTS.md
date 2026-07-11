@@ -43,3 +43,17 @@ These rules apply to work under `skills/` and especially the `equity-researcher`
 - Do not implement full `model_validator.py` or `source_manifest_validator.py` as part of Phase 0.
 - Do not generate stock reports while patching this skill.
 - Keep changes scoped to safety boundaries, source gates, valuation method routing, DCF applicability, source manifest schema, and degradation behavior.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage state uses the default Matt Pocock skill label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.

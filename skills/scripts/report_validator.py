@@ -7,15 +7,16 @@ Automated Structural Pre-check for Investment Research Reports
 检查内容：不判断内容质量，只验证"必填结构元素是否存在"
 
 用法:
-    python report_validator.py --html /path/to/report.html --json
-    python report_validator.py --html /path/to/report.html  # 人类可读输出
+    python report_validator.py --html /path/to/report.html --source-validation-result source.json --model-validation-result model.json --json
+    python report_validator.py --html /path/to/report.html --report-type data_insufficient_memo --source-validation-result source.json --json
 """
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Sequence
 from pathlib import Path
 
 try:
@@ -34,14 +35,29 @@ class CheckResult:
 
 
 class ReportValidator:
-    def __init__(self, html_content: str):
+    def __init__(
+        self,
+        html_content: str,
+        source_gate: Optional[Dict[str, Any]] = None,
+        model_gate: Optional[Dict[str, Any]] = None,
+        report_type: str = "auto",
+    ):
         self.soup = BeautifulSoup(html_content, "html.parser")
         self.results: List[CheckResult] = []
+        self.source_gate = source_gate or gate_not_provided("source")
+        self.model_gate = model_gate or gate_not_provided("model")
+        self.report_type = self.detect_report_type(report_type)
 
     def run_all(self, mode: str = "auto") -> List[CheckResult]:
         """Run all checks. mode: 'tear_sheet', 'equity_report', or 'auto' (detect from HTML)."""
         if mode == "auto":
             mode = self.detect_mode()
+
+        self.check_validation_gates()
+
+        if self.report_type in {"data_insufficient_memo", "model_blocked_memo"}:
+            self.check_blocked_memo_content()
+            return self.results
 
         # --- Shared checks (both modes) ---
         self.check_exhibit_continuity()
@@ -69,6 +85,35 @@ class ReportValidator:
 
         return self.results
 
+    def detect_report_type(self, requested_type: str) -> str:
+        """Detect full report vs blocked memo."""
+        if requested_type != "auto":
+            return requested_type
+        text = self.soup.get_text(" ", strip=True).lower()
+        if any(
+            marker in text
+            for marker in (
+                "data_insufficient_memo",
+                "data insufficient memo",
+                "data insufficiency memo",
+                "数据不足",
+                "关键数据缺失",
+            )
+        ):
+            return "data_insufficient_memo"
+        if any(
+            marker in text
+            for marker in (
+                "model_blocked_memo",
+                "model blocked memo",
+                "model blocked",
+                "模型阻断",
+                "模型受阻",
+            )
+        ):
+            return "model_blocked_memo"
+        return "full_report"
+
     def detect_mode(self) -> str:
         """Auto-detect whether this is a tear sheet or equity report."""
         text = self.soup.get_text()
@@ -80,6 +125,90 @@ class ReportValidator:
             self.soup.find(class_="sensitivity-matrix") is not None,
         ]
         return "equity_report" if sum(equity_signals) >= 2 else "tear_sheet"
+
+    def check_validation_gates(self):
+        """Enforce source/model validation result gates."""
+        memo_mode = self.report_type in {"data_insufficient_memo", "model_blocked_memo"}
+
+        source_allowed = self.source_gate["passed"] or memo_mode
+        self.results.append(CheckResult(
+            "source_validation_gate",
+            source_allowed,
+            gate_message("source", self.source_gate, memo_mode),
+            gate_details(self.source_gate),
+        ))
+
+        model_allowed = self.model_gate["passed"] or memo_mode
+        self.results.append(CheckResult(
+            "model_validation_gate",
+            model_allowed,
+            gate_message("model", self.model_gate, memo_mode),
+            gate_details(self.model_gate),
+        ))
+
+    def check_blocked_memo_content(self):
+        """Blocked reports are allowed only when they explain why full reporting is disabled."""
+        text = self.soup.get_text(" ", strip=True)
+        text_lower = text.lower()
+
+        required_patterns = {
+            "blocked_reason": (
+                r"blocked reason",
+                r"model blocked",
+                r"data insufficient",
+                r"阻断原因",
+                r"受阻原因",
+                r"数据不足",
+            ),
+            "missing_critical_data": (
+                r"missing critical data",
+                r"missing data",
+                r"source gap",
+                r"关键数据缺失",
+                r"缺失关键数据",
+                r"来源缺口",
+            ),
+            "disabled_valuation_methods": (
+                r"disabled valuation methods",
+                r"disabled methods",
+                r"method disabled",
+                r"估值方法禁用",
+                r"禁用估值方法",
+                r"不可用估值方法",
+            ),
+        }
+
+        for check_name, patterns in required_patterns.items():
+            passed = matches_any(text_lower, patterns)
+            self.results.append(CheckResult(
+                f"blocked_memo_{check_name}",
+                passed,
+                f"Blocked memo contains {check_name.replace('_', ' ')}" if passed else
+                f"Blocked memo must contain {check_name.replace('_', ' ')}.",
+                [] if passed else [f"Accepted markers: {', '.join(patterns)}"],
+            ))
+
+        prohibited_patterns = (
+            r"\bbuy\b",
+            r"\bsell\b",
+            r"\bhold\b",
+            r"买入",
+            r"卖出",
+            r"持有",
+            r"target price",
+            r"price target",
+            r"目标价",
+            r"probability-weighted target",
+            r"概率加权目标",
+        )
+        prohibited_hits = [pattern for pattern in prohibited_patterns if re.search(pattern, text_lower, re.IGNORECASE)]
+        self.results.append(CheckResult(
+            "blocked_memo_no_prohibited_outputs",
+            not prohibited_hits,
+            "Blocked memo avoids rating, target-price, buy/sell, and probability-weighted target language" if not prohibited_hits else
+            "Blocked memo contains prohibited valuation/rating language.",
+            prohibited_hits,
+        ))
 
     def check_exhibit_continuity(self):
         """检查 Exhibit 编号是否连续"""
@@ -726,9 +855,18 @@ class ReportValidator:
         ))
 
 
-def print_results(results: List[CheckResult], use_json: bool = False):
+def print_results(
+    results: List[CheckResult],
+    use_json: bool = False,
+    report_type: str = "full_report",
+    source_gate: Optional[Dict[str, Any]] = None,
+    model_gate: Optional[Dict[str, Any]] = None,
+):
     if use_json:
         output = {
+            "report_type": report_type,
+            "source_gate": source_gate or gate_not_provided("source"),
+            "model_gate": model_gate or gate_not_provided("model"),
             "summary": {
                 "total": len(results),
                 "passed": sum(1 for r in results if r.passed),
@@ -744,12 +882,16 @@ def print_results(results: List[CheckResult], use_json: bool = False):
                 for r in results
             ],
         }
-        import json
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
         print("=" * 60)
         print("研报结构预检结果")
         print("=" * 60)
+        print(f"报告类型: {report_type}")
+        if source_gate:
+            print(f"Source gate: {source_gate.get('status')} ({source_gate.get('message')})")
+        if model_gate:
+            print(f"Model gate: {model_gate.get('status')} ({model_gate.get('message')})")
         passed_count = sum(1 for r in results if r.passed)
         print(f"通过: {passed_count}/{len(results)}")
         print("-" * 60)
@@ -767,12 +909,127 @@ def print_results(results: List[CheckResult], use_json: bool = False):
             print("所有结构检查通过，可进行下一步人工质量检查。")
 
 
+def load_json_file(path: Optional[str], gate_name: str) -> Dict[str, Any]:
+    if not path:
+        return gate_not_provided(gate_name)
+    result_path = Path(path)
+    if not result_path.exists():
+        return {
+            "gate": gate_name,
+            "path": str(result_path),
+            "status": "not_found",
+            "passed": False,
+            "message": f"{gate_name} validation result file not found.",
+            "summary": {},
+            "issues": [{"code": "VALIDATION_RESULT_NOT_FOUND", "message": str(result_path)}],
+        }
+    try:
+        return evaluate_gate(json.loads(result_path.read_text(encoding="utf-8-sig")), gate_name, result_path)
+    except Exception as exc:
+        return {
+            "gate": gate_name,
+            "path": str(result_path),
+            "status": "parse_failed",
+            "passed": False,
+            "message": f"{gate_name} validation result could not be parsed: {exc}",
+            "summary": {},
+            "issues": [{"code": "VALIDATION_RESULT_PARSE_FAILED", "message": str(exc)}],
+        }
+
+
+def evaluate_gate(payload: Dict[str, Any], gate_name: str, path: Path) -> Dict[str, Any]:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    issues = payload.get("issues") if isinstance(payload.get("issues"), list) else []
+
+    if gate_name == "source":
+        gate_passed = (
+            payload.get("passed") is True
+            and payload.get("source_manifest_status") == "sufficient"
+            and payload.get("data_insufficient_memo_required") is False
+            and int(summary.get("errors", 0) or 0) == 0
+        )
+        status = "passed" if gate_passed else "failed"
+        message = (
+            "source manifest validation passed"
+            if gate_passed
+            else "source manifest validation failed or is insufficient"
+        )
+    else:
+        gate_passed = (
+            payload.get("passed") is True
+            and payload.get("model_validation_status") == "passed"
+            and payload.get("report_generation_allowed") is True
+            and int(summary.get("errors", 0) or 0) == 0
+        )
+        status = "passed" if gate_passed else "failed"
+        message = (
+            "model validation passed"
+            if gate_passed
+            else "model validation failed or report generation is blocked"
+        )
+
+    return {
+        "gate": gate_name,
+        "path": str(path),
+        "status": status,
+        "passed": gate_passed,
+        "message": message,
+        "summary": summary,
+        "issues": issues,
+    }
+
+
+def gate_not_provided(gate_name: str) -> Dict[str, Any]:
+    return {
+        "gate": gate_name,
+        "path": None,
+        "status": "not_provided",
+        "passed": False,
+        "message": f"{gate_name} validation result path was not provided.",
+        "summary": {},
+        "issues": [{"code": "VALIDATION_RESULT_NOT_PROVIDED", "message": f"--{gate_name}-validation-result is required for full reports"}],
+    }
+
+
+def gate_message(gate_name: str, gate: Dict[str, Any], memo_mode: bool) -> str:
+    if gate.get("passed"):
+        return f"{gate_name} gate passed."
+    if memo_mode:
+        return f"{gate_name} gate is {gate.get('status')}; blocked memo mode may pass if memo content is complete."
+    return f"{gate_name} gate failed for full report: {gate.get('message')}"
+
+
+def gate_details(gate: Dict[str, Any]) -> List[str]:
+    details = [f"status={gate.get('status')}", f"path={gate.get('path')}"]
+    summary = gate.get("summary") or {}
+    if summary:
+        details.append(f"errors={summary.get('errors', 0)}")
+        details.append(f"warnings={summary.get('warnings', 0)}")
+    issues = gate.get("issues") or []
+    for issue in issues[:5]:
+        if isinstance(issue, dict):
+            details.append(f"{issue.get('code')}: {issue.get('message')}")
+    return details
+
+
+def matches_any(text: str, patterns: Sequence[str]) -> bool:
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
 def main():
     parser = argparse.ArgumentParser(description="研报结构自动化预检脚本")
     parser.add_argument("--html", type=str, required=True, help="报告 HTML 文件路径")
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出")
     parser.add_argument("--mode", choices=["tear_sheet", "equity_report", "auto"],
                        default="auto", help="报告模式 (default: auto-detect)")
+    parser.add_argument("--source-validation-result", type=str, help="Path to source_manifest_validator.py JSON output")
+    parser.add_argument("--model-validation-result", type=str, help="Path to model_validator.py JSON output")
+    parser.add_argument(
+        "--report-type",
+        choices=["auto", "full_report", "data_insufficient_memo", "model_blocked_memo"],
+        default="auto",
+        help="Report generation state. Blocked memo reports use memo-specific QA.",
+    )
     args = parser.parse_args()
 
     path = Path(args.html)
@@ -781,9 +1038,22 @@ def main():
         sys.exit(1)
 
     html_content = path.read_text(encoding="utf-8")
-    validator = ReportValidator(html_content)
+    source_gate = load_json_file(args.source_validation_result, "source")
+    model_gate = load_json_file(args.model_validation_result, "model")
+    validator = ReportValidator(
+        html_content,
+        source_gate=source_gate,
+        model_gate=model_gate,
+        report_type=args.report_type,
+    )
     results = validator.run_all(mode=args.mode)
-    print_results(results, use_json=args.json)
+    print_results(
+        results,
+        use_json=args.json,
+        report_type=validator.report_type,
+        source_gate=source_gate,
+        model_gate=model_gate,
+    )
 
     # 如果有失败项，返回非零退出码
     if any(not r.passed for r in results):

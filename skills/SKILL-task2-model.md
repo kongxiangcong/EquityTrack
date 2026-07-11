@@ -30,6 +30,7 @@ description: "Task 2 of equity report workflow (L2 only). Builds a source-gated,
 - ✅ DCF, if allowed: WACC calculated from CAPM, not hardcoded. FCFF discounted with formulas and source IDs for every input.
 - ✅ Sensitivity matrix: Use formulas tied to the selected method. WACC × Terminal Growth applies only when DCF is allowed.
 - ✅ Comps table: ≥5 peers with statistical summary (Max/75th/Median/25th/Min)
+- ✅ After workbook generation, run `scripts/model_validator.py` and write `model_validation_result_path`
 - ✅ Financial firms: ordinary FCFF/WACC DCF is disabled; use equity-model methods such as P/B x ROE/COE, DDM, residual income, or excess return
 - ✅ Pre-revenue or pipeline-driven biopharma: use rNPV/SOTP; do not use ordinary consolidated DCF/PE as the primary method
 - ❌ Do not hardcode projected numbers — every projection must flow from Operating Drivers
@@ -45,8 +46,8 @@ description: "Task 2 of equity report workflow (L2 only). Builds a source-gated,
 - 🟢 Green font = cross-sheet link (references another tab)
 
 ### Task Boundary
-- ✅ If source validation passes: deliver Excel model (.xlsx) + Valuation Analysis document (.md) — then STOP
-- ✅ If source validation fails: deliver only `data_insufficient_memo` / `model_blocked_reason` — then STOP
+- ✅ If source validation passes and model validation passes: deliver Excel model (.xlsx) + model validation JSON + Valuation Analysis document (.md) — then STOP
+- ✅ If source or model validation fails: deliver only `data_insufficient_memo` / `model_blocked_reason` plus validation JSON evidence — then STOP
 - ❌ **Do not continue to Task 3.** Wait for user's continuation signal.
 - ❌ **Do not create summary documents or extra files.** Deliver only the applicable output set for the validation state.
 
@@ -117,6 +118,13 @@ Official-first fallback:
 - **US**: SEC EDGAR filings, companyfacts/companyconcept XBRL APIs, company IR reports. Yahoo is acceptable for price/market data, not as sole financial-statement authority.
 - **Comparable companies**: official filings for financials; exchange/terminal/Yahoo for market data with timestamp and field definition.
 
+Kimi missing-data fallback:
+- If Task 1 source validation failed only because specific fields are missing, and the user asks to retry data collection or Kimi is available for the run, use the Kimi Code CLI / `kimi-datasource` workflow in `references/data-sources.md` before deciding whether Task 2 is permanently blocked.
+- Ask Kimi for the exact missing fields only. Save request prompts, raw responses, parsed JSON, and QA/conflict notes in the run output directory.
+- Kimi output does not bypass source validation. Promote a value into `source_manifest` only after local QA confirms field meaning, period, unit, currency, and provenance.
+- If Kimi returns `missing`, `ambiguous`, conflicting, or low-provenance data, keep the field `missing`; do not create model placeholders, default values, zeros, averages, or synthetic assumptions.
+- After integrating any usable Kimi output, re-run `scripts/source_manifest_validator.py` and read the validator JSON before workbook construction. Task 2 can proceed only if the validator passes and selected-method critical inputs are complete.
+
 If an official route or required API/tool is unavailable, record `tool_unavailable` and `missing_data` in the source manifest. If the missing item is required for the selected method, degrade to `data_insufficient_memo`.
 
 Data to fetch that may not be in the research document:
@@ -177,7 +185,7 @@ PHASE C — Valuation Tabs (only selected methods)
   12. Scenarios                 → Bull/Base/Bear ranges; probability-weighted only with sourced probability basis
 ```
 
-**If using environment skills**: After the operating model completes, verify BS balance + cash tie-out BEFORE starting valuation tabs. After valuation tabs, verify all integrity checks (Step 5). If `source_manifest_status = insufficient`, stop at a data insufficient memo.
+**If using environment skills**: After the operating model completes, verify BS balance + cash tie-out BEFORE starting valuation tabs. After valuation tabs, run the executable model integrity checks in Step 5. If `source_manifest_status = insufficient` or `model_validation_status = failed`, stop at a data insufficient memo / model blocked memo.
 
 ### Operating Drivers — Key Assumptions to Set
 
@@ -345,26 +353,40 @@ Include only when `user_requested_rating = true` and all data gates pass. Add no
 
 ## Step 5: Model Integrity Verification
 
-Run the applicable checks from `references/financial-model-spec.md` §Model Integrity Checks plus the executable source validation gate below. `source_manifest_validator.py` must already have produced a passed validation JSON before this step; full `model_validator.py` is still out of scope, so workbook formula checks remain manual for now.
+Run the executable workbook gate from `references/financial-model-spec.md` §Model Integrity Checks. `source_manifest_validator.py` must already have produced a passed validation JSON before this step; after the workbook is saved, `model_validator.py` must produce a JSON validation result before Task 2 is considered complete.
+
+Save the result beside the workbook:
+
+```bash
+python skills/scripts/model_validator.py \
+  --workbook {Company}_{Ticker}_Financial_Model_{Date}.xlsx \
+  --dcf-status {allowed|caution|disabled|not_selected} \
+  --company-type {general|financial|biopharma|pre_revenue_biopharma} \
+  --pretty > {Company}_{Ticker}_model_validation_{Date}.json
+```
+
+Task 2 output must record `model_validation_result_path` and read the JSON back before handoff. Full Task 3 report generation is allowed only when `passed = true`, `model_validation_status = passed`, and `report_generation_allowed = true`.
 
 | # | Check | Pass? |
 |---|-------|-------|
 | 1 | Source manifest validation JSON exists, was read, and has `passed = true` | ☐ |
 | 2 | Validation JSON has `source_manifest_status = sufficient` and `data_insufficient_memo_required = false` | ☐ |
-| 3 | Source manifest exists and every critical number has `source_id` or `missing` | ☐ |
-| 4 | Official-source coverage exists for latest critical financial statements | ☐ |
-| 5 | `valuation_method_router_result` exists with selected/caution/disabled methods | ☐ |
-| 6 | Disabled methods are not accidentally modeled as valuation conclusions | ☐ |
-| 7 | BS balances (all periods, if 3-statement model is applicable) | ☐ |
-| 8 | Cash ties (CF ending = BS cash, if 3-statement model is applicable) | ☐ |
-| 9 | Revenue ties (Rev Model = IS, if applicable) | ☐ |
-| 10 | Historical accuracy vs Raw Data <1% and source IDs match | ☐ |
-| 11 | DCF checks pass only if DCF allowed: WACC in range or explained, WACC > g, TV/EV disclosed | ☐ |
-| 12 | Sensitivity center equals base case for selected method | ☐ |
-| 13 | Comps stats no errors; minimum 3 usable peers or downgrade | ☐ |
-| 14 | Scenario probabilities have `probability_basis`; otherwise no probability-weighted value | ☐ |
+| 3 | `model_validator.py` result JSON exists, was read, and has `passed = true` | ☐ |
+| 4 | `model_validation_status = passed` and `report_generation_allowed = true` | ☐ |
+| 5 | Source manifest exists and every critical number has `source_id` or `missing` | ☐ |
+| 6 | Official-source coverage exists for latest critical financial statements | ☐ |
+| 7 | `valuation_method_router_result` exists with selected/caution/disabled methods | ☐ |
+| 8 | Disabled methods are not accidentally modeled as valuation conclusions | ☐ |
+| 9 | BS balances (all periods, if 3-statement model is applicable) | ☐ |
+| 10 | Cash ties (CF ending = BS cash, if 3-statement model is applicable) | ☐ |
+| 11 | Revenue ties (Rev Model = IS, if applicable) | ☐ |
+| 12 | Historical accuracy vs Raw Data <1% and source IDs match | ☐ |
+| 13 | DCF checks pass only if DCF allowed: FCFF, WACC, terminal value, equity bridge, WACC > g, and sensitivity center | ☐ |
+| 14 | DCF disabled / financial firm / biopharma restrictions pass executable validation | ☐ |
+| 15 | Comps stats no errors; minimum 3 usable peers or downgrade | ☐ |
+| 16 | Scenario probabilities have `probability_basis`; otherwise no probability-weighted value | ☐ |
 
-**All applicable checks must pass before delivery to Task 3.** If a critical source/method check fails, do not fix by inventing data; deliver `data_insufficient_memo` and STOP.
+**All applicable checks must pass before delivery to Task 3.** If `model_validator.py` fails, do not fix by inventing data or hiding method tabs; deliver `data_insufficient_memo` / `model_blocked_reason`, include `model_blocked_reason` from the validator, and STOP.
 
 ---
 
@@ -375,12 +397,15 @@ If source manifest validation failed, deliver only `{Company}_{Ticker}_Data_Insu
 If source manifest validation passed:
 
 1. Save `{Company}_{Ticker}_Financial_Model_{Date}.xlsx` to output directory
-2. Save `{Company}_{Ticker}_Valuation_Analysis_{Date}.md` to output directory
-3. Report:
+2. Run `model_validator.py` and save `{Company}_{Ticker}_model_validation_{Date}.json`
+3. Read the validator JSON back:
+   - If passed: continue to save `{Company}_{Ticker}_Valuation_Analysis_{Date}.md`
+   - If failed: save only `{Company}_{Ticker}_Model_Blocked_Reason_{Date}.md` or `{Company}_{Ticker}_Data_Insufficient_Memo_{Date}.md`; do not hand off full-report readiness
+4. Report:
    - Model summary (# tabs, # years projected)
    - Key outputs: Revenue CAGR, selected valuation methods, method-specific ranges, data quality grade
-   - Source manifest validation result path and source/method/model integrity checks passed, or data insufficient memo delivered
-4. Provide **continuation-ready message** to user:
+   - Source manifest validation result path, model validation result path, and source/method/model integrity checks passed, or data insufficient/model blocked memo delivered
+5. Provide **continuation-ready message** to user:
 
    **Chinese:**
    > ✅ Step 2 完成 — 财务模型与估值分析已生成。
@@ -402,6 +427,6 @@ If source manifest validation passed:
    > Next: Step 3 — Generate final PDF report (≥25 pages).
    > Just say **"next"**, **"continue"**, or **"下一步"** and I'll automatically proceed using all files generated in this session.
 
-5. **STOP.** Wait for user's continuation signal. Do not continue until user says "下一步"/"继续"/"continue"/"next".
+6. **STOP.** Wait for user's continuation signal. Do not continue until user says "下一步"/"继续"/"continue"/"next".
 
 ---
