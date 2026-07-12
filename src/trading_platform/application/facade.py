@@ -18,8 +18,10 @@ from trading_platform.domain.data import SyncRequest, SyncResult
 from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
+from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
+from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
 
-from .ports import ChartPort, DataSyncPort, PlanPort, PlatformPersistence, ResearchWorkflowPort
+from .ports import ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort
 
 
 class ApplicationFacade:
@@ -27,12 +29,13 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
         self._chart = chart
         self._plans = plans
+        self._market = market
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -173,3 +176,19 @@ class ApplicationFacade:
 
     def get_plan_version_diff(self, draft_id: str):
         return self.get_plan_confirmation(draft_id).diff
+
+    def build_market_snapshot(self, command: BuildMarketSnapshotCommand) -> MarketSnapshotView:
+        if self._market is None: raise RuntimeError("market unavailable")
+        return self._market.build_market_snapshot(command)
+
+    def evaluate_plan(self, command: EvaluatePlanCommand) -> PlanEvaluationView:
+        if self._market is None: raise RuntimeError("market unavailable")
+        return self._market.evaluate_plan(command)
+
+    def get_market_snapshot_detail(self, market_snapshot_id: str) -> MarketSnapshotView:
+        if self._market is None: raise RuntimeError("market unavailable")
+        return self._market.get_market_snapshot(market_snapshot_id)
+
+    def get_plan_evaluation_detail(self, evaluation_id: str) -> PlanEvaluationView:
+        if self._market is None: raise RuntimeError("market unavailable")
+        return self._market.get_plan_evaluation(evaluation_id)

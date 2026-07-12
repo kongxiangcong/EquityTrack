@@ -174,6 +174,8 @@ class DataRepository:
         with self.writer_lock.acquire(f"snapshot:{snapshot_id}"):
             with self.connection:
                 self.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (snapshot_id, request.security_id, request.snapshot_purpose.value, request.requested_date, effective_session, request.as_of_at.isoformat(), request.market_timezone, calendar_version, "query@1", "source@1", "freshness@1", membership_hash, freshness.value, "blocking" if quality is QualityStatus.BLOCKING else "pass", expected, len(eligible_ids), excluded, missing, stale_by_days, "effective_complete_session", last_success_at))
+                if universe is not None:
+                    self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], request.market))
                 for ordinal, (version_id, role) in enumerate(eligible_members):
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", (snapshot_id, version_id, role, ordinal))
         status = SyncStatus.BLOCKED if quality is QualityStatus.BLOCKING else SyncStatus.COMPLETE

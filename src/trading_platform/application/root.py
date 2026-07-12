@@ -14,6 +14,8 @@ from equity_research import ResearchEngine
 from trading_platform.chart import ChartService
 from trading_platform.persistence.plans import SQLitePlanRepository
 from trading_platform.plans import PlanService
+from trading_platform.market import MarketEvaluationService
+from trading_platform.persistence.market import SQLiteMarketRepository
 
 from .facade import ApplicationFacade
 
@@ -27,6 +29,7 @@ class ProductionCompositionRoot:
         research_workflow = None
         chart = None
         plans = None
+        market = None
         if data_root is not None:
             root = Path(__file__).resolve().parents[3]
             self._store = PlatformStore(data_root, migrations_root or root / "migrations")
@@ -38,7 +41,8 @@ class ProductionCompositionRoot:
             research_workflow = ResearchWorkflowService(workflow_repository, ResearchAdapter(research_engine or ResearchEngine()), SnapshotToResearchRequestAssembler(), root)
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))
-        self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans)
+            market = MarketEvaluationService(SQLiteMarketRepository(self._store.connection, self._store.writer_lock), plans)
+        self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans, market)
 
     @property
     def facade(self) -> ApplicationFacade:

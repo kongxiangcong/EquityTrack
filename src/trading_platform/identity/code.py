@@ -54,7 +54,7 @@ def build_code_identity(root: Path, deterministic_config: object) -> CodeIdentit
     model_policy = [
         root / name
         for name in tracked + untracked
-        if name.startswith(("src/trading_platform/market/", "src/trading_platform/plans/", "src/equity_research/"))
+        if name.startswith(("src/trading_platform/market/", "src/trading_platform/plans/", "src/trading_platform/domain/market.py", "src/trading_platform/market.py", "src/equity_research/"))
         and name.endswith(".py")
     ]
     licenses = [root / name for name in tracked + untracked if Path(name).name.lower().startswith(("license", "notice", "third_party"))]

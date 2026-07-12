@@ -190,11 +190,13 @@ _RULE_KINDS = {"entry_review", "adjustment_review", "exit_review", "invalidation
 _EFFECTS = {"prompt_review", "mark_invalidation_candidate", "mark_risk_limit_breach", "block_user_intent", "observe"}
 _APPLIES = {"entry", "increase", "decrease", "exit", "plan"}
 _OPERATORS = {"eq", "ne", "lt", "lte", "gt", "gte", "between", "crosses_above", "crosses_below", "changed_to"}
-_METRICS = {"security.close_unadjusted", "security.close_adjusted", "market.trend", "market.breadth", "market.liquidity", "market.volatility", "position.quantity", "portfolio.net_asset_value"}
+_METRICS = {"security.close_unadjusted", "security.close_adjusted", "security.suspended", "security.limit_state", "market.trend", "market.breadth", "market.liquidity", "market.volatility", "position.quantity", "portfolio.net_asset_value"}
 _OBSERVATIONS = {"current_complete_session", "previous_complete_session"}
 _METRIC_TYPES = {
     "security.close_unadjusted": ("decimal", "CNY_per_share", {"CNY"}),
     "security.close_adjusted": ("decimal", "CNY_per_share", {"CNY"}),
+    "security.suspended": ("bool", "market_status", {"true", "false"}),
+    "security.limit_state": ("enum", "security_limit_state", {"up", "down", "none"}),
     "market.trend": ("enum", "market_trend", {"up", "down", "mixed"}),
     "market.breadth": ("enum", "market_breadth", {"broad", "narrow", "mixed"}),
     "market.liquidity": ("enum", "market_liquidity", {"ample", "normal", "thin"}),
@@ -284,7 +286,7 @@ def _validate_condition(condition: PlanCondition, currency: str) -> set[str]:
                 raise PlanValidationError("PLAN_CONDITION_INVALID")
         elif constant.secondary_value is not None:
             raise PlanValidationError("PLAN_CONDITION_INVALID")
-    elif expected_type == "enum":
+    elif expected_type in {"enum", "bool"}:
         if constant.value not in allowed or constant.secondary_value is not None:
             raise PlanValidationError("PLAN_CONDITION_INVALID")
     return {condition.metric_ref}
