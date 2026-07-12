@@ -1,0 +1,1 @@
+"""Pure platform domain contracts."""

@@ -1,0 +1,53 @@
+{
+  "fixture_pack_id": "yihua-002897-20260710-derived-facts@1",
+  "captured_at": "2026-07-12T04:27:47.8408380Z",
+  "source_identity": "preconfigured_tushare_compatible_non_official",
+  "source_authority": "structured_aggregator",
+  "safe_capture_sha256": "ed5e784c2f4f335b430783f1e5160add4e1df086559748a679f30b95df758e11",
+  "datasets": ["daily", "trade_cal", "stock_basic"],
+  "raw_response_committed": false,
+  "raw_response_distribution_qualification": "external_blocked",
+  "derived_fact_fixture": {
+    "local_storage_allowed": true,
+    "deterministic_replay_allowed": true,
+    "repository_redistribution_allowed": true,
+    "packaged_distribution_allowed": true,
+    "terms_version": "derived-fact-fixture-terms@1",
+    "reviewed_on": "2026-07-12"
+  },
+  "members": [
+    {
+      "member_id": "trade_cal",
+      "payload_sha256": "1ee9990736b47d2b0d0ea4895cd5bfaf3b39cfcfe3cd80a533572d84aded98a6",
+      "classification": "real_derived_facts",
+      "source_request": {"api_name": "trade_cal", "exchange": "SZSE", "start_date": "20260710", "end_date": "20260711"},
+      "source_evidence": ["safe_capture_sha256", "https://tushare.pro/document/2?doc_id=26"],
+      "availability_policy": "documented_calendar_and_weekend_rule@1",
+      "rights": {"local_storage_allowed": true, "deterministic_replay_allowed": true, "repository_redistribution_allowed": true, "packaged_distribution_allowed": true}
+    },
+    {
+      "member_id": "market_universe",
+      "payload_sha256": "613b73bc05c168ca0dda13de97d136db153cd31a728dd3bc16f88fb1106f48c8",
+      "classification": "real_derived_identity_plus_synthetic_sentinels",
+      "source_request": {"api_name": "stock_basic", "ts_code": "002897.SZ"},
+      "source_evidence": ["safe_capture_sha256", "https://disc.static.szse.cn/disc/disk03/finalpage/2024-04-16/8b51ef5b-9296-451d-ba9f-f29501d33c8d.PDF"],
+      "availability_policy": "official_identifier_history_plus_explicit_sentinels@1",
+      "rights": {"local_storage_allowed": true, "deterministic_replay_allowed": true, "repository_redistribution_allowed": true, "packaged_distribution_allowed": true}
+    },
+    {
+      "member_id": "daily",
+      "payload_sha256": "15ce2173e7baa236d3f9c8cad88b9443c0929f95f9ada0783769a3370f9c3efb",
+      "classification": "real_derived_ohlcv_plus_future_sentinel",
+      "source_request": {"api_name": "daily", "ts_code": "002897.SZ", "trade_date": "20260710"},
+      "source_evidence": ["safe_capture_sha256", "https://tushare.pro/document/1?doc_id=27"],
+      "availability_policy": "documented_market_close_plus_provider_delay@1",
+      "rights": {"local_storage_allowed": true, "deterministic_replay_allowed": true, "repository_redistribution_allowed": true, "packaged_distribution_allowed": true}
+    }
+  ],
+  "sentinels": [
+    "synthetic-contract-sentinel:later-listing",
+    "synthetic-contract-sentinel:later-delisting",
+    "future-available-at revision"
+  ],
+  "notes": "Market facts are transcribed into a minimal self-authored contract fixture; synthetic sentinels are explicitly non-factual and exist only to prove PIT fail-closed behavior. No gateway credential or original response is included."
+}

@@ -14,7 +14,9 @@ from .contracts import (
     DoctorReport,
     WatchlistView,
 )
-from .ports import PlatformPersistence
+from trading_platform.domain.data import SyncRequest, SyncResult
+
+from .ports import DataSyncPort, PlatformPersistence
 
 
 class ApplicationFacade:
@@ -22,8 +24,9 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None) -> None:
         self._store = store
+        self._data_sync = data_sync
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -33,7 +36,7 @@ class ApplicationFacade:
             capabilities={
                 Capability.HEALTH: CapabilityStatus.AVAILABLE,
                 Capability.PERSISTENCE: CapabilityStatus.AVAILABLE if self._store is not None else CapabilityStatus.UNAVAILABLE,
-                Capability.SYNC: CapabilityStatus.UNAVAILABLE,
+                Capability.SYNC: CapabilityStatus.AVAILABLE if self._data_sync is not None else CapabilityStatus.UNAVAILABLE,
                 Capability.DAILY: CapabilityStatus.UNAVAILABLE,
                 Capability.SERVE: CapabilityStatus.UNAVAILABLE,
             },
@@ -60,3 +63,8 @@ class ApplicationFacade:
         if self._store is None:
             return DoctorReport("failed", (), ("PERSISTENCE_UNAVAILABLE",))
         return self._store.doctor()
+
+    def sync_data(self, request: SyncRequest) -> SyncResult:
+        if self._data_sync is None:
+            raise RuntimeError("sync unavailable")
+        return self._data_sync.sync(request)
