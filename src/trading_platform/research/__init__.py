@@ -1,3 +1,4 @@
 from .adapter import ResearchAdapter
+from .assembler import ProjectionError, SnapshotToResearchRequestAssembler
 
-__all__ = ["ResearchAdapter"]
+__all__ = ["ProjectionError", "ResearchAdapter", "SnapshotToResearchRequestAssembler"]

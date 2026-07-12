@@ -15,8 +15,9 @@ from .contracts import (
     WatchlistView,
 )
 from trading_platform.domain.data import SyncRequest, SyncResult
+from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 
-from .ports import DataSyncPort, PlatformPersistence
+from .ports import DataSyncPort, PlatformPersistence, ResearchWorkflowPort
 
 
 class ApplicationFacade:
@@ -24,9 +25,10 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
+        self._research_workflow = research_workflow
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -68,3 +70,18 @@ class ApplicationFacade:
         if self._data_sync is None:
             raise RuntimeError("sync unavailable")
         return self._data_sync.sync(request)
+
+    def run_research_workflow(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult:
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.run(request)
+
+    def get_workflow_history(self, workflow_run_id: str) -> WorkflowHistory:
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.get_history(workflow_run_id)
+
+    def get_artifact_manifest(self, manifest_id: str) -> ArtifactManifestView:
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.get_manifest(manifest_id)

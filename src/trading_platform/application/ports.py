@@ -1,6 +1,7 @@
 from typing import Protocol
 from .contracts import DoctorReport, SecurityIdentity, WatchlistView
 from trading_platform.domain.data import SyncRequest, SyncResult
+from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 
 class PlatformPersistence(Protocol):
     def add_watchlist_item(self, invocation_id: str, security: SecurityIdentity) -> WatchlistView: ...
@@ -10,3 +11,9 @@ class PlatformPersistence(Protocol):
 
 class DataSyncPort(Protocol):
     def sync(self, request: SyncRequest) -> SyncResult: ...
+
+
+class ResearchWorkflowPort(Protocol):
+    def run(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult: ...
+    def get_history(self, workflow_run_id: str) -> WorkflowHistory: ...
+    def get_manifest(self, manifest_id: str) -> ArtifactManifestView: ...
