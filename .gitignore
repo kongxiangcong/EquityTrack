@@ -8,4 +8,5 @@ build/
 dist/
 *.egg-info/
 outputs/
+docs/data/
 skills/scripts/fixtures/model_workbooks/generated/

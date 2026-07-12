@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Mapping, Optional
+
+
+class CapabilityStatus(str, Enum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class ApplicationStatus(str, Enum):
+    AVAILABLE_WITH_LIMITS = "available_with_limits"
+
+
+class Capability(str, Enum):
+    HEALTH = "health"
+    PERSISTENCE = "persistence"
+    SYNC = "sync"
+    DAILY = "daily"
+    SERVE = "serve"
+
+
+class ErrorCode(str, Enum):
+    CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
+
+
+CONTRACT_VERSION = "application-contract@1"
+
+
+@dataclass(frozen=True)
+class ApplicationError:
+    code: ErrorCode
+    message: str
+    retryable: bool = False
+    schema_version: str = CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class HealthQuery:
+    include_diagnostics: bool = False
+    schema_version: str = CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class HealthResult:
+    status: ApplicationStatus
+    application_version: str
+    capabilities: Mapping[Capability, CapabilityStatus]
+    schema_version: str = CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class PlatformCommand:
+    invocation_id: str
+    capability: Capability
+    schema_version: str = CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class CapabilityResult:
+    status: CapabilityStatus
+    error: Optional[ApplicationError]
+    schema_version: str = CONTRACT_VERSION
