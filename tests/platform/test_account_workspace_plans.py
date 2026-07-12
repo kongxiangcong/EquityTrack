@@ -7,6 +7,7 @@ from urllib.request import urlopen
 
 from trading_platform.account import AccountOpeningService
 from trading_platform.account_history import AccountHistoryImportService
+from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.application.market_contracts import EvaluatePlanCommand
 from trading_platform.web_server import LocalChartWorkspaceServer
 from trading_platform.domain.market import evaluate_rules
@@ -126,6 +127,29 @@ def test_workspace_distinguishes_position_and_plan_freezes_account_snapshot(
         ("2026-07-10",),
     )
     assert imported.account_history_snapshot_id is not None
+    suite_artifacts = tuple(
+        tmp_path / f"{name}.json"
+        for name in (
+            "account-import",
+            "workspace-browser",
+            "backup-restore",
+            "full-regression",
+        )
+    )
+    for artifact in suite_artifacts:
+        artifact.write_text('{"status":"passed"}', encoding="utf-8")
+    manifest_path = AccountAcceptanceService(
+        tmp_path / "data", Path.cwd() / "migrations"
+    ).write_manifest(opening.account_id, suite_artifacts)
+    acceptance = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert acceptance["checks"] == {
+        "current_state_initialized": True,
+        "cash_reconciled": True,
+        "positions_reconciled": True,
+        "history_complete": False,
+    }
+    assert acceptance["current_slice_complete"] is True
+    assert acceptance["long_term_platform_complete"] is False
     assert (
         root._store.connection.execute(
             "SELECT snapshot_id FROM plan_account_snapshot_reference WHERE plan_version_id=?",

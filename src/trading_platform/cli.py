@@ -25,6 +25,7 @@ from trading_platform.acceptance import AcceptanceEvidenceService
 from trading_platform.account_import import TonghuashunImportPreviewer
 from trading_platform.account import AccountOpeningService
 from trading_platform.account_history import AccountHistoryImportService
+from trading_platform.account_acceptance import AccountAcceptanceService
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -53,6 +54,7 @@ def _parser() -> argparse.ArgumentParser:
     initialize = sub.add_parser("account-initialize"); initialize.add_argument("--data-root", type=Path, required=True); initialize.add_argument("--source", type=Path, action="append", required=True); initialize.add_argument("--account-alias", required=True); initialize.add_argument("--base-currency", required=True); initialize.add_argument("--confirmed-as-of", required=True); initialize.add_argument("--private-root", type=Path, required=True); initialize.add_argument("--trading-session", action="append", required=True); initialize.add_argument("--invocation-id", required=True); initialize.add_argument("--repo-root", type=Path, default=Path.cwd())
     account_show = sub.add_parser("account-show"); account_show.add_argument("--data-root", type=Path, required=True); account_show.add_argument("--account-id", required=True); account_show.add_argument("--repo-root", type=Path, default=Path.cwd())
     history_import = sub.add_parser("account-history-import"); history_import.add_argument("--data-root", type=Path, required=True); history_import.add_argument("--account-id", required=True); history_import.add_argument("--source", type=Path, action="append", required=True); history_import.add_argument("--private-root", type=Path, required=True); history_import.add_argument("--trading-session", action="append", default=[]); history_import.add_argument("--invocation-id", required=True); history_import.add_argument("--repo-root", type=Path, default=Path.cwd())
+    account_acceptance = sub.add_parser("account-acceptance"); account_acceptance.add_argument("--data-root", type=Path, required=True); account_acceptance.add_argument("--account-id", required=True); account_acceptance.add_argument("--suite-artifact", type=Path, action="append", required=True); account_acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
     return parser
 
 
@@ -120,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             result = asdict(AccountOpeningService(args.data_root, args.repo_root).get_detail(args.account_id))
         elif operation == "account-history-import":
             result = asdict(AccountHistoryImportService(args.data_root, args.repo_root).import_history(args.invocation_id, args.account_id, args.source, args.private_root, args.trading_session))
+        elif operation == "account-acceptance":
+            result = {"manifest": AccountAcceptanceService(args.data_root, args.repo_root / "migrations").write_manifest(args.account_id, tuple(args.suite_artifact)).name}
         elif operation == "serve":
             root = ProductionCompositionRoot(args.data_root); server = LocalChartWorkspaceServer(root.facade, args.web_root, args.security_id, args.snapshot_id)
             try:
