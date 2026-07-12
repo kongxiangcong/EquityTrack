@@ -23,7 +23,7 @@ from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlan
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
 
-from .ports import ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort, WorkspacePort
+from .ports import AccountPort, ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort, WorkspacePort
 
 
 class ApplicationFacade:
@@ -31,7 +31,7 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None, workspace: WorkspacePort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None, workspace: WorkspacePort | None = None, accounts: AccountPort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
@@ -39,6 +39,7 @@ class ApplicationFacade:
         self._plans = plans
         self._market = market
         self._workspace = workspace
+        self._accounts = accounts
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -113,6 +114,10 @@ class ApplicationFacade:
         if self._workspace is None:
             raise RuntimeError("workspace unavailable")
         return self._workspace.build(security_id, snapshot_id)
+
+    def get_account_opening(self, account_id: str):
+        if self._accounts is None: raise RuntimeError("accounts unavailable")
+        return self._accounts.get_detail(account_id)
 
     def authorize_workspace_update(self, invocation_id: str, security_id: str, requested_date: str, effective_session_date: str):
         if self._workspace is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -29,11 +30,15 @@ class WorkspaceService:
         manifests = self._all("SELECT DISTINCT m.artifact_manifest_id,m.manifest_role,m.producer_type,m.producer_id,m.membership_hash,m.created_at FROM artifact_manifest m JOIN workflow_run_ref r ON r.ref_type='ArtifactManifest' AND r.ref_id=m.artifact_manifest_id JOIN workflow_run w USING(workflow_run_id) JOIN research_reuse_decision d USING(workflow_run_id) JOIN research_run_record rr ON rr.research_run_id=d.research_run_id JOIN research_input_projection p ON p.research_projection_id=rr.research_projection_id WHERE p.security_id=? ORDER BY m.created_at", (security_id,))
         for manifest in manifests:
             manifest["members"] = self._all("SELECT member_order,artifact_id,member_role,direction FROM artifact_manifest_member WHERE artifact_manifest_id=? ORDER BY member_order", (manifest["artifact_manifest_id"],))
+        account_positions = self._all("SELECT a.account_id,a.alias,a.base_currency,a.initialized_at,c.amount_decimal AS opening_cash,c.source_date,c.confirmed_as_of,p.position_id,p.quantity_decimal,p.available_decimal,p.frozen_decimal,p.source_type,l.cost_price_decimal,l.source_row_identity,o.source_price_decimal,o.source_market_value_decimal,o.source_day_pnl_decimal,o.source_weight_decimal,o.source_as_of,s.limitations_json FROM account_position p JOIN account a USING(account_id) JOIN account_cash_opening c USING(account_id) JOIN account_position_lot l USING(position_id) JOIN account_position_observation o USING(position_id) JOIN portfolio_snapshot s USING(account_id) WHERE p.security_id=? ORDER BY a.initialized_at,p.position_id", (security_id,))
+        for position in account_positions:
+            position["limitations"] = json.loads(position.pop("limitations_json"))
         return {
             "task": {"security_id": security_id, "snapshot_id": snapshot_id, **(snapshot or {})},
             "changes": self._all("SELECT p.plan_id,p.lifecycle_status,a.plan_version_id AS active_version_id,a.started_at AS updated_at FROM trade_plan p LEFT JOIN plan_activation a ON a.plan_id=p.plan_id AND a.ended_at IS NULL WHERE p.security_id=? ORDER BY coalesce(a.started_at,p.created_at) DESC", (security_id,)),
             "update_authorizations": self._all("SELECT update_authorization_id,requested_date,effective_session_date,scope,created_at FROM update_authorization WHERE security_id=? ORDER BY created_at DESC", (security_id,)),
             "plan_drafts": self._all("SELECT draft_id,plan_id,based_on_version_id,revision,status,content_hash,created_at,updated_at FROM trade_plan_draft WHERE security_id=? ORDER BY updated_at DESC", (security_id,)),
+            "account_opening_state": account_positions,
             "history": {
                 "workflows": workflows,
                 "data_snapshots": self._all("SELECT data_snapshot_id,snapshot_purpose,requested_date,effective_session_date,as_of_at,freshness_status,quality_status,query_policy_version,source_policy_version FROM data_snapshot WHERE scope_id=? ORDER BY as_of_at", (security_id,)),
