@@ -12,6 +12,12 @@ test("workspace is task-first, progressively discloses provenance, and exposes f
   for(const kind of ["WorkflowRun","DataSnapshot","ResearchRun","ChartAnnotationVersion","TradePlanVersion","MarketSnapshot","PlanEvaluation","ArtifactManifest"]) assert.ok(app.includes(kind))
 })
 
+test("account context distinguishes positions and keeps provenance progressive",()=>{
+  for(const marker of ["当前仓位与现金","账户语境"]) assert.ok(html.includes(marker))
+  for(const marker of ["current_positions","security_relationship","account_snapshot_id","仓位数据缺失","能力限制"]) assert.ok(app.includes(marker))
+  for(const privateField of ["source_row_identity","source_object_sha256","private_root"]) assert.equal(app.includes(privateField),false)
+})
+
 test("workspace assets stay local and output uses text nodes",()=>{
   assert.equal(/(?:src|href)=["']https?:/i.test(html),false)
   assert.equal(/https?:\/\//i.test(app),false)

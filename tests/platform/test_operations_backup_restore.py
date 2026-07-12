@@ -74,7 +74,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
     with pytest.raises(OperationError, match="BACKUP_TARGET_EXISTS"):
         operations.backup(archive)
     migrated = operations.migrate()
-    full_backup = tmp_path / f"live-pre-migrate-v0010.zip"
+    full_backup = tmp_path / f"live-pre-migrate-v0011.zip"
     assert migrated["status"] == "passed" and full_backup.is_file()
     with zipfile.ZipFile(full_backup) as bundle:
         assert "platform.sqlite3" in bundle.namelist() and any(

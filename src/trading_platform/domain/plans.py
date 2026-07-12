@@ -74,6 +74,7 @@ class PlanDraftContent:
     user_input_source: str
     rationale: str
     adjusted_price_evidence: tuple[AdjustedPriceEvidence, ...] = ()
+    account_snapshot_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,11 +187,47 @@ class PlanValidationError(ValueError):
         self.code = code
 
 
-_RULE_KINDS = {"entry_review", "adjustment_review", "exit_review", "invalidation", "risk_limit", "market_gate", "observation"}
-_EFFECTS = {"prompt_review", "mark_invalidation_candidate", "mark_risk_limit_breach", "block_user_intent", "observe"}
+_RULE_KINDS = {
+    "entry_review",
+    "adjustment_review",
+    "exit_review",
+    "invalidation",
+    "risk_limit",
+    "market_gate",
+    "observation",
+}
+_EFFECTS = {
+    "prompt_review",
+    "mark_invalidation_candidate",
+    "mark_risk_limit_breach",
+    "block_user_intent",
+    "observe",
+}
 _APPLIES = {"entry", "increase", "decrease", "exit", "plan"}
-_OPERATORS = {"eq", "ne", "lt", "lte", "gt", "gte", "between", "crosses_above", "crosses_below", "changed_to"}
-_METRICS = {"security.close_unadjusted", "security.close_adjusted", "security.suspended", "security.limit_state", "market.trend", "market.breadth", "market.liquidity", "market.volatility", "position.quantity", "portfolio.net_asset_value"}
+_OPERATORS = {
+    "eq",
+    "ne",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "between",
+    "crosses_above",
+    "crosses_below",
+    "changed_to",
+}
+_METRICS = {
+    "security.close_unadjusted",
+    "security.close_adjusted",
+    "security.suspended",
+    "security.limit_state",
+    "market.trend",
+    "market.breadth",
+    "market.liquidity",
+    "market.volatility",
+    "position.quantity",
+    "portfolio.net_asset_value",
+}
 _OBSERVATIONS = {"current_complete_session", "previous_complete_session"}
 _METRIC_TYPES = {
     "security.close_unadjusted": ("decimal", "CNY_per_share", {"CNY"}),
@@ -206,61 +243,148 @@ _METRIC_TYPES = {
 }
 
 
-def validate_plan_content(content: PlanDraftContent, *, security_currency: str | None, snapshot_scope: str | None, resolved_research_ids: set[str], factor_sets: dict[str, tuple[str, str, str, str]]) -> None:
+def validate_plan_content(
+    content: PlanDraftContent,
+    *,
+    security_currency: str | None,
+    snapshot_scope: str | None,
+    resolved_research_ids: set[str],
+    factor_sets: dict[str, tuple[str, str, str, str]],
+    account_metrics_supported: bool = False,
+) -> None:
     if security_currency is None or snapshot_scope != content.security_id:
         raise PlanValidationError("PLAN_REFERENCE_INVALID")
     if content.currency != security_currency or content.currency != "CNY":
         raise PlanValidationError("PLAN_CURRENCY_INVALID")
-    notional, loss = _decimal(content.max_planned_notional), _decimal(content.max_planned_loss)
+    notional, loss = _decimal(content.max_planned_notional), _decimal(
+        content.max_planned_loss
+    )
     if loss > notional:
         raise PlanValidationError("PLAN_RISK_LIMIT_INVALID")
     try:
-        start, review, end = map(date.fromisoformat, (content.horizon_start, content.review_by, content.horizon_end))
+        start, review, end = map(
+            date.fromisoformat,
+            (content.horizon_start, content.review_by, content.horizon_end),
+        )
     except ValueError as error:
         raise PlanValidationError("PLAN_HORIZON_INVALID") from error
     if not start <= review <= end:
         raise PlanValidationError("PLAN_HORIZON_INVALID")
-    if content.user_input_source != "user_fixture_input" or not content.rationale or len(content.rationale) > 2000:
+    if (
+        content.user_input_source != "user_fixture_input"
+        or not content.rationale
+        or len(content.rationale) > 2000
+    ):
         raise PlanValidationError("PLAN_USER_INPUT_INVALID")
-    if not content.rules or len(content.rules) > 64 or len({rule.rule_id for rule in content.rules}) != len(content.rules):
+    if (
+        not content.rules
+        or len(content.rules) > 64
+        or len({rule.rule_id for rule in content.rules}) != len(content.rules)
+    ):
         raise PlanValidationError("PLAN_RULE_INVALID")
-    research_refs = [item for item in content.references if item.ref_type == "ResearchRun"]
-    if len(research_refs) != 1 or research_refs[0].resolution_status != "resolved" or research_refs[0].ref_id not in resolved_research_ids:
+    research_refs = [
+        item for item in content.references if item.ref_type == "ResearchRun"
+    ]
+    if (
+        len(research_refs) != 1
+        or research_refs[0].resolution_status != "resolved"
+        or research_refs[0].ref_id not in resolved_research_ids
+    ):
         raise PlanValidationError("PLAN_RESEARCH_REFERENCE_INVALID")
-    if any(item.ref_type not in {"ResearchRun", "Evidence"} or item.resolution_status not in {"resolved", "unresolved_external"} for item in content.references):
+    if any(
+        item.ref_type not in {"ResearchRun", "Evidence"}
+        or item.resolution_status not in {"resolved", "unresolved_external"}
+        for item in content.references
+    ):
         raise PlanValidationError("PLAN_REFERENCE_INVALID")
     if not any(item.ref_type == "Evidence" for item in content.references):
         raise PlanValidationError("PLAN_EVIDENCE_REFERENCE_REQUIRED")
     adjusted_paths: set[tuple[str, tuple[int, ...]]] = set()
     for rule in content.rules:
-        if rule.rule_kind not in _RULE_KINDS or rule.effect not in _EFFECTS or rule.applies_to not in _APPLIES:
+        if (
+            rule.rule_kind not in _RULE_KINDS
+            or rule.effect not in _EFFECTS
+            or rule.applies_to not in _APPLIES
+        ):
             raise PlanValidationError("PLAN_RULE_INVALID")
         metrics = _validate_condition(rule.condition, content.currency)
-        if metrics & {"position.quantity", "portfolio.net_asset_value"} and rule.input_applicability not in {"not_applicable", "unknown"}:
+        if (
+            metrics & {"position.quantity", "portfolio.net_asset_value"}
+            and rule.input_applicability == "applicable"
+            and not account_metrics_supported
+        ):
             raise PlanValidationError("PLAN_ACCOUNT_INPUT_APPLICABILITY_REQUIRED")
-        if not metrics & {"position.quantity", "portfolio.net_asset_value"} and rule.input_applicability != "applicable":
+        if (
+            metrics & {"position.quantity", "portfolio.net_asset_value"}
+            and rule.input_applicability != "applicable"
+            and account_metrics_supported
+        ):
+            raise PlanValidationError("PLAN_ACCOUNT_INPUT_APPLICABILITY_INVALID")
+        if (
+            not metrics & {"position.quantity", "portfolio.net_asset_value"}
+            and rule.input_applicability != "applicable"
+        ):
             raise PlanValidationError("PLAN_RULE_APPLICABILITY_INVALID")
-        adjusted_paths.update((rule.rule_id, path) for path, leaf in _leaves(rule.condition) if leaf.metric_ref == "security.close_adjusted")
-    evidence_by_path = {(item.rule_id, item.condition_path): item for item in content.adjusted_price_evidence}
+        adjusted_paths.update(
+            (rule.rule_id, path)
+            for path, leaf in _leaves(rule.condition)
+            if leaf.metric_ref == "security.close_adjusted"
+        )
+    evidence_by_path = {
+        (item.rule_id, item.condition_path): item
+        for item in content.adjusted_price_evidence
+    }
     if adjusted_paths and not evidence_by_path:
         raise PlanValidationError("PLAN_ADJUSTED_PRICE_EVIDENCE_REQUIRED")
     if set(evidence_by_path) != adjusted_paths:
         raise PlanValidationError("PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID")
     for evidence in content.adjusted_price_evidence:
-        adjusted, unadjusted, factor = _decimal(evidence.adjusted_price_decimal, True), _decimal(evidence.canonical_unadjusted_price_decimal, True), _decimal(evidence.factor_decimal, True)
+        adjusted, unadjusted, factor = (
+            _decimal(evidence.adjusted_price_decimal, True),
+            _decimal(evidence.canonical_unadjusted_price_decimal, True),
+            _decimal(evidence.factor_decimal, True),
+        )
         rule = next(item for item in content.rules if item.rule_id == evidence.rule_id)
         leaf = dict(_leaves(rule.condition))[evidence.condition_path]
         threshold = leaf.constant
         factor_provenance = factor_sets.get(evidence.factor_set_id)
-        if factor_provenance is None or factor_provenance[0] != content.data_snapshot_id or factor_provenance[1] != "unique_deterministic" or not factor_provenance[2] or factor_provenance[3] != evidence.algorithm_version or evidence.data_snapshot_id != content.data_snapshot_id or threshold is None or threshold.value != evidence.adjusted_price_decimal or evidence.algorithm_version != "deterministic_reverse@1" or adjusted * factor != unadjusted:
+        if (
+            factor_provenance is None
+            or factor_provenance[0] != content.data_snapshot_id
+            or factor_provenance[1] != "unique_deterministic"
+            or not factor_provenance[2]
+            or factor_provenance[3] != evidence.algorithm_version
+            or evidence.data_snapshot_id != content.data_snapshot_id
+            or threshold is None
+            or threshold.value != evidence.adjusted_price_decimal
+            or evidence.algorithm_version != "deterministic_reverse@1"
+            or adjusted * factor != unadjusted
+        ):
             raise PlanValidationError("PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID")
 
 
 def _validate_condition(condition: PlanCondition, currency: str) -> set[str]:
-    if condition.ast_version != "plan-condition-ast@1" or condition.node_kind not in {"leaf", "all", "any", "not"}:
+    if condition.ast_version != "plan-condition-ast@1" or condition.node_kind not in {
+        "leaf",
+        "all",
+        "any",
+        "not",
+    }:
         raise PlanValidationError("PLAN_AST_INVALID")
     if condition.node_kind != "leaf":
-        if any(value is not None for value in (condition.metric_ref, condition.operator, condition.constant, condition.observation)) or not condition.children or (condition.node_kind == "not" and len(condition.children) != 1):
+        if (
+            any(
+                value is not None
+                for value in (
+                    condition.metric_ref,
+                    condition.operator,
+                    condition.constant,
+                    condition.observation,
+                )
+            )
+            or not condition.children
+            or (condition.node_kind == "not" and len(condition.children) != 1)
+        ):
             raise PlanValidationError("PLAN_AST_INVALID")
         metrics: set[str] = set()
         for child in condition.children:
@@ -274,15 +398,35 @@ def _validate_condition(condition: PlanCondition, currency: str) -> set[str]:
         raise PlanValidationError("PLAN_CONDITION_INVALID")
     constant = condition.constant
     expected_type, expected_unit, allowed = _METRIC_TYPES[condition.metric_ref]
-    if constant.constant_type != expected_type or constant.unit != expected_unit or constant.currency not in {None, currency}:
+    if (
+        constant.constant_type != expected_type
+        or constant.unit != expected_unit
+        or constant.currency not in {None, currency}
+    ):
         raise PlanValidationError("PLAN_CONDITION_INVALID")
-    allowed_operators = {"eq", "ne", "lt", "lte", "gt", "gte", "between", "crosses_above", "crosses_below"} if expected_type == "decimal" else {"eq", "ne", "changed_to"}
+    allowed_operators = (
+        {
+            "eq",
+            "ne",
+            "lt",
+            "lte",
+            "gt",
+            "gte",
+            "between",
+            "crosses_above",
+            "crosses_below",
+        }
+        if expected_type == "decimal"
+        else {"eq", "ne", "changed_to"}
+    )
     if condition.operator not in allowed_operators:
         raise PlanValidationError("PLAN_OPERATOR_INVALID")
     if expected_type == "decimal":
         _decimal(constant.value, condition.metric_ref.startswith("security.close"))
         if condition.operator == "between":
-            if constant.secondary_value is None or _decimal(constant.secondary_value) < _decimal(constant.value):
+            if constant.secondary_value is None or _decimal(
+                constant.secondary_value
+            ) < _decimal(constant.value):
                 raise PlanValidationError("PLAN_CONDITION_INVALID")
         elif constant.secondary_value is not None:
             raise PlanValidationError("PLAN_CONDITION_INVALID")
@@ -304,7 +448,13 @@ def _decimal(value: str, positive: bool = False) -> Decimal:
     return number
 
 
-def _leaves(condition: PlanCondition, path: tuple[int, ...] = ()) -> tuple[tuple[tuple[int, ...], PlanCondition], ...]:
+def _leaves(
+    condition: PlanCondition, path: tuple[int, ...] = ()
+) -> tuple[tuple[tuple[int, ...], PlanCondition], ...]:
     if condition.node_kind == "leaf":
         return ((path, condition),)
-    return tuple(item for index, child in enumerate(condition.children) for item in _leaves(child, path + (index,)))
+    return tuple(
+        item
+        for index, child in enumerate(condition.children)
+        for item in _leaves(child, path + (index,))
+    )
