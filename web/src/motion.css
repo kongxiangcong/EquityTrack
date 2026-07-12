@@ -1,0 +1,2 @@
+.header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.reduce-motion * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }

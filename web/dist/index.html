@@ -1,12 +1,18 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>版本化 K 线工作台</title>  <script type="module" crossorigin src="/assets/index-CBehvr8H.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-PrkSKz3Z.css">
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>版本化 K 线工作台</title>  <script type="module" crossorigin src="/assets/index-f8OB6JMw.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CeXEET0j.css">
 </head>
 <body><main>
-  <header><div><p class="eyebrow">LOCAL RESEARCH WORKSPACE</p><h1>意华股份 <span>002897.SZ</span></h1></div><button id="fullscreen" type="button" aria-label="切换全屏视图">全屏查看</button></header>
+  <header><div><p class="eyebrow">LOCAL RESEARCH WORKSPACE</p><h1>意华股份 <span>002897.SZ</span></h1></div><div class="header-actions"><button id="motion-toggle" type="button" aria-pressed="false">减少动态效果</button><button id="fullscreen" type="button" aria-label="切换全屏视图">全屏查看</button></div></header>
   <section class="status" aria-label="图表数据状态"><strong>日 K · 未复权</strong><span id="session">有效交易日 —</span><span id="freshness">数据状态 —</span></section>
-  <section id="banner" class="banner" role="status">正在读取冻结快照…</section>
+  <section id="banner" class="banner" role="status" tabindex="-1">正在读取冻结快照…</section>
+  <nav class="task-nav" aria-label="工作区任务"><button type="button" data-target="current-task">当前任务</button><button type="button" data-target="plan-panel">计划确认</button><button type="button" data-target="history-panel">完整历史</button></nav>
+  <section id="current-task" class="task-card" aria-labelledby="task-title" tabindex="-1"><div><p class="eyebrow">当前任务</p><h2 id="task-title">检查本次数据变化与影响</h2><p id="task-summary">正在载入 requested/effective date 与规则状态…</p><button id="authorize-update" type="button">授权刷新冻结输入</button><span id="authorization-status" role="status">尚未授权新的更新</span></div><dl id="task-facts"></dl></section>
   <section class="workspace"><div class="canvas"><div id="chart" aria-label="版本化 K 线和成交量图"></div><div class="draw-flow" aria-label="标注绘制步骤"><label>起点价格<input id="start-price" inputmode="decimal" aria-describedby="save-status"></label><button id="start" type="button">1 确认起点</button><label>终点价格<input id="end-price" inputmode="decimal" aria-describedby="save-status"></label><button id="finish" type="button" disabled>2 确认终点</button><button id="confirm" type="button" disabled>3 确认并持久化</button><span id="save-status" role="status">尚未绘制</span></div></div>
   <details class="ledger-panel" open><summary>标注版本账本</summary><p>修改、删除和恢复都会追加版本，不覆盖历史。</p><div class="ledger-actions"><button id="revise" type="button" disabled>追加修订</button><button id="delete" type="button" disabled>追加删除版本</button><button id="restore" type="button" disabled>追加恢复版本</button></div><ol id="ledger"></ol></details></section>
   <details><summary>数据详情与引用</summary><pre id="details"></pre></details>
+  <section id="plan-panel" class="task-card" aria-labelledby="plan-title"><div><p class="eyebrow">用户确认</p><h2 id="plan-title">计划版本与规则结果</h2><p>计划阈值和金额来自 <code>user_fixture_input</code> 或用户明确输入；平台只呈现规则结果，不替代判断。</p></div><div id="plan-list" class="version-list" aria-live="polite"></div></section>
+  <section id="history-panel" class="history-panel" aria-labelledby="history-title"><div><p class="eyebrow">冻结历史</p><h2 id="history-title">版本时间线</h2><p>历史按当时 refs、operands、reasons、policy 与 artifacts 展示，不以当前政策重算。</p></div><ol id="timeline" class="timeline"></ol></section>
+  <iframe id="report-viewer" title="隔离的主动研究报告查看器" sandbox srcdoc="<p>选择历史中的主动报告后将在此隔离区域显示；脚本、同源权限与外部导航均被禁用。</p>"></iframe>
+  <p class="boundary" id="boundary">研究与规则结果用于用户判断，不构成个性化投资建议。</p>
 </main></body></html>

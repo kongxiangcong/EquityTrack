@@ -16,6 +16,7 @@ from trading_platform.persistence.plans import SQLitePlanRepository
 from trading_platform.plans import PlanService
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence.market import SQLiteMarketRepository
+from trading_platform.workspace import WorkspaceService
 
 from .facade import ApplicationFacade
 
@@ -30,6 +31,7 @@ class ProductionCompositionRoot:
         chart = None
         plans = None
         market = None
+        workspace = None
         if data_root is not None:
             root = Path(__file__).resolve().parents[3]
             self._store = PlatformStore(data_root, migrations_root or root / "migrations")
@@ -46,7 +48,8 @@ class ProductionCompositionRoot:
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))
             market = MarketEvaluationService(SQLiteMarketRepository(self._store.connection, self._store.writer_lock), plans)
-        self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans, market)
+            workspace = WorkspaceService(self._store.connection, self._store.writer_lock)
+        self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans, market, workspace)
 
     @property
     def facade(self) -> ApplicationFacade:

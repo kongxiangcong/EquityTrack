@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 from trading_platform.application.facade import ApplicationFacade
 from trading_platform.domain.chart import AnnotationAnchor, AnnotationCommand, AnnotationDraft
 from trading_platform.chart import AnnotationError
+from trading_platform.domain.plans import ConfirmPlanDraftCommand
+from trading_platform.plans import PlanError
 
 
 class LocalChartWorkspaceServer:
@@ -35,6 +37,8 @@ class LocalChartWorkspaceServer:
                     self._json(asdict(owner.facade.get_chart_series(owner.security_id, owner.snapshot_id)))
                 elif path == "/api/annotations":
                     self._json([asdict(item) for item in owner.facade.list_annotation_history(owner.security_id)])
+                elif path == "/api/workspace":
+                    self._json(owner.facade.get_workspace(owner.security_id, owner.snapshot_id))
                 else:
                     relative = "index.html" if path == "/" else path.lstrip("/")
                     target = (owner.web_root / relative).resolve()
@@ -50,7 +54,8 @@ class LocalChartWorkspaceServer:
             def do_POST(self) -> None:
                 expected_origin = f"http://127.0.0.1:{owner._server.server_port}"
                 invocation_id = self.headers.get("X-Invocation-Id", "")
-                if not self._host_allowed() or self.headers.get("Origin") != expected_origin or urlparse(self.path).path != "/api/annotations" or self.headers.get("X-CSRF-Token") != owner.csrf_token or self.headers.get_content_type() != "application/json":
+                path = urlparse(self.path).path
+                if not self._host_allowed() or self.headers.get("Origin") != expected_origin or path not in {"/api/annotations", "/api/update-authorizations", "/api/plan-confirmations"} or self.headers.get("X-CSRF-Token") != owner.csrf_token or self.headers.get_content_type() != "application/json":
                     return self.send_error(403)
                 if not re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", invocation_id): return self.send_error(400)
                 try: length = int(self.headers.get("Content-Length", "0"))
@@ -58,6 +63,18 @@ class LocalChartWorkspaceServer:
                 if length <= 0 or length > 32_768: return self.send_error(413)
                 try:
                     payload = json.loads(self.rfile.read(length))
+                    if path == "/api/update-authorizations":
+                        requested = str(payload["requested_date"]); effective = str(payload["effective_session_date"])
+                        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", requested) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", effective): return self.send_error(400)
+                        try: authorization = owner.facade.authorize_workspace_update(invocation_id, owner.security_id, requested, effective)
+                        except ValueError as error: return self._json({"error_code": str(error)}, 409)
+                        return self._json(authorization, 201)
+                    if path == "/api/plan-confirmations":
+                        try:
+                            confirmed = owner.facade.confirm_plan_draft(ConfirmPlanDraftCommand(invocation_id, str(payload["draft_id"]), int(payload["expected_revision"]), str(payload.get("activation_intent", "keep_inactive"))))
+                        except (KeyError, TypeError, ValueError): return self.send_error(400)
+                        except PlanError as error: return self._json({"error_code": error.code}, 422)
+                        return self._json(asdict(confirmed), 201)
                     series = owner.facade.get_chart_series(owner.security_id, owner.snapshot_id)
                     operation = payload.get("operation", "create")
                     if operation == "create":
@@ -87,9 +104,12 @@ class LocalChartWorkspaceServer:
                 return self.headers.get("Host") in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
             def _security_headers(self) -> None:
-                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 
             def log_message(self, format: str, *args: object) -> None:
                 del format, args

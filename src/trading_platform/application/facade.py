@@ -23,7 +23,7 @@ from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlan
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
 
-from .ports import ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort
+from .ports import ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort, WorkspacePort
 
 
 class ApplicationFacade:
@@ -31,13 +31,14 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None, workspace: WorkspacePort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
         self._chart = chart
         self._plans = plans
         self._market = market
+        self._workspace = workspace
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -102,6 +103,16 @@ class ApplicationFacade:
     def cancel_workflow(self, command: CancelWorkflowCommand) -> None:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
         self._research_workflow.cancel(command)
+
+    def get_workspace(self, security_id: str, snapshot_id: str):
+        if self._workspace is None:
+            raise RuntimeError("workspace unavailable")
+        return self._workspace.build(security_id, snapshot_id)
+
+    def authorize_workspace_update(self, invocation_id: str, security_id: str, requested_date: str, effective_session_date: str):
+        if self._workspace is None:
+            raise RuntimeError("workspace unavailable")
+        return self._workspace.authorize_update(invocation_id, security_id, requested_date, effective_session_date)
 
     def get_chart_series(self, security_id: str, snapshot_id: str, interval: str = "1d", adjustment_mode: str = "none", factor_snapshot_id: str | None = None) -> ChartSeries:
         if self._chart is None:
