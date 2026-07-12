@@ -17,8 +17,9 @@ from .contracts import (
 from trading_platform.domain.data import SyncRequest, SyncResult
 from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
+from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
 
-from .ports import ChartPort, DataSyncPort, PlatformPersistence, ResearchWorkflowPort
+from .ports import ChartPort, DataSyncPort, PlanPort, PlatformPersistence, ResearchWorkflowPort
 
 
 class ApplicationFacade:
@@ -26,11 +27,12 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
         self._chart = chart
+        self._plans = plans
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -120,3 +122,54 @@ class ApplicationFacade:
     def list_annotation_history(self, security_id: str) -> tuple[AnnotationVersion, ...]:
         if self._chart is None: raise RuntimeError("chart unavailable")
         return self._chart.list_history(security_id)
+
+    def create_plan_draft(self, command: CreatePlanDraftCommand) -> TradePlanDraftView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.create_draft(command)
+
+    def update_plan_draft(self, command: UpdatePlanDraftCommand) -> TradePlanDraftView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.update_draft(command)
+
+    def discard_plan_draft(self, command: DiscardPlanDraftCommand) -> TradePlanDraftView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.discard_draft(command)
+
+    def confirm_plan_draft(self, command: ConfirmPlanDraftCommand) -> TradePlanVersionView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.confirm_draft(command)
+
+    def activate_plan_version(self, command: ActivatePlanVersionCommand) -> TradePlanVersionView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.activate_version(command)
+
+    def deactivate_plan(self, command: ChangePlanLifecycleCommand) -> ActivePlanView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.deactivate(command)
+
+    def end_plan(self, command: ChangePlanLifecycleCommand) -> ActivePlanView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.end(command)
+
+    def get_plan_draft(self, draft_id: str) -> TradePlanDraftView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.get_draft(draft_id)
+
+    def get_plan_version(self, version_id: str) -> TradePlanVersionView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.get_version(version_id)
+
+    def get_active_plan_for_security(self, security_id: str) -> ActivePlanView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.get_active_for_security(security_id)
+
+    def get_plan_lifecycle(self, plan_id: str) -> ActivePlanView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.get_lifecycle(plan_id)
+
+    def get_plan_confirmation(self, draft_id: str) -> PlanConfirmationView:
+        if self._plans is None: raise RuntimeError("plans unavailable")
+        return self._plans.confirmation(draft_id)
+
+    def get_plan_version_diff(self, draft_id: str):
+        return self.get_plan_confirmation(draft_id).diff
