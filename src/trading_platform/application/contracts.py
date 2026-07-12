@@ -63,3 +63,29 @@ class CapabilityResult:
     status: CapabilityStatus
     error: Optional[ApplicationError]
     schema_version: str = CONTRACT_VERSION
+
+
+@dataclass(frozen=True)
+class SecurityIdentity:
+    security_id: str
+    market: str
+    code: str
+    currency: str
+    identifier_valid_from: str
+    identifier_date_precision: str = "date"
+
+
+@dataclass(frozen=True)
+class WatchlistView:
+    watchlist_item_id: str
+    security_id: str
+    market: str
+    code: str
+    currency: str
+
+
+@dataclass(frozen=True)
+class DoctorReport:
+    status: str
+    checks: tuple[str, ...]
+    errors: tuple[str, ...]
