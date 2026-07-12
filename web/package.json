@@ -1,0 +1,9 @@
+{
+  "name": "trading-platform-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "vite build && node scripts/copy-licenses.js", "test": "node --test tests/*.test.js"},
+  "dependencies": {"klinecharts": "10.0.0"},
+  "devDependencies": {"vite": "7.0.6"}
+}

@@ -22,7 +22,7 @@ def validate_local_data_root(path: Path) -> None:
 def open_database(data_root: Path) -> sqlite3.Connection:
     validate_local_data_root(data_root)
     data_root.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(data_root / "platform.sqlite3", timeout=5)
+    connection = sqlite3.connect(data_root / "platform.sqlite3", timeout=5, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA journal_mode=DELETE")

@@ -16,8 +16,9 @@ from .contracts import (
 )
 from trading_platform.domain.data import SyncRequest, SyncResult
 from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
+from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 
-from .ports import DataSyncPort, PlatformPersistence, ResearchWorkflowPort
+from .ports import ChartPort, DataSyncPort, PlatformPersistence, ResearchWorkflowPort
 
 
 class ApplicationFacade:
@@ -25,10 +26,11 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None) -> None:
+    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
+        self._chart = chart
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -85,3 +87,36 @@ class ApplicationFacade:
         if self._research_workflow is None:
             raise RuntimeError("research workflow unavailable")
         return self._research_workflow.get_manifest(manifest_id)
+
+    def get_chart_series(self, security_id: str, snapshot_id: str, interval: str = "1d", adjustment_mode: str = "none", factor_snapshot_id: str | None = None) -> ChartSeries:
+        if self._chart is None:
+            raise RuntimeError("chart unavailable")
+        return self._chart.get_series(security_id, snapshot_id, interval, adjustment_mode, factor_snapshot_id)
+
+    def create_annotation(self, command: AnnotationCommand) -> AnnotationVersion:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.create(command)
+
+    def revise_annotation(self, command: AnnotationCommand) -> AnnotationVersion:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.revise(command)
+
+    def delete_annotation(self, command: AnnotationCommand) -> AnnotationVersion:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.delete(command)
+
+    def restore_annotation(self, command: AnnotationCommand) -> AnnotationVersion:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.restore(command)
+
+    def migrate_annotation_coordinates(self, command: CoordinateMigration) -> CoordinateMigrationResult:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.migrate(command)
+
+    def get_annotation_history(self, annotation_id: str) -> tuple[AnnotationVersion, ...]:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.get_history(annotation_id)
+
+    def list_annotation_history(self, security_id: str) -> tuple[AnnotationVersion, ...]:
+        if self._chart is None: raise RuntimeError("chart unavailable")
+        return self._chart.list_history(security_id)

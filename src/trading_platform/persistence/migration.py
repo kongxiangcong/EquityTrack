@@ -45,7 +45,7 @@ class MigrationRunner:
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 try:
                     self.connection.execute("BEGIN IMMEDIATE")
-                    statements = (item.strip() for item in path.read_text(encoding="utf-8").split(";") if item.strip())
+                    statements = self._statements(path.read_text(encoding="utf-8"))
                     for statement_number, statement in enumerate(statements, start=1):
                         self.connection.execute(statement)
                         if fail_after_statement == statement_number:
@@ -58,6 +58,24 @@ class MigrationRunner:
                 except Exception:
                     self.connection.rollback()
                     raise
+
+    @staticmethod
+    def _statements(script: str) -> tuple[str, ...]:
+        statements: list[str] = []
+        buffer = ""
+        for character in script:
+            buffer += character
+            if character == ";" and sqlite3.complete_statement(buffer):
+                statement = buffer.strip()
+                if statement:
+                    statements.append(statement)
+                buffer = ""
+        if buffer.strip():
+            if sqlite3.complete_statement(buffer + ";"):
+                statements.append(buffer.strip())
+            else:
+                raise PersistenceError("MIGRATION_SQL_INCOMPLETE", "Migration contains an incomplete SQL statement.")
+        return tuple(statements)
 
     def _backup_and_verify(self, version: int) -> Path:
         final = self.data_root / f"migration-backup-v{version:04d}.sqlite3"

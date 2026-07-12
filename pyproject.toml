@@ -9,6 +9,11 @@ description = "Evidence-constrained professional equity research narrative core"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+browser-test = [
+  "websocket-client==1.9.0",
+]
+
 [project.scripts]
 equity-research = "equity_research.cli:main"
 
