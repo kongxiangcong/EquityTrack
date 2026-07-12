@@ -18,6 +18,7 @@ from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import DataRootWriterLock
 from trading_platform.persistence.presence import assert_maintenance_available
 from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
+from trading_platform.account_import import personal_source_privacy_errors
 
 
 class OperationError(RuntimeError):
@@ -86,9 +87,15 @@ class PlatformOperations:
                 if not endpoint.startswith(("https://", "http://127.0.0.1:", "http://localhost:")): raise OperationError("PROVIDER_DESTINATION_INVALID", "Provider endpoint must be HTTPS or loopback.")
                 credential_configured = bool(self.credential_adapter.get(str(provider["credential_env"])))
                 provider_readiness = {"status": "configured" if credential_configured else "missing_credential", "provider_scope": hashlib.sha256(str(provider["provider_id"]).encode()).hexdigest(), "destination_scope": hashlib.sha256(endpoint.encode()).hexdigest()}
-            return {"status": report.status, "checks": report.checks, "errors": report.errors, "warnings": warnings, "lock_state": lock_state, "provider_readiness": provider_readiness, "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version, "build_identity": build_identity, "credentials": scopes}
+            privacy_errors = self._privacy_source_errors(self.repo_root)
+            errors = tuple(report.errors) + privacy_errors
+            return {"status": "failed" if errors else report.status, "checks": report.checks + ("personal_source_privacy",), "errors": errors, "warnings": warnings, "lock_state": lock_state, "provider_readiness": provider_readiness, "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version, "build_identity": build_identity, "credentials": scopes}
         finally:
             store.close()
+
+    @staticmethod
+    def _privacy_source_errors(repo_root: Path) -> tuple[str, ...]:
+        return personal_source_privacy_errors(repo_root, (path for path in repo_root.rglob("*.xls") if ".git" not in path.parts))
 
     def migrate(self) -> dict[str, Any]:
         database = self.data_root / "platform.sqlite3"
