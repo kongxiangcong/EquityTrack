@@ -281,10 +281,14 @@ class ResearchWorkflowService:
             raise failures[0]
     @staticmethod
     def _decode_request(payload: bytes) -> ResearchWorkflowRequest:
-        raw = json.loads(payload)
-        projection = raw["projection"]
-        projection["field_semantics"] = tuple(FieldSemantics(**item) for item in projection["field_semantics"])
-        raw["projection"] = ResearchProjection(**projection)
-        raw["candidate_member_ids"] = tuple(raw.get("candidate_member_ids", ()))
-        raw["market_only_member_ids"] = tuple(raw.get("market_only_member_ids", ()))
-        return ResearchWorkflowRequest(**raw)
+        return decode_research_workflow_request(payload)
+
+
+def decode_research_workflow_request(payload: bytes) -> ResearchWorkflowRequest:
+    raw = json.loads(payload)
+    projection = raw["projection"]
+    projection["field_semantics"] = tuple(FieldSemantics(**item) for item in projection["field_semantics"])
+    raw["projection"] = ResearchProjection(**projection)
+    raw["candidate_member_ids"] = tuple(raw.get("candidate_member_ids", ()))
+    raw["market_only_member_ids"] = tuple(raw.get("market_only_member_ids", ()))
+    return ResearchWorkflowRequest(**raw)

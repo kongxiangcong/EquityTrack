@@ -35,29 +35,35 @@ class MigrationRunner:
                 raise PersistenceError("MIGRATION_HASH_DRIFT", f"Migration {index} differs from its ledger entry.")
         return files, applied
 
-    def migrate(self, fail_after_statement: int | None = None) -> None:
-        with self.writer_lock.acquire("maintenance:migrate"):
-            files, applied = self.validate()
-            pending = [(index, path) for index, path in enumerate(files, start=1) if index not in applied]
-            if applied and pending:
-                self._backup_and_verify(max(applied))
-            for index, path in pending:
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                try:
-                    self.connection.execute("BEGIN IMMEDIATE")
-                    statements = self._statements(path.read_text(encoding="utf-8"))
-                    for statement_number, statement in enumerate(statements, start=1):
-                        self.connection.execute(statement)
-                        if fail_after_statement == statement_number:
-                            raise PersistenceError("MIGRATION_INJECTED_FAILURE", "Injected inside migration transaction.")
-                    self.connection.execute(
-                        "INSERT INTO schema_migration VALUES(?,?,?,?,?)",
-                        (index, path.name, digest, datetime.now(timezone.utc).isoformat(), "platform-skeleton@1"),
-                    )
-                    self.connection.commit()
-                except Exception:
-                    self.connection.rollback()
-                    raise
+    def migrate(self, fail_after_statement: int | None = None, acquire_lock: bool = True) -> None:
+        if acquire_lock:
+            with self.writer_lock.acquire("maintenance:migrate"):
+                self._migrate_locked(fail_after_statement)
+        else:
+            self._migrate_locked(fail_after_statement)
+
+    def _migrate_locked(self, fail_after_statement: int | None) -> None:
+        files, applied = self.validate()
+        pending = [(index, path) for index, path in enumerate(files, start=1) if index not in applied]
+        if applied and pending:
+            self._backup_and_verify(max(applied))
+        for index, path in pending:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                statements = self._statements(path.read_text(encoding="utf-8"))
+                for statement_number, statement in enumerate(statements, start=1):
+                    self.connection.execute(statement)
+                    if fail_after_statement == statement_number:
+                        raise PersistenceError("MIGRATION_INJECTED_FAILURE", "Injected inside migration transaction.")
+                self.connection.execute(
+                    "INSERT INTO schema_migration VALUES(?,?,?,?,?)",
+                    (index, path.name, digest, datetime.now(timezone.utc).isoformat(), "platform-skeleton@1"),
+                )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
 
     @staticmethod
     def _statements(script: str) -> tuple[str, ...]:

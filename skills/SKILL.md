@@ -1,7 +1,33 @@
 ---
 name: equity-researcher
-description: Generate evidence-constrained professional equity research for A-share, Hong Kong, and US-listed companies. Use for company research, deep dives, research reports, investment briefs, valuation analysis, technical and sentiment analysis, risk review, or stock-code requests. Produce a company-first narrative with fundamentals, industry, market behavior, events, valuation, governance, evidence-bound debate, synthesis, and an audit appendix; do not provide personalized trading instructions.
+description: Operate the local personal research platform and generate evidence-constrained equity research. Use for platform bootstrap, doctor, migration, sync, daily jobs, serving, tests, backup, restore, workflow resume/history, or company research and valuation requests. Never provide personalized trading instructions.
 ---
+
+# Personal Research Platform
+
+## Platform operations route
+
+For initialization, maintenance, recovery, or local service requests, use the single deterministic control plane below. Do not assemble ad-hoc SQLite, archive, or server commands and do not load prompts into the business runtime.
+
+```powershell
+python -m trading_platform.cli bootstrap --data-root <root>
+python -m trading_platform.cli doctor --data-root <root>
+python -m trading_platform.cli migrate --data-root <root>
+python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
+python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
+python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --security-id <id> --snapshot-id <id>
+python -m trading_platform.cli test --repo-root <repo>
+python -m trading_platform.cli inventory --repo-root <repo>
+python -m trading_platform.cli backup --data-root <root> --archive <outside-root.zip>
+python -m trading_platform.cli restore --archive <backup.zip> --target-root <new-root>
+python -m trading_platform.cli switch-restored-root --restored-root <validated-new-root> --pointer-file <active-root.json>
+python -m trading_platform.cli resume --data-root <root> --workflow-run-id <id> --owner-token <token>
+python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
+```
+
+Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.
+
+For company research requests, continue with the workflow below.
 
 # Equity Research
 

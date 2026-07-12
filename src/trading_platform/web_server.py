@@ -48,7 +48,7 @@ class LocalChartWorkspaceServer:
                     payload = target.read_bytes()
                     if target.name == "index.html":
                         payload = payload.replace(b"<head>", f'<head><meta name="csrf-token" content="{owner.csrf_token}">'.encode())
-                    media = "text/html" if target.suffix == ".html" else "text/css" if target.suffix == ".css" else "text/javascript"
+                    media = "text/html" if target.suffix == ".html" else "text/css" if target.suffix == ".css" else "text/javascript" if target.suffix == ".js" else "text/plain"
                     self.send_response(200); self._security_headers(); self.send_header("Content-Type", media); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
             def do_POST(self) -> None:
