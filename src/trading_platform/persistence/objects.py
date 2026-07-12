@@ -16,6 +16,11 @@ class ContentAddressedObjectStore:
         self.root = data_root / "objects/sha256"
         self.root.mkdir(parents=True, exist_ok=True)
         self.writer_lock = writer_lock
+        self.fault_injector = None
+
+    def _fault(self, boundary: str) -> None:
+        if self.fault_injector is not None:
+            self.fault_injector(boundary)
 
     def publish(self, payload: bytes) -> str:
         digest = hashlib.sha256(payload).hexdigest()
@@ -32,15 +37,19 @@ class ContentAddressedObjectStore:
                         stream.write(payload)
                         stream.flush()
                         os.fsync(stream.fileno())
+                    self._fault("object.temp_fsynced")
                     temp = Path(temp_name)
                     if temp.stat().st_size != len(payload) or hashlib.sha256(temp.read_bytes()).hexdigest() != digest:
                         raise PersistenceError("OBJECT_HASH_MISMATCH", "Temporary object hash mismatch.")
                     os.replace(temp, target)
+                    self._fault("object.renamed")
                 finally:
                     Path(temp_name).unlink(missing_ok=True)
             relative = target.relative_to(self.data_root).as_posix()
+            self._fault("object.before_db_registration")
             with self.connection:
                 self.connection.execute("INSERT OR IGNORE INTO object_blob VALUES(?,?,?)", (digest, len(payload), relative))
+            self._fault("object.db_registered")
             return digest
 
     def verify_all(self) -> tuple[str, ...]:

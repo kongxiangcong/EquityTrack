@@ -6,10 +6,12 @@ from .contracts import (
     Capability,
     CapabilityResult,
     CapabilityStatus,
+    CancelWorkflowCommand,
     ErrorCode,
     HealthQuery,
     HealthResult,
     PlatformCommand,
+    ResumeWorkflowCommand,
     SecurityIdentity,
     DoctorReport,
     WatchlistView,
@@ -92,6 +94,14 @@ class ApplicationFacade:
         if self._research_workflow is None:
             raise RuntimeError("research workflow unavailable")
         return self._research_workflow.get_manifest(manifest_id)
+
+    def resume_workflow(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
+        if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.resume(command)
+
+    def cancel_workflow(self, command: CancelWorkflowCommand) -> None:
+        if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
+        self._research_workflow.cancel(command)
 
     def get_chart_series(self, security_id: str, snapshot_id: str, interval: str = "1d", adjustment_mode: str = "none", factor_snapshot_id: str | None = None) -> ChartSeries:
         if self._chart is None:

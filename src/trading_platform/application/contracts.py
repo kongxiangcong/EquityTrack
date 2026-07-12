@@ -89,3 +89,16 @@ class DoctorReport:
     status: str
     checks: tuple[str, ...]
     errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResumeWorkflowCommand:
+    workflow_run_id: str
+    owner_token: str
+    lease_seconds: int = 30
+
+
+@dataclass(frozen=True)
+class CancelWorkflowCommand:
+    workflow_run_id: str
+    reason: str

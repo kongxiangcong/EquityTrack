@@ -20,6 +20,11 @@ class DataRepository:
         self.connection = connection
         self.objects = objects
         self.writer_lock = writer_lock
+        self.fault_injector = None
+
+    def _fault(self, boundary: str) -> None:
+        if self.fault_injector is not None:
+            self.fault_injector(boundary)
 
     def record_attempt(self, invocation_id: str, provider_id: str, adapter_version: str, dataset: str, envelope: RawEnvelope, cache_disposition: str, cursor_before: str | None) -> tuple[str, str | None, bool]:
         expected_hash = hashlib.sha256(envelope.payload).hexdigest() if envelope.payload is not None else None
@@ -126,6 +131,8 @@ class DataRepository:
                     else:
                         self.connection.execute("INSERT OR REPLACE INTO sync_cursor VALUES(?,?,?,?,?,?,?)", (cursor.provider_id, cursor.adapter_version, cursor.dataset, cursor.scope_id, "cursor@1", cursor.cursor_value, datetime.now(timezone.utc).isoformat()))
                         self.connection.execute("UPDATE provider_attempt SET cursor_disposition='advanced' WHERE attempt_id=?", (attempt_id,))
+                self._fault("data.before_commit")
+            self._fault("data.after_commit")
         return tuple(admitted), batch_blocked, created_count, reused_count
 
     def record_blocking_issue(self, attempt_id: str, code: str) -> None:
