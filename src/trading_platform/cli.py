@@ -21,6 +21,7 @@ from trading_platform.credentials import CredentialAdapter, EnvironmentCredentia
 from trading_platform.workflows.research import decode_research_workflow_request
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.identity.code import CodeIdentity
+from trading_platform.acceptance import AcceptanceEvidenceService
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -44,6 +45,7 @@ def _parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve"); serve.add_argument("--data-root", type=Path, required=True); serve.add_argument("--web-root", type=Path, required=True); serve.add_argument("--security-id", required=True); serve.add_argument("--snapshot-id", required=True)
     test = sub.add_parser("test"); test.add_argument("--repo-root", type=Path, default=Path.cwd())
     inventory = sub.add_parser("inventory"); inventory.add_argument("--repo-root", type=Path, default=Path.cwd())
+    acceptance = sub.add_parser("acceptance"); acceptance.add_argument("--data-root", type=Path, required=True); acceptance.add_argument("--fixture-manifest", type=Path, required=True); acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
     return parser
 
 
@@ -98,6 +100,11 @@ def main(argv: list[str] | None = None) -> int:
             if python.returncode or node.returncode: raise OperationError("TEST_FAILED", "One or more test suites failed.")
             result = {"status": "passed", "python_exit_code": python.returncode, "npm_exit_code": node.returncode}
         elif operation == "inventory": result = PlatformOperations.dependency_inventory(args.repo_root)
+        elif operation == "acceptance":
+            evidence = AcceptanceEvidenceService(args.data_root, args.repo_root).run(args.fixture_manifest)
+            result = {"slice_acceptance": evidence.slice_acceptance, "manifest_sha256": evidence.manifest_sha256, "manifest_ref": evidence.manifest_path.name}
+            print(json.dumps({"ok": evidence.slice_acceptance == "passed", "operation": operation, "result": result}, ensure_ascii=False, sort_keys=True))
+            return 0 if evidence.slice_acceptance == "passed" else 2
         elif operation == "serve":
             root = ProductionCompositionRoot(args.data_root); server = LocalChartWorkspaceServer(root.facade, args.web_root, args.security_id, args.snapshot_id)
             try:

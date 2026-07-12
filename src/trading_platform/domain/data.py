@@ -181,3 +181,9 @@ class SyncResult:
     last_success_at: str | None
     distribution_qualification: DistributionQualification
     disposition: SyncDisposition
+
+
+@dataclass(frozen=True)
+class SnapshotMemberView:
+    normalized_version_id: str
+    dataset: str

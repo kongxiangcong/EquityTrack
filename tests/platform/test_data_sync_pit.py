@@ -19,6 +19,9 @@ FIXTURE_SOURCE = "derived-fact-fixture:ed5e784c2f4f335b430783f1e5160add4e1df0865
 
 
 def _payloads(close: str = "82.33", include_old: bool = True) -> dict[str, bytes]:
+    fixture_root = Path(__file__).parents[1] / "fixtures/platform_data"
+    if close == "82.33" and include_old:
+        return {name: (fixture_root / f"{name}.json").read_bytes().rstrip(b"\r\n") for name in ("trade_cal", "market_universe", "daily")}
     common = {"availability_basis": "publisher_timestamp", "published_precision": "date"}
     calendar = [
         {**common, "market": "SZSE", "session_date": "2026-07-10", "is_open": True, "calendar_version": "cn-calendar@2026", "available_at": "2026-07-10T00:00:00Z"},

@@ -61,6 +61,9 @@ class DataRepository:
             blocked = self.connection.execute("SELECT 1 FROM provider_attempt WHERE error_code IN ('FIXTURE_RIGHTS_BLOCKING','PRIVATE_FIXTURE_IN_GIT_WORKTREE') LIMIT 1").fetchone()
         return DistributionQualification.EXTERNAL_BLOCKED if blocked else DistributionQualification.QUALIFIED
 
+    def snapshot_members(self, snapshot_id: str) -> tuple[tuple[str, str], ...]:
+        return tuple((str(row[0]), str(row[1])) for row in self.connection.execute("SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=? ORDER BY m.member_order", (snapshot_id,)))
+
     def validate_fixture_location(self, rights: FixtureRights) -> None:
         if rights.repository_redistribution_allowed and rights.packaged_distribution_allowed:
             return

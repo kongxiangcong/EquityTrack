@@ -18,6 +18,7 @@
   "members": [
     {
       "member_id": "trade_cal",
+      "payload_path": "trade_cal.json",
       "payload_sha256": "1ee9990736b47d2b0d0ea4895cd5bfaf3b39cfcfe3cd80a533572d84aded98a6",
       "classification": "real_derived_facts",
       "source_request": {"api_name": "trade_cal", "exchange": "SZSE", "start_date": "20260710", "end_date": "20260711"},
@@ -27,6 +28,7 @@
     },
     {
       "member_id": "market_universe",
+      "payload_path": "market_universe.json",
       "payload_sha256": "613b73bc05c168ca0dda13de97d136db153cd31a728dd3bc16f88fb1106f48c8",
       "classification": "real_derived_identity_plus_synthetic_sentinels",
       "source_request": {"api_name": "stock_basic", "ts_code": "002897.SZ"},
@@ -36,6 +38,7 @@
     },
     {
       "member_id": "daily",
+      "payload_path": "daily.json",
       "payload_sha256": "15ce2173e7baa236d3f9c8cad88b9443c0929f95f9ada0783769a3370f9c3efb",
       "classification": "real_derived_ohlcv_plus_future_sentinel",
       "source_request": {"api_name": "daily", "ts_code": "002897.SZ", "trade_date": "20260710"},

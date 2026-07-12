@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 
 from dataclasses import replace
 
-from trading_platform.domain.data import CursorCheckpoint, DataProvider, FetchRequest, FetchStatus, FixtureRights, QualityStatus, SyncDisposition, SyncRequest, SyncResult
+from trading_platform.domain.data import CursorCheckpoint, DataProvider, FetchRequest, FetchStatus, FixtureRights, QualityStatus, SnapshotMemberView, SyncDisposition, SyncRequest, SyncResult
 
 from .normalizer import normalize
 from .repository import DataRepository
@@ -87,3 +87,6 @@ class DataSyncService:
         disposition = SyncDisposition(raw_created, raw_reused, normalized_created, normalized_reused, False, False)
         result = self.repository.build_snapshot(request, admitted, disposition)
         return SyncResult(result.status, result.snapshot_id, result.requested_date, result.effective_session_date, result.freshness, result.quality, tuple(attempt_ids), result.coverage, result.next_step, result.stale_by_days, result.freshness_basis, result.last_success_at, result.distribution_qualification, result.disposition)
+
+    def snapshot_members(self, snapshot_id: str) -> tuple[SnapshotMemberView, ...]:
+        return tuple(SnapshotMemberView(version_id, dataset) for version_id, dataset in self.repository.snapshot_members(snapshot_id))

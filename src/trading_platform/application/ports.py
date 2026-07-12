@@ -15,6 +15,7 @@ class PlatformPersistence(Protocol):
 
 class DataSyncPort(Protocol):
     def sync(self, request: SyncRequest) -> SyncResult: ...
+    def snapshot_members(self, snapshot_id: str): ...
 
 
 class ResearchWorkflowPort(Protocol):

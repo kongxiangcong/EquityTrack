@@ -16,7 +16,7 @@ from .contracts import (
     DoctorReport,
     WatchlistView,
 )
-from trading_platform.domain.data import SyncRequest, SyncResult
+from trading_platform.domain.data import SnapshotMemberView, SyncRequest, SyncResult
 from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
@@ -80,6 +80,11 @@ class ApplicationFacade:
         if self._data_sync is None:
             raise RuntimeError("sync unavailable")
         return self._data_sync.sync(request)
+
+    def get_data_snapshot_members(self, snapshot_id: str) -> tuple[SnapshotMemberView, ...]:
+        if self._data_sync is None:
+            raise RuntimeError("sync unavailable")
+        return self._data_sync.snapshot_members(snapshot_id)
 
     def run_research_workflow(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult:
         if self._research_workflow is None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -72,13 +73,20 @@ class WorkflowRepository:
     def heartbeat(self, workflow_run_id: str, owner_token: str, lease_seconds: int = 30) -> None:
         now = datetime.now(timezone.utc)
         expires = (now + timedelta(seconds=lease_seconds)).isoformat()
-        with self.writer_lock.acquire(f"workflow-heartbeat:{workflow_run_id}:{owner_token}"):
-            with self.connection:
-                changed = self.connection.execute("UPDATE workflow_run SET heartbeat_at=?,lease_expires_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (now.isoformat(), expires, workflow_run_id, owner_token)).rowcount
-                if changed != 1:
-                    raise ValueError("WORKFLOW_LEASE_LOST")
-                self.connection.execute("UPDATE workflow_node_run SET heartbeat_at=?,lease_expires_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (now.isoformat(), expires, workflow_run_id, owner_token))
-                self.connection.execute("UPDATE workflow_node_attempt SET heartbeat_at=?,lease_expires_at=? WHERE owner_token=? AND disposition IS NULL AND workflow_node_run_id IN (SELECT workflow_node_run_id FROM workflow_node_run WHERE workflow_run_id=?)", (now.isoformat(), expires, owner_token, workflow_run_id))
+        for retry in range(10):
+            try:
+                with self.writer_lock.acquire(f"workflow-heartbeat:{workflow_run_id}:{owner_token}"):
+                    with self.connection:
+                        changed = self.connection.execute("UPDATE workflow_run SET heartbeat_at=?,lease_expires_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (now.isoformat(), expires, workflow_run_id, owner_token)).rowcount
+                        if changed != 1:
+                            raise ValueError("WORKFLOW_LEASE_LOST")
+                        self.connection.execute("UPDATE workflow_node_run SET heartbeat_at=?,lease_expires_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (now.isoformat(), expires, workflow_run_id, owner_token))
+                        self.connection.execute("UPDATE workflow_node_attempt SET heartbeat_at=?,lease_expires_at=? WHERE owner_token=? AND disposition IS NULL AND workflow_node_run_id IN (SELECT workflow_node_run_id FROM workflow_node_run WHERE workflow_run_id=?)", (now.isoformat(), expires, owner_token, workflow_run_id))
+                return
+            except PersistenceError as error:
+                if error.code != "RUNTIME_BUSY" or retry == 9:
+                    raise
+                time.sleep(0.05)
 
     def request_cancel(self, workflow_run_id: str, reason: str) -> None:
         with self.connection:

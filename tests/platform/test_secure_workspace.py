@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError
@@ -15,6 +16,16 @@ from trading_platform.application.market_contracts import EvaluatePlanCommand
 from tests.platform.test_market_evaluation import _market_command, _root as market_root
 from tests.platform.test_trade_plans import _content, _root as plan_root
 from trading_platform.domain.plans import CreatePlanDraftCommand
+from trading_platform.domain.chart import AnnotationCommand
+from tests.platform.test_chart_annotations import _draft as annotation_draft
+from tests.platform.test_data_sync_pit import _request as sync_request, _root as sync_root
+from tests.platform.test_research_workflow import _request as research_request
+from trading_platform.domain.chart import AnnotationLink
+from trading_platform.domain.plans import ConfirmPlanDraftCommand, PlanCondition, PlanConstant, PlanDraftContent, PlanReference, PlanRule
+from trading_platform.identity.code import CodeIdentity
+from trading_platform.application.market_contracts import BuildMarketSnapshotCommand
+from trading_platform.operations import PlatformOperations
+from trading_platform.application.contracts import SecurityIdentity
 
 
 def _server(tmp_path: Path):
@@ -93,6 +104,49 @@ def test_frozen_timeline_traverses_plan_market_evaluation_and_policy_versions(tm
     assert projected["history"]["evaluations"][0]["rules"][0]["operands_json"]
     assert projected["history"]["research_runs"] and projected["history"]["data_snapshots"] and projected["history"]["artifact_manifests"]
     root.close()
+
+
+def test_connected_golden_journey_records_one_graph_on_one_data_root(tmp_path: Path) -> None:
+    assert PlatformOperations(tmp_path).bootstrap()["status"] == "passed"
+    assert PlatformOperations(tmp_path).bootstrap()["status"] == "passed"
+    root = sync_root(tmp_path)
+    root.facade.add_watchlist_item("golden:benchmark", SecurityIdentity("security_benchmark", "SZSE", "000300", "CNY", "2010-01-01"))
+    original = root.facade.run_research_workflow(research_request("golden:research:2026-07-07"))
+    root.close()
+
+    root = sync_root(tmp_path)
+    sync = root.facade.sync_data(sync_request("golden:sync:2026-07-11"))
+    member_ids = tuple(item.normalized_version_id for item in root.facade.get_data_snapshot_members(sync.snapshot_id))
+    research = root.facade.run_research_workflow(research_request("golden:outer-workflow:2026-07-11", requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id=sync.snapshot_id, candidate_member_ids=member_ids, market_only_member_ids=member_ids))
+    assert research.research_run_id == original.research_run_id
+    assert research.research_snapshot_id == original.research_snapshot_id
+    assert research.json_artifact_id == original.json_artifact_id and research.html_artifact_id == original.html_artifact_id
+    assert research.disposition.value == "reused" and research.reason_code == "ROUTINE_MARKET_ONLY_INPUTS" and research.stale_by_days == 3
+    annotation_input = replace(annotation_draft(), data_snapshot_id=sync.snapshot_id, links=(AnnotationLink("ResearchRun", research.research_run_id, "resolved"),))
+    annotation = root.facade.create_annotation(AnnotationCommand("golden:annotation", None, 0, annotation_input))
+    content = PlanDraftContent("security_yihua", None, (PlanReference("ResearchRun", research.research_run_id), PlanReference("Evidence", "golden:fixture", "unresolved_external")), sync.snapshot_id, "2026-07-11", "2026-10-11", "2026-08-11", (PlanRule("golden:price", "entry_review", "prompt_review", "entry", PlanCondition("leaf", "security.close_unadjusted", "lte", PlanConstant("decimal", "80", "CNY_per_share", "CNY"), "current_complete_session")),), "10000", "500", "CNY", "market-gate@1", "metric-catalog@1", "plan-evaluator@1", "user_fixture_input", "用户明确输入的验收规则，不构成平台建议。")
+    draft = root.facade.create_plan_draft(CreatePlanDraftCommand("golden:plan-draft", content))
+    plan = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("golden:plan-confirm", draft.draft_id, 1, "activate"))
+    identity = CodeIdentity("fixture", "source", "lock", "migration", "workflow", "frontend", "config", "package", "model-policy", "licenses")
+    market = root.facade.build_market_snapshot(BuildMarketSnapshotCommand("golden:market", "security_yihua", "SZSE", sync.snapshot_id, "cn-a-share-market@1", "freshness@1", identity))
+    evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("golden:evaluation", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    root.close()
+
+    rebuilt = sync_root(tmp_path)
+    history = rebuilt.facade.get_workflow_history(research.workflow_run_id)
+    manifest = rebuilt.facade.get_artifact_manifest(history.final_manifest_id)
+    workspace = rebuilt.facade.get_workspace("security_yihua", sync.snapshot_id)
+    doctor = PlatformOperations(tmp_path).doctor()
+    assert manifest.producer_id == research.workflow_run_id and doctor["status"] == "passed"
+    assert rebuilt.facade.get_annotation_history(annotation.annotation_id)[0].annotation_version_id == annotation.annotation_version_id
+    assert rebuilt.facade.get_plan_version(plan.plan_version_id).content.references[0].ref_id == research.research_run_id
+    assert rebuilt.facade.get_market_snapshot_detail(market.market_snapshot_id).data_snapshot_id == sync.snapshot_id
+    assert rebuilt.facade.get_plan_evaluation_detail(evaluation.plan_evaluation_id).market_snapshot_id == market.market_snapshot_id
+    assert workspace["history"]["research_runs"] and workspace["history"]["plans"] and workspace["history"]["evaluations"]
+    evidence = {"schema_version": "GoldenJourneyEvidence@1", "workflow_run_id": research.workflow_run_id, "original_workflow_run_id": original.workflow_run_id, "data_snapshot_id": sync.snapshot_id, "research_snapshot_id": original.research_snapshot_id, "research_run_id": research.research_run_id, "research_json_artifact_id": original.json_artifact_id, "research_html_artifact_id": original.html_artifact_id, "annotation_version_id": annotation.annotation_version_id, "plan_version_id": plan.plan_version_id, "market_snapshot_id": market.market_snapshot_id, "plan_evaluation_id": evaluation.plan_evaluation_id, "final_artifact_manifest_id": history.final_manifest_id, "reuse_reason_code": research.reason_code, "stale_by_days": research.stale_by_days, "dispositions": {"research": research.disposition.value, "annotation": "created", "plan": "created", "market": "created", "evaluation": "created"}}
+    if destination := os.environ.get("TRADING_PLATFORM_GOLDEN_EVIDENCE"):
+        Path(destination).write_text(json.dumps(evidence, sort_keys=True), encoding="utf-8")
+    rebuilt.close()
 
 
 def test_browser_plan_confirmation_preserves_user_fixture_source_and_old_history(tmp_path: Path) -> None:
