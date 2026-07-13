@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Iterable
 
-from trading_platform.domain.data import Coverage, CursorCheckpoint, DistributionQualification, FixtureRights, FreshnessStatus, NextStep, QualityStatus, RawEnvelope, SyncDisposition, SyncRequest, SyncResult, SyncStatus
+from trading_platform.domain.data import Coverage, CursorCheckpoint, DistributionQualification, FixtureRights, FreshnessStatus, NextStep, ProviderAttemptEvidence, QualityStatus, RawEnvelope, SyncDisposition, SyncRequest, SyncResult, SyncStatus
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock, PersistenceError
 from trading_platform.persistence.objects import ContentAddressedObjectStore
@@ -54,6 +54,34 @@ class DataRepository:
     def current_cursor(self, provider_id: str, adapter_version: str, dataset: str, scope_id: str) -> str | None:
         row = self.connection.execute("SELECT cursor_value FROM sync_cursor WHERE provider_id=? AND adapter_version=? AND dataset=? AND scope_id=? AND cursor_schema_version='cursor@1'", (provider_id, adapter_version, dataset, scope_id)).fetchone()
         return None if row is None else row[0]
+
+    def provider_attempt_evidence(self, attempt_ids: tuple[str, ...]) -> tuple[ProviderAttemptEvidence, ...]:
+        if not attempt_ids:
+            return ()
+        placeholders = ",".join("?" for _ in attempt_ids)
+        attempts = self.connection.execute(
+            f"SELECT attempt_id,dataset,status,raw_sha256,retrieved_at,error_code FROM provider_attempt WHERE attempt_id IN ({placeholders}) ORDER BY dataset,attempt_id",
+            attempt_ids,
+        ).fetchall()
+        issues = self.connection.execute(
+            f"SELECT attempt_id,code FROM data_quality_issue WHERE severity IN ('blocking','quarantine') AND attempt_id IN ({placeholders}) ORDER BY attempt_id,code",
+            attempt_ids,
+        ).fetchall()
+        blocking_by_attempt: dict[str, list[str]] = {}
+        for issue in issues:
+            blocking_by_attempt.setdefault(str(issue["attempt_id"]), []).append(str(issue["code"]))
+        return tuple(
+            ProviderAttemptEvidence(
+                attempt_id=str(row["attempt_id"]),
+                dataset=str(row["dataset"]),
+                status=str(row["status"]),
+                raw_sha256=None if row["raw_sha256"] is None else str(row["raw_sha256"]),
+                retrieved_at=str(row["retrieved_at"]),
+                error_code=None if row["error_code"] is None else str(row["error_code"]),
+                blocking_codes=tuple(blocking_by_attempt.get(str(row["attempt_id"]), ())),
+            )
+            for row in attempts
+        )
 
     def distribution_qualification(self) -> DistributionQualification:
         blocked = self.connection.execute("SELECT 1 FROM fixture_rights_profile WHERE repository_redistribution_allowed=0 OR packaged_distribution_allowed=0 LIMIT 1").fetchone()

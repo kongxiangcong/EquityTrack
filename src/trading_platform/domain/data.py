@@ -184,6 +184,17 @@ class SyncResult:
 
 
 @dataclass(frozen=True)
+class ProviderAttemptEvidence:
+    attempt_id: str
+    dataset: str
+    status: str
+    raw_sha256: str | None
+    retrieved_at: str
+    error_code: str | None
+    blocking_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SnapshotMemberView:
     normalized_version_id: str
     dataset: str

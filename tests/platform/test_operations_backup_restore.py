@@ -546,6 +546,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
             json.dumps(
                 {
                     "provider": {
+                        "provider_type": "tushare_compatible",
                         "provider_id": "p",
                         "adapter_version": "1",
                         "endpoint": "https://provider.invalid",
@@ -571,6 +572,9 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
             encoding="utf-8",
         )
         _, provider, _ = _load_sync_job(job_path, adapter)
+        from trading_platform.data.providers import TushareCompatibleProvider
+
+        assert isinstance(provider, TushareCompatibleProvider)
         assert provider._credential == "secret"
         doctor_root = Path(directory) / "doctor-root"
         PlatformOperations(doctor_root).bootstrap()
@@ -578,6 +582,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
             job_path
         )["provider_readiness"]
         assert readiness["status"] == "configured"
+        assert readiness["provider_type"] == "tushare_compatible"
     assert (
         inventory["status"] == "passed"
         and inventory["python_lock_basis"]

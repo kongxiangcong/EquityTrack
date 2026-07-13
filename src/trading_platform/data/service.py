@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 
 from dataclasses import replace
 
-from trading_platform.domain.data import CursorCheckpoint, DataProvider, FetchRequest, FetchStatus, FixtureRights, QualityStatus, SnapshotMemberView, SyncDisposition, SyncRequest, SyncResult
+from trading_platform.domain.data import CursorCheckpoint, DataProvider, FetchRequest, FetchStatus, FixtureRights, ProviderAttemptEvidence, QualityStatus, SnapshotMemberView, SyncDisposition, SyncRequest, SyncResult
 
 from .normalizer import normalize
 from .repository import DataRepository
@@ -90,3 +90,6 @@ class DataSyncService:
 
     def snapshot_members(self, snapshot_id: str) -> tuple[SnapshotMemberView, ...]:
         return tuple(SnapshotMemberView(version_id, dataset) for version_id, dataset in self.repository.snapshot_members(snapshot_id))
+
+    def provider_attempt_evidence(self, attempt_ids: tuple[str, ...]) -> tuple[ProviderAttemptEvidence, ...]:
+        return self.repository.provider_attempt_evidence(attempt_ids)

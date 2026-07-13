@@ -62,6 +62,15 @@ SOURCE_REQUIRED_FIELDS = (
     "extracted_fields",
     "cross_checks",
 )
+SOURCE_REQUIRED_FIELDS_V2 = (
+    "source_id",
+    "tier",
+    "publisher",
+    "title",
+    "url_or_api",
+    "retrieved_at",
+    "extracted_fields",
+)
 EXTRACTED_FIELD_REQUIRED_FIELDS = (
     "field_name",
     "period",
@@ -253,6 +262,8 @@ class SourceManifestValidator:
         self.source_ids: Set[str] = set()
         self.official_source_ids: Set[str] = set()
         self.hash_checks = 0
+        raw_version = self.manifest.get("source_manifest_version")
+        self.manifest_version = int(raw_version) if str(raw_version).isdigit() else None
 
     def validate(self) -> Dict[str, Any]:
         if not isinstance(self.manifest, Mapping):
@@ -284,11 +295,11 @@ class SourceManifestValidator:
                 )
 
         version = self.manifest.get("source_manifest_version")
-        if version not in (1, "1"):
+        if version not in (1, "1", 2, "2"):
             self.add_issue(
                 "error",
                 "UNSUPPORTED_MANIFEST_VERSION",
-                "source_manifest_version must be 1.",
+                "source_manifest_version must be 1 or 2.",
                 "$.source_manifest_version",
                 {"actual": version},
             )
@@ -350,7 +361,8 @@ class SourceManifestValidator:
                     seen[source_id] = index
                     self.source_ids.add(source_id)
 
-            for field_name in SOURCE_REQUIRED_FIELDS:
+            required_source_fields = SOURCE_REQUIRED_FIELDS_V2 if self.manifest_version == 2 else SOURCE_REQUIRED_FIELDS
+            for field_name in required_source_fields:
                 allow_empty_collection = field_name in {"query_params", "cross_checks"}
                 if required_value_missing(source, field_name, allow_empty_collection=allow_empty_collection):
                     self.add_issue(
@@ -359,6 +371,17 @@ class SourceManifestValidator:
                         f"Missing required source field: {field_name}.",
                         f"{source_path}.{field_name}",
                     )
+
+            if self.manifest_version == 2 and not any(
+                not is_blank(source.get(field_name))
+                for field_name in ("available_at", "published_at", "report_date")
+            ):
+                self.add_issue(
+                    "error",
+                    "SOURCE_AVAILABLE_AT_MISSING",
+                    "Source must declare available_at, published_at, or report_date.",
+                    f"{source_path}.available_at",
+                )
 
             tier = normalized_text(source.get("tier"))
             if tier and tier not in VALID_TIERS:
@@ -590,17 +613,17 @@ class SourceManifestValidator:
                 continue
             if field_name in missing_fields:
                 self.add_issue(
-                    "error",
-                    "CRITICAL_FIELD_MISSING",
-                    f"Critical field is explicitly missing: {field_name}.",
+                    "warning" if self.manifest_version == 2 else "error",
+                    "CAPABILITY_INPUT_MISSING" if self.manifest_version == 2 else "CRITICAL_FIELD_MISSING",
+                    f"Critical field is explicitly missing and limits dependent capabilities: {field_name}.",
                     "$.missing_critical_data",
                     {"field_name": field_name},
                 )
                 continue
             self.add_issue(
-                "error",
-                "CRITICAL_FIELD_NOT_DECLARED",
-                f"Critical field must have source_id coverage or be listed in missing_critical_data: {field_name}.",
+                "warning" if self.manifest_version == 2 else "error",
+                "CAPABILITY_INPUT_UNDECLARED" if self.manifest_version == 2 else "CRITICAL_FIELD_NOT_DECLARED",
+                f"Critical field lacks source coverage and limits dependent capabilities: {field_name}.",
                 "$.sources[].extracted_fields",
                 {"field_name": field_name},
             )
@@ -767,22 +790,30 @@ class SourceManifestValidator:
         covered_fields = {record.canonical_name for record in self.field_records if record.source_id}
         missing_fields = self.missing_critical_fields()
         official_covered = {record.canonical_name for record in self.field_records if record.official}
+        uncovered_fields = self.required_fields - covered_fields
 
         if errors:
             if error_codes <= DATA_SUFFICIENCY_CODES:
                 manifest_status = "insufficient"
             else:
                 manifest_status = "invalid"
+        elif self.manifest_version == 2 and uncovered_fields:
+            manifest_status = "valid_with_limits"
         else:
             manifest_status = "sufficient"
 
         return {
             "validator": "source_manifest_validator",
-            "validator_version": 1,
+            "validator_version": 2,
+            "manifest_version": self.manifest_version,
             "input_path": str(self.manifest_path),
             "passed": not errors,
             "source_manifest_status": manifest_status,
-            "data_insufficient_memo_required": bool(error_codes & DATA_SUFFICIENCY_CODES),
+            "data_insufficient_memo_required": bool(error_codes & DATA_SUFFICIENCY_CODES) if self.manifest_version != 2 else bool(errors),
+            "limitations": {
+                "missing_critical_fields": sorted(uncovered_fields),
+                "declared_missing_fields": sorted(self.required_fields & missing_fields),
+            },
             "summary": {
                 "sources_total": len(self.manifest.get("sources", []))
                 if isinstance(self.manifest.get("sources"), list)
@@ -857,10 +888,12 @@ def extract_fenced_manifest(markdown_text: str) -> tuple[str, str]:
 
 
 def canonical_field_name(field_name: str) -> Optional[str]:
-    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", field_name).lower()
+    raw = str(field_name or "").strip()
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", raw).lower()
     if not cleaned:
         return None
-    return FIELD_ALIASES.get(cleaned, cleaned if cleaned in BASE_CRITICAL_FIELDS else None)
+    fallback = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_").lower()
+    return FIELD_ALIASES.get(cleaned, fallback)
 
 
 def is_blank(value: Any) -> bool:
@@ -974,11 +1007,13 @@ def period_key(value: str) -> str:
 def build_failure_result(path: Path, issues: Sequence[Issue]) -> Dict[str, Any]:
     return {
         "validator": "source_manifest_validator",
-        "validator_version": 1,
+        "validator_version": 2,
+        "manifest_version": None,
         "input_path": str(path),
         "passed": False,
         "source_manifest_status": "invalid",
         "data_insufficient_memo_required": False,
+        "limitations": {"missing_critical_fields": [], "declared_missing_fields": []},
         "summary": {
             "sources_total": 0,
             "official_sources_total": 0,

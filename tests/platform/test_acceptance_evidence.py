@@ -11,8 +11,18 @@ from trading_platform.acceptance import AcceptanceEvidenceService
 
 def test_acceptance_cli_executes_fixed_suites_and_freezes_evidence(tmp_path: Path) -> None:
     fixture = Path.cwd() / "tests/fixtures/platform_data/manifest.json"
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps({
+        "status": "qualified",
+        "provider_identity": "preconfigured_tushare_compatible_non_official",
+        "source_authority": "structured_aggregator_not_official_disclosure",
+        "terms_profile": "gateway-terms-pending@1",
+        "credential_scope_id": "c" * 64,
+        "attempts": [{"attempt_id": "attempt-redacted", "dataset": "daily", "status": "complete", "raw_sha256": "a" * 64, "retrieved_at": "2026-07-14T00:00:00+00:00", "error_code": None}],
+        "blockers": [],
+    }), encoding="utf-8")
     completed = subprocess.run(
-        [sys.executable, "-m", "trading_platform.cli", "acceptance", "--data-root", str(tmp_path / "data"), "--fixture-manifest", str(fixture), "--repo-root", str(Path.cwd())],
+        [sys.executable, "-m", "trading_platform.cli", "acceptance", "--data-root", str(tmp_path / "data"), "--fixture-manifest", str(fixture), "--repo-root", str(Path.cwd()), "--live-qualification-file", str(qualification)],
         cwd=Path.cwd(), capture_output=True, text=True, encoding="utf-8", check=False,
     )
     envelope = json.loads(completed.stdout)
@@ -22,7 +32,7 @@ def test_acceptance_cli_executes_fixed_suites_and_freezes_evidence(tmp_path: Pat
     assert completed.returncode == 0
     assert envelope["ok"] is True
     assert manifest["slice_acceptance"] == "passed"
-    assert manifest["live_qualification"]["status"] == "external_blocked"
+    assert manifest["live_qualification"]["status"] == "qualified"
     assert manifest["long_term_platform_complete"] is False
     assert len(manifest["criteria"]) == 51
     assert all(item["assertion_ids"] for item in manifest["criteria"])
@@ -45,12 +55,21 @@ def test_acceptance_rejects_fixture_manifest_outside_trusted_root(tmp_path: Path
         raise AssertionError("untrusted fixture manifest was accepted")
 
 
-def test_live_qualified_requires_real_attempt_evidence() -> None:
+def test_live_qualified_accepts_redacted_production_attempt_evidence() -> None:
     failures: list[str] = []
     result = AcceptanceEvidenceService._live_qualification(
-        {"status": "qualified", "provider_identity": "gateway", "source_authority": "not_official", "terms_profile": "terms@1", "attempts": []},
+        {
+            "status": "qualified",
+            "provider_identity": "gateway",
+            "source_authority": "structured_aggregator_not_official_disclosure",
+            "terms_profile": "terms@1",
+            "attempts": [
+                {"attempt_id": "attempt-redacted", "dataset": "daily", "status": "complete", "raw_sha256": "a" * 64, "retrieved_at": "2026-07-14T00:00:00+00:00", "error_code": None}
+            ],
+            "blockers": [],
+        },
         failures,
     )
 
-    assert result["status"] == "failed"
-    assert failures == ["LIVE_QUALIFICATION_RUNNER_UNAVAILABLE"]
+    assert result["status"] == "qualified"
+    assert failures == []

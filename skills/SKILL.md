@@ -15,6 +15,7 @@ python -m trading_platform.cli doctor --data-root <root>
 python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
+python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json> --output <qualification.json>
 python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --security-id <id> --snapshot-id <id>
 python -m trading_platform.cli test --repo-root <repo>
 python -m trading_platform.cli inventory --repo-root <repo>
@@ -24,6 +25,8 @@ python -m trading_platform.cli switch-restored-root --restored-root <validated-n
 python -m trading_platform.cli resume --data-root <root> --workflow-run-id <id> --owner-token <token>
 python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 ```
+
+Use `provider_type = tushare_compatible` for the preconfigured Tushare-compatible HTTP surface. Keep only `credential_env = TUSHARE_TOKEN` in the job; the token value must remain in the process environment or an approved credential adapter. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync` and writes redacted attempt evidence that can be supplied to `acceptance --live-qualification-file`.
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.
 
@@ -213,6 +216,8 @@ Run:
 ```powershell
 python -B -m unittest discover -s tests -v
 ```
+
+For `source_manifest_version = 2`, the standalone source validator is an integrity gate. `valid_with_limits` is a passing manifest state: missing fields remain explicit capability limitations and do not globally replace a usable research report with an audit memo. Schema, provenance, time, numeric, or unresolved-conflict errors still fail closed.
 
 Completion criterion: JSON and HTML come from the same `ResearchRun`, validation passes, and the report contains no unsupported numeric or action language.
 

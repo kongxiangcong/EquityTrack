@@ -85,8 +85,10 @@ class PlatformOperations:
             if job_file is not None:
                 job = json.loads(job_file.read_text(encoding="utf-8")); provider = job["provider"]; endpoint = str(provider["endpoint"])
                 if not endpoint.startswith(("https://", "http://127.0.0.1:", "http://localhost:")): raise OperationError("PROVIDER_DESTINATION_INVALID", "Provider endpoint must be HTTPS or loopback.")
+                provider_type = str(provider.get("provider_type", "http_json"))
+                if provider_type not in {"http_json", "tushare_compatible"}: raise OperationError("PROVIDER_TYPE_UNSUPPORTED", "Configured provider type is unsupported.")
                 credential_configured = bool(self.credential_adapter.get(str(provider["credential_env"])))
-                provider_readiness = {"status": "configured" if credential_configured else "missing_credential", "provider_scope": hashlib.sha256(str(provider["provider_id"]).encode()).hexdigest(), "destination_scope": hashlib.sha256(endpoint.encode()).hexdigest()}
+                provider_readiness = {"status": "configured" if credential_configured else "missing_credential", "provider_type": provider_type, "provider_scope": hashlib.sha256(str(provider["provider_id"]).encode()).hexdigest(), "destination_scope": hashlib.sha256(endpoint.encode()).hexdigest()}
             privacy_errors = self._privacy_source_errors(self.repo_root)
             errors = tuple(report.errors) + privacy_errors
             return {"status": "failed" if errors else report.status, "checks": report.checks + ("personal_source_privacy",), "errors": errors, "warnings": warnings, "lock_state": lock_state, "provider_readiness": provider_readiness, "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version, "build_identity": build_identity, "credentials": scopes}

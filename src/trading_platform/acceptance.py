@@ -110,7 +110,7 @@ class AcceptanceEvidenceService:
         self.data_root = data_root.resolve()
         self.repo_root = repo_root.resolve()
 
-    def run(self, fixture_manifest_path: Path) -> AcceptanceEvidenceResult:
+    def run(self, fixture_manifest_path: Path, live_qualification: Mapping[str, Any] | None = None) -> AcceptanceEvidenceResult:
         trusted_root = (self.repo_root / "tests/fixtures/platform_data").resolve()
         fixture_path = fixture_manifest_path.resolve()
         if fixture_path.parent != trusted_root or fixture_path.name != "manifest.json":
@@ -192,7 +192,8 @@ class AcceptanceEvidenceService:
             "criteria": criteria, "suites": suites, "artifacts": artifacts,
             "golden_entities": golden_entities,
             "applicability": [{"capability": "position_accounting", "status": "not_applicable", "rationale": "Watchlist slice has no account or Position model.", "counter_capability_test": next(assertion for assertion in all_assertions["application_journey"] if "test_typed_ast_references_account_applicability_and_adjusted_evidence" in assertion)}, {"capability": "full_trade_backtest", "status": "not_applicable", "rationale": "No execution, fee, slippage or T+1 simulator is in scope.", "counter_capability_test": next(assertion for assertion in all_assertions["architecture_security"] if "test_platform_imports_only_public_research_package" in assertion)}, {"capability": "valuation_formula_regression", "status": "passed", "rationale": "Legacy regression evidence.", "artifact_refs": ["legacy_regression"]}, {"capability": "adapter_financial_invariants", "status": "passed", "rationale": "Provider contract evidence.", "artifact_refs": ["provider_contract"]}],
-            "live_qualification": {"status": "external_blocked", "provider_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator_not_official_disclosure", "terms_profile": "qualification_pending@1", "attempts": [], "blockers": ["production_provider_adapter_and_entitlement_not_configured_for_live_qualification"]},
+            "live_qualification": live_qualification or {"status": "external_blocked", "provider_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator_not_official_disclosure", "terms_profile": "qualification_pending@1", "attempts": [], "blockers": ["live_qualification_artifact_not_supplied"]},
+            "credential_scope_ids": [live_qualification["credential_scope_id"]] if live_qualification and live_qualification.get("credential_scope_id") else [],
             "final_artifact_manifest_id": golden.get("final_artifact_manifest_id"),
         }
         return self._freeze(supplied)
@@ -246,6 +247,7 @@ class AcceptanceEvidenceService:
             "fixture_manifest_sha256": fixture.get("manifest_sha256") if isinstance(fixture, Mapping) else None,
             "fixed_clock": supplied.get("fixed_clock"),
             "network_policy": supplied.get("network_policy"),
+            "live_qualification": live,
             "suites": [{key: item.get(key) for key in ("name", "version", "status", "command_identity", "assertion_ids")} for item in suites],
             "criteria": [{key: item.get(key) for key in ("criterion", "status", "suite", "assertion_ids")} for item in criteria],
         })
@@ -378,7 +380,26 @@ class AcceptanceEvidenceService:
         if any(field not in live for field in required):
             failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INCOMPLETE"); live["status"] = "failed"
         elif live["status"] == "qualified":
-            failure_codes.append("LIVE_QUALIFICATION_RUNNER_UNAVAILABLE"); live["status"] = "failed"
+            attempts = live.get("attempts")
+            valid_attempts = isinstance(attempts, list) and bool(attempts)
+            if valid_attempts:
+                for attempt in attempts:
+                    if not isinstance(attempt, Mapping):
+                        valid_attempts = False; break
+                    raw_sha256 = attempt.get("raw_sha256")
+                    if (
+                        not attempt.get("attempt_id")
+                        or not attempt.get("dataset")
+                        or attempt.get("status") != "complete"
+                        or not isinstance(raw_sha256, str)
+                        or len(raw_sha256) != 64
+                        or any(character not in "0123456789abcdef" for character in raw_sha256.lower())
+                        or not attempt.get("retrieved_at")
+                        or attempt.get("error_code")
+                    ):
+                        valid_attempts = False; break
+            if not valid_attempts or live.get("blockers"):
+                failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INVALID"); live["status"] = "failed"
         elif live["status"] == "external_blocked" and not live.get("blockers"):
             failure_codes.append("LIVE_QUALIFICATION_BLOCKER_MISSING"); live["status"] = "failed"
         return live

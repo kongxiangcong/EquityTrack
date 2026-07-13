@@ -6,18 +6,15 @@ import sys
 import subprocess
 import sqlite3
 import zipfile
-from datetime import datetime
 from dataclasses import asdict
 from pathlib import Path
 
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import ResumeWorkflowCommand
 from trading_platform.operations import OperationError, PlatformOperations
-from trading_platform.data.providers import HttpJsonProvider
-from trading_platform.domain.data import SnapshotPurpose, SyncRequest
 from trading_platform.web_server import LocalChartWorkspaceServer
 from trading_platform.persistence.presence import RuntimePresence
-from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
+from trading_platform.credentials import CredentialAdapter
 from trading_platform.workflows.research import decode_research_workflow_request
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.identity.code import CodeIdentity
@@ -26,6 +23,8 @@ from trading_platform.account_import import TonghuashunImportPreviewer
 from trading_platform.account import AccountOpeningService
 from trading_platform.account_history import AccountHistoryImportService
 from trading_platform.account_acceptance import AccountAcceptanceService
+from trading_platform.provider_config import load_sync_job
+from trading_platform.provider_qualification import ProviderQualificationService, register_job_security
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -49,7 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve"); serve.add_argument("--data-root", type=Path, required=True); serve.add_argument("--web-root", type=Path, required=True); serve.add_argument("--security-id", required=True); serve.add_argument("--snapshot-id", required=True)
     test = sub.add_parser("test"); test.add_argument("--repo-root", type=Path, default=Path.cwd())
     inventory = sub.add_parser("inventory"); inventory.add_argument("--repo-root", type=Path, default=Path.cwd())
-    acceptance = sub.add_parser("acceptance"); acceptance.add_argument("--data-root", type=Path, required=True); acceptance.add_argument("--fixture-manifest", type=Path, required=True); acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
+    acceptance = sub.add_parser("acceptance"); acceptance.add_argument("--data-root", type=Path, required=True); acceptance.add_argument("--fixture-manifest", type=Path, required=True); acceptance.add_argument("--repo-root", type=Path, default=Path.cwd()); acceptance.add_argument("--live-qualification-file", type=Path)
+    qualify = sub.add_parser("provider-qualify"); qualify.add_argument("--data-root", type=Path, required=True); qualify.add_argument("--job-file", type=Path, required=True); qualify.add_argument("--output", type=Path, required=True)
     preview = sub.add_parser("import-preview"); preview.add_argument("--source", type=Path, action="append", required=True); preview.add_argument("--account-alias", required=True); preview.add_argument("--base-currency", required=True); preview.add_argument("--private-root", type=Path); preview.add_argument("--trading-session", action="append", default=[]); preview.add_argument("--repo-root", type=Path, default=Path.cwd())
     initialize = sub.add_parser("account-initialize"); initialize.add_argument("--data-root", type=Path, required=True); initialize.add_argument("--source", type=Path, action="append", required=True); initialize.add_argument("--account-alias", required=True); initialize.add_argument("--base-currency", required=True); initialize.add_argument("--confirmed-as-of", required=True); initialize.add_argument("--private-root", type=Path, required=True); initialize.add_argument("--trading-session", action="append", required=True); initialize.add_argument("--invocation-id", required=True); initialize.add_argument("--repo-root", type=Path, default=Path.cwd())
     account_show = sub.add_parser("account-show"); account_show.add_argument("--data-root", type=Path, required=True); account_show.add_argument("--account-id", required=True); account_show.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -59,26 +59,22 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _load_sync_job(job_file: Path, credential_adapter: CredentialAdapter | None = None):
-    job = json.loads(job_file.read_text(encoding="utf-8")); provider = job["provider"]
-    credential_variable = provider["credential_env"]
-    credential = (credential_adapter or EnvironmentCredentialAdapter()).get(credential_variable)
-    if not credential: raise OperationError("CREDENTIAL_MISSING", "Configured credential scope is missing.")
-    adapter = HttpJsonProvider(provider["provider_id"], provider["adapter_version"], provider["endpoint"], credential, provider["source_identity"], provider["terms_profile"])
-    request_data = job["request"]
-    request = SyncRequest(request_data["invocation_id"], request_data["security_id"], request_data["provider_security_code"], request_data["requested_date"], datetime.fromisoformat(request_data["as_of_at"]), request_data["market_timezone"], request_data["market"], SnapshotPurpose(request_data["snapshot_purpose"]), tuple(request_data["datasets"]), bool(request_data["network_authorized"]), bool(request_data["offline"]))
-    return job, adapter, request
+    return load_sync_job(job_file, credential_adapter)
 
 
 def _sync(data_root: Path, job_file: Path, credential_adapter: CredentialAdapter | None = None):
-    _, adapter, request = _load_sync_job(job_file, credential_adapter)
+    job, adapter, request = _load_sync_job(job_file, credential_adapter)
     root = ProductionCompositionRoot(data_root, providers=(adapter,))
-    try: return asdict(root.facade.sync_data(request))
+    try:
+        register_job_security(root, job)
+        return asdict(root.facade.sync_data(request))
     finally: root.close()
 
 
 def _daily(data_root: Path, job_file: Path, credential_adapter: CredentialAdapter | None = None):
     job, adapter, request = _load_sync_job(job_file, credential_adapter); root = ProductionCompositionRoot(data_root, providers=(adapter,))
     try:
+        register_job_security(root, job)
         result: dict[str, object] = {"sync": asdict(root.facade.sync_data(request))}
         if "research_request" in job:
             research = decode_research_workflow_request(json.dumps(job["research_request"]).encode()); result["research"] = asdict(root.facade.run_research_workflow(research))
@@ -109,8 +105,13 @@ def main(argv: list[str] | None = None) -> int:
             if python.returncode or node.returncode: raise OperationError("TEST_FAILED", "One or more test suites failed.")
             result = {"status": "passed", "python_exit_code": python.returncode, "npm_exit_code": node.returncode}
         elif operation == "inventory": result = PlatformOperations.dependency_inventory(args.repo_root)
+        elif operation == "provider-qualify":
+            result = ProviderQualificationService(args.data_root).run(args.job_file)
+            ProviderQualificationService.write_artifact(result, args.output)
+            if result["status"] != "qualified": raise OperationError("PROVIDER_QUALIFICATION_FAILED", "Provider qualification did not pass.")
         elif operation == "acceptance":
-            evidence = AcceptanceEvidenceService(args.data_root, args.repo_root).run(args.fixture_manifest)
+            live_qualification = json.loads(args.live_qualification_file.read_text(encoding="utf-8")) if args.live_qualification_file else None
+            evidence = AcceptanceEvidenceService(args.data_root, args.repo_root).run(args.fixture_manifest, live_qualification)
             result = {"slice_acceptance": evidence.slice_acceptance, "manifest_sha256": evidence.manifest_sha256, "manifest_ref": evidence.manifest_path.name}
             print(json.dumps({"ok": evidence.slice_acceptance == "passed", "operation": operation, "result": result}, ensure_ascii=False, sort_keys=True))
             return 0 if evidence.slice_acceptance == "passed" else 2

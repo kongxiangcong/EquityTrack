@@ -1,6 +1,6 @@
 from typing import Protocol
 from .contracts import CancelWorkflowCommand, DoctorReport, ResumeWorkflowCommand, SecurityIdentity, WatchlistView
-from trading_platform.domain.data import SyncRequest, SyncResult
+from trading_platform.domain.data import ProviderAttemptEvidence, SyncRequest, SyncResult
 from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
@@ -16,6 +16,7 @@ class PlatformPersistence(Protocol):
 class DataSyncPort(Protocol):
     def sync(self, request: SyncRequest) -> SyncResult: ...
     def snapshot_members(self, snapshot_id: str): ...
+    def provider_attempt_evidence(self, attempt_ids: tuple[str, ...]) -> tuple[ProviderAttemptEvidence, ...]: ...
 
 
 class AccountPort(Protocol):

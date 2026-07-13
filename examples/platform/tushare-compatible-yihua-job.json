@@ -1,0 +1,31 @@
+{
+  "provider": {
+    "provider_type": "tushare_compatible",
+    "provider_id": "tushare-compatible-gateway",
+    "adapter_version": "tushare-http@1",
+    "endpoint": "https://replace-with-preconfigured-gateway.invalid/",
+    "credential_env": "TUSHARE_TOKEN",
+    "source_identity": "preconfigured_tushare_compatible_non_official",
+    "terms_profile": "gateway-terms-unknown@1"
+  },
+  "request": {
+    "invocation_id": "replace-for-each-run",
+    "security_id": "security_yihua",
+    "provider_security_code": "002897.SZ",
+    "requested_date": "2026-07-13",
+    "as_of_at": "2026-07-14T23:59:59+08:00",
+    "market_timezone": "Asia/Shanghai",
+    "market": "SZSE",
+    "snapshot_purpose": "workflow",
+    "datasets": ["trade_cal", "market_universe", "daily"],
+    "network_authorized": true,
+    "offline": false
+  },
+  "security_identity": {
+    "security_id": "security_yihua",
+    "venue": "SZSE",
+    "code": "002897",
+    "currency": "CNY",
+    "listed_from": "2017-09-07"
+  }
+}

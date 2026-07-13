@@ -149,3 +149,9 @@ python -m unittest discover -s tests -v
 ## 研究边界
 
 本项目用于公开资料研究、估值框架、风险分析和条件验证，不连接券商下单，不替用户作个性化投资决定。正式数值方法必须满足自身证据要求；估算字段只能进入明确标注的探索情景。
+
+## Tushare-compatible 平台接入
+
+平台通过 job 中的 `provider_type: tushare_compatible` 使用确定性 HTTP adapter。无密钥示例见 `examples/platform/tushare-compatible-yihua-job.json`。job 只保存 `credential_env: TUSHARE_TOKEN`，不保存 token 值。
+
+Codex 先执行 `bootstrap`，随后用同一个 job 执行 `doctor`、`sync`/`daily` 和 `provider-qualify`。资格产物只包含 provider 身份、数据集、状态、获取时间与 raw SHA-256，可通过 `acceptance --live-qualification-file <qualification.json>` 冻结进验收证据。该兼容网关始终标记为结构化聚合源，不替代 CNINFO、交易所或公司 IR 的正式披露权威。

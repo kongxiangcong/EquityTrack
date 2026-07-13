@@ -1,5 +1,7 @@
 # Source Manifest Schema
 
+The active research workflow uses `source_manifest_version: 2`. Version 1 remains supported for legacy report gates.
+
 This file defines the minimum source manifest required before an equity research output can contain valuation conclusions.
 
 The manifest may be written as Markdown, YAML, or JSON, but it must preserve the fields below. Every critical number used in research, modeling, charts, or valuation must either reference a `source_id` or be marked `missing`.
@@ -96,9 +98,15 @@ The following must be `source_id` covered or explicitly `missing`:
 
 ---
 
-## Data Insufficient Memo Trigger
+## Version 2 capability degradation
 
-Set `source_manifest_status = insufficient` and produce `data_insufficient_memo` when:
+For version 2, declared or uncovered critical fields limit only the capabilities and methods that depend on them. The standalone validator returns `passed: true` with `source_manifest_status: valid_with_limits`; `limitations.missing_critical_fields` records the exact gaps. ResearchEngine then determines `completed_with_limits`, method blocks, and output permissions.
+
+Integrity failures remain global failures: invalid identity or time metadata, malformed numeric evidence, broken raw hashes when supplied, unresolved source conflicts, or provenance classification conflicts return `passed: false` and fail closed.
+
+## Version 1 Data Insufficient Memo Trigger
+
+For version 1 legacy gates, set `source_manifest_status = insufficient` and produce `data_insufficient_memo` when:
 
 - Latest critical financial statements lack official-source coverage.
 - Per-share valuation bridge fields are missing.
@@ -124,8 +132,12 @@ The validator always prints a validation result JSON object:
 {
   "validator": "source_manifest_validator",
   "passed": true,
-  "source_manifest_status": "sufficient",
+  "source_manifest_status": "sufficient | valid_with_limits",
   "data_insufficient_memo_required": false,
+  "limitations": {
+    "missing_critical_fields": [],
+    "declared_missing_fields": []
+  },
   "summary": {
     "sources_total": 2,
     "critical_fields_required": 23,
