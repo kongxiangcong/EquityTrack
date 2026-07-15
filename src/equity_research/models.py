@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal
 from typing import Any, Mapping
 
 from .output_policy import normalize_action_language
@@ -30,6 +31,7 @@ POLICY_IDENTIFIER_KEYS = {
     "role",
     "status",
     "profile",
+    "operation",
 }
 
 
@@ -45,6 +47,25 @@ def _sanitize_output_payload(value: Any, *, key: str = "") -> Any:
         return [_sanitize_output_payload(item, key=key) for item in value]
     if isinstance(value, str) and key not in POLICY_IDENTIFIER_KEYS:
         return normalize_action_language(value)[0]
+    return value
+
+
+def _serialize_valuation_metrics(value: Any) -> Any:
+    """Keep legacy in-process floats behind an exact-string output adapter."""
+
+    if isinstance(value, Mapping):
+        return {
+            item_key: _serialize_valuation_metrics(item)
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_serialize_valuation_metrics(item) for item in value]
+    if isinstance(value, tuple):
+        return [_serialize_valuation_metrics(item) for item in value]
+    if isinstance(value, float):
+        return str(value)
+    if isinstance(value, Decimal):
+        return format(value.normalize(), "f")
     return value
 
 
@@ -164,6 +185,9 @@ class MethodResult:
     diagnostics: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        metrics = dict(self.metrics)
+        if "exact_calculation" in metrics:
+            metrics = _serialize_valuation_metrics(metrics)
         return {
             "method_id": self.method_id,
             "label": self.label,
@@ -173,7 +197,7 @@ class MethodResult:
             "missing_fields": list(self.missing_fields),
             "evidence_ids": list(self.evidence_ids),
             "assumptions": dict(self.assumptions),
-            "metrics": dict(self.metrics),
+            "metrics": metrics,
             "diagnostics": list(self.diagnostics),
         }
 
@@ -340,7 +364,11 @@ class ResearchRun:
             for method in method_payload.values():
                 metrics = method["metrics"]
                 for key in list(metrics):
-                    if "per_share" in key or key == "sensitivity":
+                    if (
+                        "per_share" in key
+                        or key == "sensitivity"
+                        or key == "exact_calculation"
+                    ):
                         metrics.pop(key)
         payload: dict[str, Any] = {
             "schema_version": self.schema_version,

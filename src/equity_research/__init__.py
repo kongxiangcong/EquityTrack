@@ -6,6 +6,7 @@ adapt their inputs to this contract instead of reimplementing workflow state.
 """
 
 from .engine import ResearchEngine
+from .financial import EquityBridge, EquityBridgeResult, FinancialInvariantError, FinancialQuantity
 from .models import (
     AnalysisBundle,
     AnalysisResult,
@@ -22,6 +23,10 @@ __all__ = [
     "AnalysisResult",
     "DebateResult",
     "EvidenceClaim",
+    "EquityBridge",
+    "EquityBridgeResult",
+    "FinancialInvariantError",
+    "FinancialQuantity",
     "ResearchEngine",
     "ResearchRequest",
     "ResearchRun",

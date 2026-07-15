@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
+from decimal import Decimal
 from math import isclose, isfinite
 from typing import Any, Mapping
 
 from .evidence import EvidenceBook, numeric_value, period_rank
-from .models import CapabilityResult, MethodResult
+from .financial import (
+    EquityBridge,
+    FinancialInvariantError,
+    FinancialQuantity,
+    exact_decimal_from_legacy,
+    valuation_decimal_context,
+)
+from .models import CapabilityResult, EvidenceItem, MethodResult
 
 
 FINANCIAL_TYPES = {"financial", "bank", "insurance", "broker"}
@@ -32,6 +41,17 @@ def _percentile(values: list[float], probability: float) -> float:
     upper = min(lower + 1, len(ordered) - 1)
     fraction = position - lower
     return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
+
+
+def _percentile_decimal(values: list[Decimal], probability: Decimal) -> Decimal:
+    if not values:
+        raise ValueError("Cannot calculate a percentile from an empty list.")
+    ordered = sorted(values)
+    position = Decimal(len(ordered) - 1) * probability
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - Decimal(lower)
+    return ordered[lower] * (Decimal("1") - fraction) + ordered[upper] * fraction
 
 
 def _status_from_capability(capability: CapabilityResult) -> str:
@@ -132,6 +152,99 @@ def _number_from_book(
     return number
 
 
+def _exact_decimal(value: Any, field_name: str) -> Decimal:
+    return exact_decimal_from_legacy(value, field_name)
+
+
+def _exact_text(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def _legacy_item_value(item: EvidenceItem, field_name: str) -> Any:
+    value = item.value
+    if not isinstance(value, Mapping):
+        return value
+    for key in (
+        f"total_{field_name}",
+        "total_lease_liability",
+        "total_depreciation_and_amortization",
+        "total",
+    ):
+        if key in value:
+            return value[key]
+    raise FinancialInvariantError(
+        "FINANCIAL_VALUE_INVALID",
+        f"A decimal-compatible value is required for {field_name}.",
+    )
+
+
+def _financial_quantity_from_item(
+    item: EvidenceItem,
+    *,
+    field_name: str,
+    as_of_date: str,
+    kind: str,
+    expected_currency: str = "",
+    expected_scale: Any | None = None,
+    provenance_kind: str = "",
+) -> FinancialQuantity:
+    if kind == "money" and expected_currency and item.currency != expected_currency:
+        raise FinancialInvariantError(
+            "FINANCIAL_CURRENCY_MISMATCH",
+            f"{field_name} currency {item.currency} does not match {expected_currency}.",
+        )
+    resolved_provenance_kind = (
+        provenance_kind
+        or ("Assumption" if item.estimated else "Fact")
+    )
+    if resolved_provenance_kind not in {"Fact", "Assumption"}:
+        raise FinancialInvariantError(
+            "FINANCIAL_PROVENANCE_INVALID",
+            f"Unsupported provenance kind for {field_name}.",
+        )
+    return FinancialQuantity.from_legacy(
+        value=_legacy_item_value(item, field_name),
+        unit=item.unit,
+        currency=item.currency,
+        period=item.period,
+        as_of=as_of_date,
+        provenance_refs=(f"{resolved_provenance_kind}:{item.evidence_id}",),
+        kind=kind,  # type: ignore[arg-type]
+        expected_scale=expected_scale,
+    )
+
+
+def _financial_quantity_from_book(
+    book: EvidenceBook,
+    field_name: str,
+    *,
+    as_of_date: str,
+    kind: str = "money",
+    allow_estimate: bool = False,
+    expected_currency: str = "",
+) -> tuple[FinancialQuantity, EvidenceItem]:
+    item = book.best(field_name, official_only=True)
+    if item is None and allow_estimate:
+        item = book.best_estimate(field_name)
+    if item is None:
+        raise FinancialInvariantError(
+            "FINANCIAL_VALUE_MISSING",
+            f"A sourced value is required for {field_name}.",
+        )
+    return (
+        _financial_quantity_from_item(
+            item,
+            field_name=field_name,
+            as_of_date=as_of_date,
+            kind=kind,
+            expected_currency=expected_currency,
+        ),
+        item,
+    )
+
+
 def _dcf_metrics(
     book: EvidenceBook,
     case: Mapping[str, Any],
@@ -149,29 +262,21 @@ def _dcf_metrics(
     ]
     if any(item is None for item in forecast_items):
         raise ValueError("Every FCFF forecast must resolve to canonical evidence.")
-    raw_forecast = [
-        float(numeric_value(item.value))
-        for item in forecast_items
-        if item is not None and numeric_value(item.value) is not None
-    ]
-    if len(raw_forecast) != len(forecast_items):
-        raise ValueError("Every FCFF forecast evidence item must be finite and numeric.")
-    unit_scale = float(case["forecast_unit_scale"])
     currency = str(case["currency"]).strip()
-    if not isfinite(unit_scale) or unit_scale <= 0:
-        raise ValueError("forecast_unit_scale must be a finite positive number.")
-    expected_units = {
-        1.0: {currency, f"{currency} units"},
-        1_000.0: {f"{currency} thousand", f"thousand {currency}"},
-        1_000_000.0: {f"{currency} million", f"million {currency}"},
-    }.get(unit_scale, set())
-    if not expected_units or any(
-        item is None
-        or item.currency != currency
-        or item.unit not in expected_units
+    unit_scale = _exact_decimal(case["forecast_unit_scale"], "forecast_unit_scale")
+    forecast_quantities = [
+        _financial_quantity_from_item(
+            item,
+            field_name="dcf_fcff",
+            as_of_date=as_of_date,
+            kind="money",
+            expected_currency=currency,
+            expected_scale=unit_scale,
+            provenance_kind="Assumption",
+        )
         for item in forecast_items
-    ):
-        raise ValueError("FCFF evidence currency/unit does not reconcile to forecast_unit_scale.")
+        if item is not None
+    ]
     forecast_ranks = [period_rank(item.period) for item in forecast_items if item is not None]
     if (
         any(rank < 0 for rank in forecast_ranks)
@@ -181,8 +286,9 @@ def _dcf_metrics(
         != len(forecast_items)
     ):
         raise ValueError("FCFF evidence periods must be unique and strictly increasing.")
-    forecast = [value * unit_scale for value in raw_forecast]
-    wacc = float(case["wacc"])
+    raw_forecast = [quantity.value for quantity in forecast_quantities]
+    forecast = [quantity.normalized_value for quantity in forecast_quantities]
+    wacc = _exact_decimal(case["wacc"], "wacc")
     terminal_item = book.resolve_reference(
         case["terminal_growth_evidence_ref"],
         allowed_tiers=METHOD_SOURCE_TIERS,
@@ -190,19 +296,18 @@ def _dcf_metrics(
         expected_semantic_role="dcf_terminal_growth",
         expected_field_names={"terminal_growth"},
     )
-    terminal_growth_value = numeric_value(terminal_item.value) if terminal_item else None
-    if terminal_growth_value is None:
+    if terminal_item is None:
         raise ValueError("Terminal growth must resolve to finite canonical evidence.")
-    if terminal_item is None or terminal_item.unit != "decimal" or terminal_item.currency not in {"", "N/A"}:
+    if terminal_item.unit != "decimal" or terminal_item.currency not in {"", "N/A"}:
         raise ValueError("Terminal growth evidence must use decimal units and no currency.")
-    terminal_growth = float(terminal_growth_value)
-    if not isfinite(wacc) or not 0 < wacc < 1:
+    terminal_growth = _exact_decimal(terminal_item.value, "terminal_growth")
+    if not Decimal("0") < wacc < Decimal("1"):
         raise ValueError("WACC must be a finite decimal between zero and one.")
-    if not isfinite(terminal_growth) or not -1 < terminal_growth < 1:
+    if not Decimal("-1") < terminal_growth < Decimal("1"):
         raise ValueError("Terminal growth must be a finite decimal between -1 and 1.")
     if wacc <= terminal_growth:
         raise ValueError("WACC must be greater than terminal growth.")
-    if not forecast or any(not isfinite(value) for value in forecast):
+    if not forecast or any(not value.is_finite() for value in forecast):
         raise ValueError("FCFF forecast must contain finite values.")
     if forecast[-1] <= 0:
         raise ValueError("The final explicit FCFF must be positive for a Gordon-growth terminal value.")
@@ -218,13 +323,13 @@ def _dcf_metrics(
         )
         for name, (field_name, role, _) in WACC_EVIDENCE_FIELDS.items()
     }
-    component_values = {
-        name: float(numeric_value(item.value))
-        for name, item in component_items.items()
-        if item is not None and numeric_value(item.value) is not None
-    }
-    if len(component_values) != len(component_items):
+    if any(item is None for item in component_items.values()):
         raise ValueError("Every WACC component must resolve to finite canonical evidence.")
+    component_values = {
+        name: _exact_decimal(item.value, name)
+        for name, item in component_items.items()
+        if item is not None
+    }
     if len({item.evidence_id for item in component_items.values() if item is not None}) != len(component_items):
         raise ValueError("WACC components must reference unique evidence items.")
     for name, item in component_items.items():
@@ -240,13 +345,15 @@ def _dcf_metrics(
         raise ValueError("WACC component period must be an ISO valuation date.") from exc
     if component_date > date.fromisoformat(as_of_date):
         raise ValueError("WACC component evidence cannot be dated after the as-of date.")
-    if any(not isfinite(value) for value in component_values.values()):
+    if any(not value.is_finite() for value in component_values.values()):
         raise ValueError("WACC components must be finite numbers.")
     equity_weight = component_values["equity_weight"]
     debt_weight = component_values["debt_weight"]
     tax_rate = component_values["tax_rate"]
-    if equity_weight < 0 or debt_weight < 0 or not isclose(
-        equity_weight + debt_weight, 1.0, abs_tol=1e-6
+    if (
+        equity_weight < 0
+        or debt_weight < 0
+        or abs(equity_weight + debt_weight - Decimal("1")) > Decimal("0.000001")
     ):
         raise ValueError("Equity and debt weights must be non-negative and sum to one.")
     if not 0 <= tax_rate < 1:
@@ -259,139 +366,268 @@ def _dcf_metrics(
         equity_weight * cost_of_equity
         + debt_weight
         * component_values["pre_tax_cost_of_debt"]
-        * (1 - tax_rate)
+        * (Decimal("1") - tax_rate)
     )
-    if not isclose(wacc, calculated_wacc, abs_tol=1e-6):
+    if abs(wacc - calculated_wacc) > Decimal("0.000001"):
         raise ValueError(
-            f"Declared WACC {wacc:.6f} does not reconcile to components {calculated_wacc:.6f}."
+            f"Declared WACC {wacc} does not reconcile to components {calculated_wacc}."
         )
 
     present_value_forecast = sum(
-        cash_flow / ((1 + wacc) ** year)
-        for year, cash_flow in enumerate(forecast, start=1)
+        (cash_flow / ((Decimal("1") + wacc) ** year) for year, cash_flow in enumerate(forecast, start=1)),
+        Decimal("0"),
     )
-    terminal_value = forecast[-1] * (1 + terminal_growth) / (wacc - terminal_growth)
-    present_value_terminal = terminal_value / ((1 + wacc) ** len(forecast))
+    terminal_value = (
+        forecast[-1]
+        * (Decimal("1") + terminal_growth)
+        / (wacc - terminal_growth)
+    )
+    present_value_terminal = terminal_value / (
+        (Decimal("1") + wacc) ** len(forecast)
+    )
     enterprise_value = present_value_forecast + present_value_terminal
 
-    cash = _number_from_book(book, "cash", expected_currency=currency)
-    debt = _number_from_book(book, "debt", expected_currency=currency)
-    minority = _number_from_book(book, "minority_interest", expected_currency=currency)
-    preferred = _number_from_book(book, "preferred_stock", expected_currency=currency)
-    pension = _number_from_book(book, "pension_deficit", expected_currency=currency)
-    non_operating = _number_from_book(book, "non_operating_assets", expected_currency=currency)
-    associates = _number_from_book(book, "associates_jv_value", expected_currency=currency)
-    lease_debt = _number_from_book(
-        book,
-        "lease_debt",
-        allow_estimate=True,
-        expected_currency=currency,
-    )
-    shares = _number_from_book(book, "diluted_shares", expected_currency=currency)
-    if shares <= 0:
-        raise ValueError("Diluted shares must be positive.")
+    bridge_fields = {
+        "cash": ("money", False),
+        "debt": ("money", False),
+        "lease_debt": ("money", True),
+        "minority_interest": ("money", False),
+        "preferred_stock": ("money", False),
+        "pension_deficit": ("money", False),
+        "non_operating_assets": ("money", False),
+        "associates_jv_value": ("money", False),
+        "diluted_shares": ("shares", False),
+    }
+    quantity_items = {
+        field_name: _financial_quantity_from_book(
+            book,
+            field_name,
+            as_of_date=as_of_date,
+            kind=kind,
+            allow_estimate=allow_estimate,
+            expected_currency=currency if kind == "money" else "",
+        )
+        for field_name, (kind, allow_estimate) in bridge_fields.items()
+    }
+    quantities = {
+        field_name: quantity
+        for field_name, (quantity, _) in quantity_items.items()
+    }
+    bridge_evidence_items = [item for _, item in quantity_items.values()]
+    balance_sheet_period = quantities["cash"].period
 
-    equity_value = (
-        enterprise_value
-        + cash
-        + non_operating
-        + associates
-        - debt
-        - lease_debt
-        - minority
-        - preferred
-        - pension
+    output_currency = str(case.get("output_currency", currency)).strip() or currency
+    fx_quantity: FinancialQuantity | None = None
+    fx_item: EvidenceItem | None = None
+    if output_currency != currency:
+        fx_item = book.resolve_reference(
+            case.get("fx_rate_evidence_ref"),
+            allowed_tiers=METHOD_SOURCE_TIERS,
+            expected_subject_id=book.subject_id,
+            expected_semantic_role="valuation_fx_rate",
+            expected_field_names={"fx_rate"},
+        )
+        if fx_item is None:
+            raise FinancialInvariantError(
+                "FINANCIAL_FX_REQUIRED",
+                "A canonical valuation FX rate is required for cross-currency per-share value.",
+            )
+        fx_quantity = _financial_quantity_from_item(
+            fx_item,
+            field_name="fx_rate",
+            as_of_date=as_of_date,
+            kind="fx",
+            expected_scale=Decimal("1"),
+        )
+
+    valuation_refs = tuple(
+        f"Assumption:{item.evidence_id}"
+        for item in (
+            [item for item in forecast_items if item is not None]
+            + [terminal_item]
+            + [item for item in component_items.values() if item is not None]
+        )
     )
+    basis_quantity = FinancialQuantity(
+        value=enterprise_value / unit_scale,
+        unit=forecast_quantities[0].unit,
+        scale=unit_scale,
+        currency=currency,
+        period=as_of_date,
+        as_of=as_of_date,
+        provenance_refs=valuation_refs,
+        kind="money",
+    )
+    bridge = EquityBridge(
+        basis_value=basis_quantity,
+        value_basis="enterprise_value",
+        balance_sheet_period=balance_sheet_period,
+        valuation_as_of=as_of_date,
+        output_currency=output_currency,
+        cash=quantities["cash"],
+        debt=quantities["debt"],
+        lease_debt=quantities["lease_debt"],
+        preferred_stock=quantities["preferred_stock"],
+        minority_interest=quantities["minority_interest"],
+        pension_deficit=quantities["pension_deficit"],
+        associates_jv_value=quantities["associates_jv_value"],
+        non_operating_assets=quantities["non_operating_assets"],
+        diluted_shares=quantities["diluted_shares"],
+        fx_rate=fx_quantity,
+    )
+    bridge_result = bridge.evaluate()
 
     sensitivity: list[dict[str, float | None]] = []
-    for wacc_delta in (-0.02, -0.01, 0.0, 0.01, 0.02):
+    for wacc_delta in (
+        Decimal("-0.02"),
+        Decimal("-0.01"),
+        Decimal("0"),
+        Decimal("0.01"),
+        Decimal("0.02"),
+    ):
         row_wacc = wacc + wacc_delta
-        for growth_delta in (-0.01, -0.005, 0.0, 0.005, 0.01):
+        for growth_delta in (
+            Decimal("-0.01"),
+            Decimal("-0.005"),
+            Decimal("0"),
+            Decimal("0.005"),
+            Decimal("0.01"),
+        ):
             row_growth = terminal_growth + growth_delta
             if row_wacc <= row_growth or row_wacc <= 0:
                 per_share = None
             else:
                 pv_forecast = sum(
-                    cash_flow / ((1 + row_wacc) ** year)
-                    for year, cash_flow in enumerate(forecast, start=1)
+                    (
+                        cash_flow / ((Decimal("1") + row_wacc) ** year)
+                        for year, cash_flow in enumerate(forecast, start=1)
+                    ),
+                    Decimal("0"),
                 )
-                tv = forecast[-1] * (1 + row_growth) / (row_wacc - row_growth)
-                pv_tv = tv / ((1 + row_wacc) ** len(forecast))
-                row_equity = (
-                    pv_forecast
-                    + pv_tv
-                    + cash
-                    + non_operating
-                    + associates
-                    - debt
-                    - lease_debt
-                    - minority
-                    - preferred
-                    - pension
+                tv = (
+                    forecast[-1]
+                    * (Decimal("1") + row_growth)
+                    / (row_wacc - row_growth)
                 )
-                per_share = row_equity / shares
+                pv_tv = tv / ((Decimal("1") + row_wacc) ** len(forecast))
+                row_result = replace(
+                    bridge,
+                    basis_value=replace(
+                        basis_quantity,
+                        value=(pv_forecast + pv_tv) / unit_scale,
+                    ),
+                ).evaluate()
+                per_share = float(row_result.per_share_value)
             sensitivity.append(
                 {
-                    "wacc": row_wacc,
-                    "terminal_growth": row_growth,
+                    "wacc": float(row_wacc),
+                    "terminal_growth": float(row_growth),
                     "equity_value_per_share": per_share,
                 }
             )
 
-    terminal_share = present_value_terminal / enterprise_value if enterprise_value else 0.0
+    terminal_share = (
+        present_value_terminal / enterprise_value
+        if enterprise_value
+        else Decimal("0")
+    )
     diagnostics: list[str] = []
-    if terminal_share > 0.80:
+    if terminal_share > Decimal("0.80"):
         diagnostics.append("Present value of terminal value exceeds 80% of enterprise value; interpret the range cautiously.")
     if any(value < 0 for value in forecast):
         diagnostics.append("The explicit FCFF forecast contains negative periods.")
 
+    all_input_items = (
+        [item for item in forecast_items if item is not None]
+        + [terminal_item]
+        + [item for item in component_items.values() if item is not None]
+        + bridge_evidence_items
+        + ([fx_item] if fx_item is not None else [])
+    )
+    exact_calculation = bridge_result.to_dict()
+    exact_calculation.update(
+        {
+            "forecast_fcff": [_exact_text(value) for value in forecast],
+            "wacc": _exact_text(wacc),
+            "calculated_wacc": _exact_text(calculated_wacc),
+            "terminal_growth": _exact_text(terminal_growth),
+            "present_value_forecast": _exact_text(present_value_forecast),
+            "terminal_value": _exact_text(terminal_value),
+            "present_value_terminal": _exact_text(present_value_terminal),
+            "enterprise_value": _exact_text(enterprise_value),
+            "dimensioned_inputs": {
+                "forecast_fcff": [
+                    quantity.to_dict() for quantity in forecast_quantities
+                ],
+                "terminal_growth": {
+                    "value": _exact_text(terminal_growth),
+                    "unit": terminal_item.unit,
+                    "scale": "1",
+                    "currency": terminal_item.currency,
+                    "period": terminal_item.period,
+                    "as_of": as_of_date,
+                    "provenance_refs": [
+                        f"Assumption:{terminal_item.evidence_id}"
+                    ],
+                },
+                "wacc_components": {
+                    name: {
+                        "value": _exact_text(component_values[name]),
+                        "unit": item.unit,
+                        "scale": "1",
+                        "currency": item.currency,
+                        "period": item.period,
+                        "as_of": as_of_date,
+                        "provenance_refs": [
+                            f"Assumption:{item.evidence_id}"
+                        ],
+                    }
+                    for name, item in component_items.items()
+                    if item is not None
+                },
+                "basis_value": basis_quantity.to_dict(),
+                "equity_bridge": {
+                    field_name: quantity.to_dict()
+                    for field_name, quantity in quantities.items()
+                },
+                "fx_rate": fx_quantity.to_dict() if fx_quantity else None,
+            },
+        }
+    )
     metrics: dict[str, Any] = {
-        "forecast_fcff": forecast,
-        "forecast_fcff_unscaled": raw_forecast,
-        "forecast_unit_scale": unit_scale,
+        "forecast_fcff": [float(value) for value in forecast],
+        "forecast_fcff_unscaled": [float(value) for value in raw_forecast],
+        "forecast_unit_scale": float(unit_scale),
         "currency": currency,
-        "input_source_ids": list(
-            dict.fromkeys(
-                [item.source_id for item in forecast_items if item is not None]
-                + ([terminal_item.source_id] if terminal_item else [])
-                + [item.source_id for item in component_items.values() if item is not None]
-            )
-        ),
-        "wacc": wacc,
-        "calculated_wacc": calculated_wacc,
-        "wacc_components": component_values,
-        "terminal_growth": terminal_growth,
-        "present_value_forecast": present_value_forecast,
-        "terminal_value": terminal_value,
-        "present_value_terminal": present_value_terminal,
-        "terminal_value_share_of_enterprise_value": terminal_share,
-        "enterprise_value": enterprise_value,
-        "equity_value": equity_value,
-        "equity_value_per_share": equity_value / shares,
+        "output_currency": output_currency,
+        "input_source_ids": list(dict.fromkeys(item.source_id for item in all_input_items)),
+        "wacc": float(wacc),
+        "calculated_wacc": float(calculated_wacc),
+        "wacc_components": {name: float(value) for name, value in component_values.items()},
+        "terminal_growth": float(terminal_growth),
+        "present_value_forecast": float(present_value_forecast),
+        "terminal_value": float(terminal_value),
+        "present_value_terminal": float(present_value_terminal),
+        "terminal_value_share_of_enterprise_value": float(terminal_share),
+        "enterprise_value": float(enterprise_value),
+        "equity_value": float(bridge_result.equity_value),
+        "equity_value_per_share": float(bridge_result.per_share_value),
         "equity_bridge": {
-            "cash": cash,
-            "debt": debt,
-            "lease_debt": lease_debt,
-            "minority_interest": minority,
-            "preferred_stock": preferred,
-            "pension_deficit": pension,
-            "non_operating_assets": non_operating,
-            "associates_jv_value": associates,
-            "diluted_shares": shares,
+            field_name: float(quantity.normalized_value)
+            for field_name, quantity in quantities.items()
         },
+        "exact_calculation": exact_calculation,
         "sensitivity": sensitivity,
     }
-    input_evidence_ids = tuple(
-        dict.fromkeys(
-            [item.evidence_id for item in forecast_items if item is not None]
-            + ([terminal_item.evidence_id] if terminal_item else [])
-            + [item.evidence_id for item in component_items.values() if item is not None]
-        )
-    )
+    input_evidence_ids = tuple(dict.fromkeys(item.evidence_id for item in all_input_items))
     return metrics, tuple(diagnostics), input_evidence_ids
 
 
-def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:
+def _peer_metrics(
+    book: EvidenceBook,
+    case: Mapping[str, Any],
+    as_of_date: str,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
     raw_peers = case.get("peers")
     if not isinstance(raw_peers, list):
         raise ValueError("peer_case.peers must be a list.")
@@ -400,7 +636,7 @@ def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str
         metric,
         metric,
     )
-    peers: list[tuple[Mapping[str, Any], Any, float]] = []
+    peers: list[tuple[Mapping[str, Any], EvidenceItem, Decimal]] = []
     used_tickers: set[str] = set()
     used_evidence_ids: set[str] = set()
     for peer in raw_peers:
@@ -413,7 +649,20 @@ def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str
             expected_subject_id=ticker,
             expected_semantic_role=f"peer_multiple:{metric}",
         )
-        multiple = numeric_value(evidence_item.value) if evidence_item else None
+        if evidence_item is not None and (
+            evidence_item.unit != "x"
+            or evidence_item.currency not in {"", "N/A"}
+            or evidence_item.period != str(peer.get("period", "")).strip()
+        ):
+            raise FinancialInvariantError(
+                "FINANCIAL_MULTIPLE_DIMENSION_MISMATCH",
+                "Peer multiples must be dimensionless, non-currency values for the declared period.",
+            )
+        multiple = (
+            _exact_decimal(evidence_item.value, "peer_multiple")
+            if evidence_item is not None
+            else None
+        )
         if (
             multiple is None
             or multiple <= 0
@@ -433,9 +682,9 @@ def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str
         raise ValueError("At least three usable peers with source IDs are required.")
 
     multiples = [multiple for _, _, multiple in peers]
-    q25 = _percentile(multiples, 0.25)
-    median = _percentile(multiples, 0.50)
-    q75 = _percentile(multiples, 0.75)
+    q25 = _percentile_decimal(multiples, Decimal("0.25"))
+    median = _percentile_decimal(multiples, Decimal("0.50"))
+    q75 = _percentile_decimal(multiples, Decimal("0.75"))
     default_company_fields = {
         "pe": "eps",
         "ps": "revenue",
@@ -445,9 +694,43 @@ def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str
         case.get("company_metric_field", default_company_fields.get(metric, ""))
     ).strip()
     company_item = book.best(company_field, full_year=True, official_only=True)
-    company_value = numeric_value(company_item.value) if company_item else None
-    if company_value is None or company_value <= 0:
+    if company_item is None:
         raise ValueError("A positive company metric is required for peer valuation.")
+    company_quantity = _financial_quantity_from_item(
+        company_item,
+        field_name=company_field,
+        as_of_date=as_of_date,
+        kind="per_share" if metric == "pe" else "money",
+        expected_currency=company_item.currency,
+    )
+    company_value = company_quantity.normalized_value
+    if company_value <= 0:
+        raise ValueError("A positive company metric is required for peer valuation.")
+    if any(evidence_item.period != company_item.period for _, evidence_item, _ in peers):
+        raise FinancialInvariantError(
+            "FINANCIAL_PERIOD_MISMATCH",
+            "Peer multiples and the company metric must share one fiscal period.",
+        )
+
+    peer_provenance_refs = tuple(
+        f"Fact:{evidence_item.evidence_id}"
+        for _, evidence_item, _ in peers
+    )
+    calculation_provenance_refs = (
+        company_quantity.provenance_refs + peer_provenance_refs
+    )
+    peer_inputs = [
+        {
+            "value": _exact_text(multiple),
+            "unit": evidence_item.unit,
+            "scale": "1",
+            "currency": evidence_item.currency,
+            "period": evidence_item.period,
+            "as_of": as_of_date,
+            "provenance_refs": [f"Fact:{evidence_item.evidence_id}"],
+        }
+        for _, evidence_item, multiple in peers
+    ]
 
     metrics: dict[str, Any] = {
         "metric": metric,
@@ -455,62 +738,231 @@ def _peer_metrics(book: EvidenceBook, case: Mapping[str, Any]) -> tuple[dict[str
         "peer_multiples": [
             {
                 "ticker": str(peer.get("ticker", "")),
-                "multiple": multiple,
+                "multiple": float(multiple),
                 "source_id": evidence_item.source_id,
                 "evidence_id": evidence_item.evidence_id,
                 "period": evidence_item.period,
             }
             for peer, evidence_item, multiple in peers
         ],
-        "peer_q25_multiple": q25,
-        "peer_median_multiple": median,
-        "peer_q75_multiple": q75,
+        "peer_q25_multiple": float(q25),
+        "peer_median_multiple": float(median),
+        "peer_q75_multiple": float(q75),
         "company_metric_field": company_field,
-        "company_metric_value": company_value,
+        "company_metric_value": float(company_value),
     }
     evidence_ids: list[str] = [company_item.evidence_id] if company_item else []
     evidence_ids.extend(evidence_item.evidence_id for _, evidence_item, _ in peers)
 
     if metric == "pe":
+        implied_q25 = company_value * q25
+        implied_median = company_value * median
+        implied_q75 = company_value * q75
         metrics.update(
             {
-                "implied_per_share_q25": company_value * q25,
-                "implied_per_share_median": company_value * median,
-                "implied_per_share_q75": company_value * q75,
+                "implied_per_share_q25": float(implied_q25),
+                "implied_per_share_median": float(implied_median),
+                "implied_per_share_q75": float(implied_q75),
+                "exact_calculation": {
+                    "value_basis": "equity_value_per_share",
+                    "currency": company_quantity.currency,
+                    "company_metric_value": _exact_text(company_value),
+                    "peer_q25_multiple": _exact_text(q25),
+                    "peer_median_multiple": _exact_text(median),
+                    "peer_q75_multiple": _exact_text(q75),
+                    "implied_per_share_q25": _exact_text(implied_q25),
+                    "implied_per_share_median": _exact_text(implied_median),
+                    "implied_per_share_q75": _exact_text(implied_q75),
+                    "dimensioned_inputs": {
+                        "company_metric": company_quantity.to_dict(),
+                        "peer_multiples": peer_inputs,
+                    },
+                    "provenance_refs": list(calculation_provenance_refs),
+                },
             }
         )
     else:
         expected_currency = company_item.currency if company_item else ""
-        shares = _number_from_book(
+        shares_quantity, shares_item = _financial_quantity_from_book(
             book,
             "diluted_shares",
+            as_of_date=as_of_date,
+            kind="shares",
             expected_currency=expected_currency,
         )
+        shares = shares_quantity.normalized_value
+        evidence_ids.append(shares_item.evidence_id)
         if shares <= 0:
             raise ValueError("Diluted shares are required for non-P/E peer valuation.")
         if metric in {"ps", "price_to_sales"}:
+            def equity_result(multiple: Decimal):
+                basis = FinancialQuantity(
+                    value=company_value * multiple / company_quantity.scale,
+                    unit=company_quantity.unit,
+                    scale=company_quantity.scale,
+                    currency=expected_currency,
+                    period=company_quantity.period,
+                    as_of=as_of_date,
+                    provenance_refs=calculation_provenance_refs,
+                    kind="money",
+                )
+                return EquityBridge(
+                    basis_value=basis,
+                    value_basis="equity_value",
+                    balance_sheet_period=company_quantity.period,
+                    valuation_as_of=as_of_date,
+                    output_currency=expected_currency,
+                    cash=None,
+                    debt=None,
+                    lease_debt=None,
+                    preferred_stock=None,
+                    minority_interest=None,
+                    pension_deficit=None,
+                    associates_jv_value=None,
+                    non_operating_assets=None,
+                    diluted_shares=shares_quantity,
+                ).evaluate()
+
+            q25_result = equity_result(q25)
+            median_result = equity_result(median)
+            q75_result = equity_result(q75)
+            implied_q25 = q25_result.per_share_value
+            implied_median = median_result.per_share_value
+            implied_q75 = q75_result.per_share_value
             metrics.update(
                 {
-                    "implied_per_share_q25": company_value * q25 / shares,
-                    "implied_per_share_median": company_value * median / shares,
-                    "implied_per_share_q75": company_value * q75 / shares,
+                    "implied_per_share_q25": float(implied_q25),
+                    "implied_per_share_median": float(implied_median),
+                    "implied_per_share_q75": float(implied_q75),
+                    "exact_calculation": {
+                        "value_basis": "equity_value",
+                        "currency": expected_currency,
+                        "company_metric_value": _exact_text(company_value),
+                        "diluted_shares": _exact_text(shares),
+                        "peer_q25_multiple": _exact_text(q25),
+                        "peer_median_multiple": _exact_text(median),
+                        "peer_q75_multiple": _exact_text(q75),
+                        "implied_per_share_q25": _exact_text(implied_q25),
+                        "implied_per_share_median": _exact_text(implied_median),
+                        "implied_per_share_q75": _exact_text(implied_q75),
+                        "q25_trace": q25_result.to_dict()["trace"],
+                        "median_trace": median_result.to_dict()["trace"],
+                        "q75_trace": q75_result.to_dict()["trace"],
+                        "dimensioned_inputs": {
+                            "company_metric": company_quantity.to_dict(),
+                            "diluted_shares": shares_quantity.to_dict(),
+                            "peer_multiples": peer_inputs,
+                        },
+                        "provenance_refs": list(
+                            calculation_provenance_refs
+                            + shares_quantity.provenance_refs
+                        ),
+                    },
                 }
             )
         elif metric in {"ev_ebitda", "ev_to_ebitda"}:
-            cash = _number_from_book(book, "cash", expected_currency=expected_currency)
-            debt = _number_from_book(book, "debt", expected_currency=expected_currency)
-            minority = _number_from_book(
-                book,
-                "minority_interest",
-                expected_currency=expected_currency,
+            bridge_fields = {
+                "cash": False,
+                "debt": False,
+                "lease_debt": True,
+                "minority_interest": False,
+                "preferred_stock": False,
+                "pension_deficit": False,
+                "non_operating_assets": False,
+                "associates_jv_value": False,
+            }
+            bridge_quantity_items = {
+                field_name: _financial_quantity_from_book(
+                    book,
+                    field_name,
+                    as_of_date=as_of_date,
+                    allow_estimate=allow_estimate,
+                    expected_currency=expected_currency,
+                )
+                for field_name, allow_estimate in bridge_fields.items()
+            }
+            bridge_quantities = {
+                field_name: quantity
+                for field_name, (quantity, _) in bridge_quantity_items.items()
+            }
+            bridge_items = [item for _, item in bridge_quantity_items.values()]
+            evidence_ids.extend(item.evidence_id for item in bridge_items)
+            basis_refs = tuple(
+                [f"Fact:{company_item.evidence_id}"]
+                + [f"Fact:{item.evidence_id}" for _, item, _ in peers]
             )
-            def per_share(multiple: float) -> float:
-                return (company_value * multiple + cash - debt - minority) / shares
+
+            def bridge_result(multiple: Decimal):
+                basis = FinancialQuantity(
+                    value=company_value * multiple / company_quantity.scale,
+                    unit=company_quantity.unit,
+                    scale=company_quantity.scale,
+                    currency=expected_currency,
+                    period=as_of_date,
+                    as_of=as_of_date,
+                    provenance_refs=basis_refs,
+                    kind="money",
+                )
+                return EquityBridge(
+                    basis_value=basis,
+                    value_basis="enterprise_value",
+                    balance_sheet_period=bridge_quantities["cash"].period,
+                    valuation_as_of=as_of_date,
+                    output_currency=expected_currency,
+                    cash=bridge_quantities["cash"],
+                    debt=bridge_quantities["debt"],
+                    lease_debt=bridge_quantities["lease_debt"],
+                    preferred_stock=bridge_quantities["preferred_stock"],
+                    minority_interest=bridge_quantities["minority_interest"],
+                    pension_deficit=bridge_quantities["pension_deficit"],
+                    associates_jv_value=bridge_quantities["associates_jv_value"],
+                    non_operating_assets=bridge_quantities["non_operating_assets"],
+                    diluted_shares=shares_quantity,
+                ).evaluate()
+
+            q25_result = bridge_result(q25)
+            median_result = bridge_result(median)
+            q75_result = bridge_result(q75)
+            implied_q25 = q25_result.per_share_value
+            implied_median = median_result.per_share_value
+            implied_q75 = q75_result.per_share_value
             metrics.update(
                 {
-                    "implied_per_share_q25": per_share(q25),
-                    "implied_per_share_median": per_share(median),
-                    "implied_per_share_q75": per_share(q75),
+                    "implied_per_share_q25": float(implied_q25),
+                    "implied_per_share_median": float(implied_median),
+                    "implied_per_share_q75": float(implied_q75),
+                    "exact_calculation": {
+                        "value_basis": "enterprise_value",
+                        "currency": expected_currency,
+                        "company_metric_value": _exact_text(company_value),
+                        "peer_q25_multiple": _exact_text(q25),
+                        "peer_median_multiple": _exact_text(median),
+                        "peer_q75_multiple": _exact_text(q75),
+                        "implied_per_share_q25": _exact_text(implied_q25),
+                        "implied_per_share_median": _exact_text(implied_median),
+                        "implied_per_share_q75": _exact_text(implied_q75),
+                        "q25_trace": q25_result.to_dict()["trace"],
+                        "median_trace": median_result.to_dict()["trace"],
+                        "q75_trace": q75_result.to_dict()["trace"],
+                        "dimensioned_inputs": {
+                            "company_metric": company_quantity.to_dict(),
+                            "diluted_shares": shares_quantity.to_dict(),
+                            "peer_multiples": peer_inputs,
+                            "equity_bridge": {
+                                field_name: quantity.to_dict()
+                                for field_name, quantity in bridge_quantities.items()
+                            },
+                        },
+                        "provenance_refs": list(
+                            calculation_provenance_refs
+                            + shares_quantity.provenance_refs
+                            + tuple(
+                                reference
+                                for quantity in bridge_quantities.values()
+                                for reference in quantity.provenance_refs
+                            )
+                        ),
+                    },
                 }
             )
         else:
@@ -539,7 +991,19 @@ def _historical_metrics(
             expected_subject_id=book.subject_id,
             expected_semantic_role=f"historical_multiple:{metric}",
         )
-        value = numeric_value(evidence_item.value) if evidence_item else None
+        value = (
+            _exact_decimal(evidence_item.value, "historical_multiple")
+            if evidence_item is not None
+            else None
+        )
+        if evidence_item is not None and (
+            evidence_item.unit != "x"
+            or evidence_item.currency not in {"", "N/A"}
+        ):
+            raise FinancialInvariantError(
+                "FINANCIAL_MULTIPLE_DIMENSION_MISMATCH",
+                "Historical multiples must be dimensionless and non-currency values.",
+            )
         try:
             observation_date = date.fromisoformat(date_text)
         except ValueError:
@@ -565,19 +1029,55 @@ def _historical_metrics(
     if len(observations) < 12:
         raise ValueError("At least twelve usable historical multiple observations are required.")
     observations.sort(key=lambda item: item["date"])
-    values = [float(item["multiple"]) for item in observations]
+    values = [item["multiple"] for item in observations]
     current = values[-1]
-    percentile_position = sum(1 for value in values if value <= current) / len(values)
+    percentile_position = Decimal(sum(1 for value in values if value <= current)) / Decimal(len(values))
+    q25 = _percentile_decimal(values, Decimal("0.25"))
+    median = _percentile_decimal(values, Decimal("0.50"))
+    q75 = _percentile_decimal(values, Decimal("0.75"))
+    legacy_series = [
+        {
+            **item,
+            "multiple": float(item["multiple"]),
+        }
+        for item in observations
+    ]
     metrics = {
         "observations": len(values),
-        "series": observations,
-        "minimum": min(values),
-        "q25": _percentile(values, 0.25),
-        "median": _percentile(values, 0.50),
-        "q75": _percentile(values, 0.75),
-        "maximum": max(values),
-        "current": current,
-        "current_percentile": percentile_position,
+        "series": legacy_series,
+        "minimum": float(min(values)),
+        "q25": float(q25),
+        "median": float(median),
+        "q75": float(q75),
+        "maximum": float(max(values)),
+        "current": float(current),
+        "current_percentile": float(percentile_position),
+        "exact_calculation": {
+            "value_basis": "market_multiple_distribution",
+            "observations": str(len(values)),
+            "minimum": _exact_text(min(values)),
+            "q25": _exact_text(q25),
+            "median": _exact_text(median),
+            "q75": _exact_text(q75),
+            "maximum": _exact_text(max(values)),
+            "current": _exact_text(current),
+            "current_percentile": _exact_text(percentile_position),
+            "dimensioned_inputs": [
+                {
+                    "value": _exact_text(item["multiple"]),
+                    "unit": "x",
+                    "scale": "1",
+                    "currency": "N/A",
+                    "period": item["date"],
+                    "as_of": as_of_date,
+                    "provenance_refs": [f"Fact:{item['evidence_id']}"],
+                }
+                for item in observations
+            ],
+            "provenance_refs": [
+                f"Fact:{item['evidence_id']}" for item in observations
+            ],
+        },
     }
     return metrics, tuple(item["evidence_id"] for item in observations)
 
@@ -610,7 +1110,12 @@ def route_methods(
         )
     elif isinstance(context.get("peer_case"), Mapping):
         try:
-            peer_metrics, peer_evidence_ids = _peer_metrics(book, context["peer_case"])
+            with valuation_decimal_context():
+                peer_metrics, peer_evidence_ids = _peer_metrics(
+                    book,
+                    context["peer_case"],
+                    as_of_date,
+                )
             methods["peer_comps"] = MethodResult(
                 method_id="peer_comps",
                 label="可比公司法",
@@ -660,15 +1165,16 @@ def route_methods(
         )
     else:
         try:
-            metrics, historical_evidence_ids = _historical_metrics(
-                context.get("historical_multiples"),
-                book,
-                as_of_date,
-                {"price_to_sales": "ps", "ev_to_ebitda": "ev_ebitda"}.get(
-                    str(context.get("historical_metric", "pe")).strip().lower(),
-                    str(context.get("historical_metric", "pe")).strip().lower(),
-                ),
-            )
+            with valuation_decimal_context():
+                metrics, historical_evidence_ids = _historical_metrics(
+                    context.get("historical_multiples"),
+                    book,
+                    as_of_date,
+                    {"price_to_sales": "ps", "ev_to_ebitda": "ev_ebitda"}.get(
+                        str(context.get("historical_metric", "pe")).strip().lower(),
+                        str(context.get("historical_metric", "pe")).strip().lower(),
+                    ),
+                )
             methods["historical_band"] = MethodResult(
                 method_id="historical_band",
                 label="历史估值带",
@@ -738,11 +1244,12 @@ def route_methods(
         case = context.get("dcf_case")
         assert isinstance(case, Mapping)
         try:
-            metrics, diagnostics, dcf_input_evidence_ids = _dcf_metrics(
-                book,
-                case,
-                as_of_date,
-            )
+            with valuation_decimal_context():
+                metrics, diagnostics, dcf_input_evidence_ids = _dcf_metrics(
+                    book,
+                    case,
+                    as_of_date,
+                )
             status = "caution" if dcf_capability.status == "ready_with_estimates" else "ready"
             explanation = (
                 "DCF 已按显式 FCFF、WACC、终值和股权桥计算；估算输入使其仅作为探索性交叉检查。"

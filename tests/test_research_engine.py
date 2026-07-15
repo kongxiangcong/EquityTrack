@@ -42,6 +42,16 @@ def source_stub(
     }
 
 
+def _contains_float(value: object) -> bool:
+    if isinstance(value, float):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_float(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_float(item) for item in value)
+    return False
+
+
 class ResearchEngineBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = read_json(EXAMPLE / "source_manifest.json")
@@ -529,9 +539,31 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertAlmostEqual(1519.48051948, dcf.metrics["enterprise_value"], places=6)
         self.assertAlmostEqual(154.948051948, dcf.metrics["equity_value_per_share"], places=6)
         self.assertEqual(25, len(dcf.metrics["sensitivity"]))
+        exact_calculation = dcf.metrics["exact_calculation"]
+        self.assertTrue(exact_calculation["enterprise_value"].startswith("1519.4805194805"))
+        self.assertTrue(exact_calculation["per_share_value"].startswith("154.9480519480"))
+        self.assertFalse(_contains_float(exact_calculation))
+        self.assertEqual(
+            "USD",
+            exact_calculation["dimensioned_inputs"]["forecast_fcff"][0]["unit"],
+        )
+        self.assertEqual(
+            "shares",
+            exact_calculation["dimensioned_inputs"]["equity_bridge"]["diluted_shares"]["unit"],
+        )
+        forecast_ref = exact_calculation["dimensioned_inputs"]["forecast_fcff"][0][
+            "provenance_refs"
+        ][0]
+        self.assertTrue(forecast_ref.startswith("Assumption:"))
+        self.assertNotIn(
+            f"Fact:{forecast_ref.removeprefix('Assumption:')}",
+            json.dumps(exact_calculation),
+        )
         public_dcf = run.to_dict()["methods"]["dcf"]["metrics"]
         self.assertNotIn("equity_value_per_share", public_dcf)
         self.assertNotIn("sensitivity", public_dcf)
+        self.assertNotIn("exact_calculation", public_dcf)
+        self.assertFalse(_contains_float(public_dcf))
 
         mismatched_manifest = json.loads(json.dumps(manifest))
         for field in mismatched_manifest["sources"][0]["extracted_fields"]:
@@ -545,6 +577,85 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
         )
         self.assertEqual("blocked", mismatched.methods["dcf"].status)
+
+        cross_period_manifest = json.loads(json.dumps(manifest))
+        for field in cross_period_manifest["sources"][0]["extracted_fields"]:
+            if field["field_name"] == "debt":
+                field["period"] = "2024FY"
+        cross_period = ResearchEngine().run(
+            ResearchRequest(
+                manifest=cross_period_manifest,
+                context=context,
+                as_of_date="2026-01-01",
+            )
+        )
+        self.assertEqual("blocked", cross_period.methods["dcf"].status)
+        self.assertTrue(
+            cross_period.methods["dcf"].diagnostics[0].startswith(
+                "FINANCIAL_PERIOD_MISMATCH:"
+            )
+        )
+
+        invalid_share_unit_manifest = json.loads(json.dumps(manifest))
+        for field in invalid_share_unit_manifest["sources"][0]["extracted_fields"]:
+            if field["field_name"] == "diluted_shares":
+                field["unit"] = "USD"
+        invalid_share_unit = ResearchEngine().run(
+            ResearchRequest(
+                manifest=invalid_share_unit_manifest,
+                context=context,
+                as_of_date="2026-01-01",
+            )
+        )
+        self.assertEqual("blocked", invalid_share_unit.methods["dcf"].status)
+        self.assertTrue(
+            invalid_share_unit.methods["dcf"].diagnostics[0].startswith(
+                "FINANCIAL_UNIT_SCALE_MISMATCH:"
+            )
+        )
+
+        scaled_manifest = json.loads(json.dumps(manifest))
+        for field in scaled_manifest["sources"][0]["extracted_fields"]:
+            if field["field_name"] == "dcf_fcff":
+                field["unit"] = "USD million"
+            elif field["field_name"] in {
+                "cash",
+                "debt",
+                "lease_debt",
+                "minority_interest",
+                "preferred_stock",
+                "pension_deficit",
+                "non_operating_assets",
+                "associates_jv_value",
+            }:
+                field["unit"] = "USD million"
+            elif field["field_name"] == "diluted_shares":
+                field["unit"] = "million shares"
+        scaled_context = json.loads(json.dumps(context))
+        scaled_context["dcf_case"]["forecast_unit_scale"] = 1_000_000
+        scaled = ResearchEngine().run(
+            ResearchRequest(
+                manifest=scaled_manifest,
+                context=scaled_context,
+                as_of_date="2026-01-01",
+            )
+        )
+        self.assertEqual("ready", scaled.methods["dcf"].status)
+        self.assertAlmostEqual(
+            1_519_480_519.4805195,
+            scaled.methods["dcf"].metrics["enterprise_value"],
+            places=4,
+        )
+        self.assertAlmostEqual(
+            154.948051948,
+            scaled.methods["dcf"].metrics["equity_value_per_share"],
+            places=6,
+        )
+        self.assertAlmostEqual(
+            scaled.methods["dcf"].metrics["equity_value_per_share"],
+            scaled.methods["dcf"].metrics["sensitivity"][12]["equity_value_per_share"],
+            places=6,
+        )
 
     def test_dcf_missing_equity_bridge_is_method_blocking_not_zero(self) -> None:
         context = dict(self.context)
@@ -644,7 +755,11 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
                         "subject_id": "002897.SZ",
                         "semantic_role": "historical_multiple:pe",
                         "period": f"2025-{month:02d}-28",
-                        "value": float(28 + month * 2),
+                        "value": (
+                            f"{28 + month * 2}.000000000000000001"
+                            if month in {6, 7}
+                            else float(28 + month * 2)
+                        ),
                         "unit": "x",
                         "currency": "N/A",
                         "extraction_method": "structured_historical_input",
@@ -653,6 +768,63 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
                     for month in range(1, 13)
                 ],
             )
+        )
+        ebitda_source = source_stub(
+            "EBITDA",
+            report_date="2025-12-31",
+            extracted_fields=[
+                {
+                    "field_name": "ebitda",
+                    "period": "2025FY",
+                    "value": 500_000_000.0,
+                    "unit": "CNY",
+                    "currency": "CNY",
+                    "extraction_method": "worked_example",
+                    "confidence": "high",
+                }
+            ],
+        )
+        ebitda_source["tier"] = "official"
+        self.manifest["sources"].append(ebitda_source)
+        self.manifest["sources"].extend(
+            source_stub(
+                f"EV{index}",
+                report_date="2025-12-31",
+                extracted_fields=[
+                    {
+                        "field_name": "peer_ev_ebitda",
+                        "subject_id": f"EVPEER{index}",
+                        "semantic_role": "peer_multiple:ev_ebitda",
+                        "period": "2025FY",
+                        "value": float(4 + index),
+                        "unit": "x",
+                        "currency": "N/A",
+                        "extraction_method": "structured_peer_input",
+                        "confidence": "high",
+                    }
+                ],
+            )
+            for index in range(1, 4)
+        )
+        self.manifest["sources"].extend(
+            source_stub(
+                f"PS{index}",
+                report_date="2025-12-31",
+                extracted_fields=[
+                    {
+                        "field_name": "peer_ps",
+                        "subject_id": f"PSPEER{index}",
+                        "semantic_role": "peer_multiple:ps",
+                        "period": "2025FY",
+                        "value": float(index),
+                        "unit": "x",
+                        "currency": "N/A",
+                        "extraction_method": "structured_peer_input",
+                        "confidence": "high",
+                    }
+                ],
+            )
+            for index in range(1, 4)
         )
         context = dict(self.context)
         context["peer_count"] = 3
@@ -684,14 +856,32 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual("ready", peer.status)
         self.assertAlmostEqual(50.0, peer.metrics["peer_median_multiple"])
         self.assertAlmostEqual(81.5, peer.metrics["implied_per_share_median"])
+        self.assertEqual("81.5", peer.metrics["exact_calculation"]["implied_per_share_median"])
+        self.assertFalse(_contains_float(peer.metrics["exact_calculation"]))
+        self.assertEqual(
+            4,
+            len(peer.metrics["exact_calculation"]["provenance_refs"]),
+        )
         self.assertEqual("ready", historical.status)
         self.assertAlmostEqual(41.0, historical.metrics["median"])
+        self.assertEqual(
+            "41.000000000000000001",
+            historical.metrics["exact_calculation"]["median"],
+        )
+        self.assertFalse(_contains_float(historical.metrics["exact_calculation"]))
+        self.assertEqual(
+            12,
+            len(historical.metrics["exact_calculation"]["dimensioned_inputs"]),
+        )
         self.assertEqual(12, historical.metrics["observations"])
         self.assertTrue(run.permissions["formal_per_share_valuation"])
         self.assertGreaterEqual(len(peer.evidence_ids), 4)
         self.assertGreaterEqual(len(historical.evidence_ids), 13)
         self.assertIn("minimum_peer_count", peer.assumptions)
         self.assertIn("as_of_date", historical.assumptions)
+        public_methods = run.to_dict()["methods"]
+        self.assertFalse(_contains_float(public_methods["peer_comps"]["metrics"]))
+        self.assertFalse(_contains_float(public_methods["historical_band"]["metrics"]))
 
         duplicated_context = dict(context)
         duplicated_context["peer_case"] = dict(context["peer_case"])
@@ -711,6 +901,109 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
         )
         self.assertEqual("blocked", duplicated.methods["peer_comps"].status)
+
+        invalid_dimension_manifest = json.loads(json.dumps(self.manifest))
+        for source in invalid_dimension_manifest["sources"]:
+            if source["source_id"] == "P1":
+                source["extracted_fields"][0]["unit"] = "CNY"
+        invalid_dimension = ResearchEngine().run(
+            ResearchRequest(
+                manifest=invalid_dimension_manifest,
+                estimates=self.estimates,
+                context=context,
+                as_of_date="2026-07-07",
+            )
+        )
+        self.assertEqual("blocked", invalid_dimension.methods["peer_comps"].status)
+        self.assertTrue(
+            invalid_dimension.methods["peer_comps"].diagnostics[0].startswith(
+                "FINANCIAL_MULTIPLE_DIMENSION_MISMATCH:"
+            )
+        )
+
+        ps_context = dict(self.context)
+        ps_context["peer_count"] = 3
+        ps_context["peer_case"] = {
+            "metric": "ps",
+            "company_metric_field": "revenue",
+            "peers": [
+                {
+                    "ticker": f"PSPEER{index}",
+                    "usable": True,
+                    "period": "2025FY",
+                    "currency_checked": True,
+                    "accounting_checked": True,
+                    "evidence_ref": {
+                        "source_id": f"PS{index}",
+                        "field_name": "peer_ps",
+                        "period": "2025FY",
+                    },
+                }
+                for index in range(1, 4)
+            ],
+        }
+        ps_run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=ps_context,
+                as_of_date="2026-07-07",
+            )
+        )
+        self.assertEqual("blocked", ps_run.methods["peer_comps"].status)
+        self.assertTrue(
+            ps_run.methods["peer_comps"].diagnostics[0].startswith(
+                "FINANCIAL_PERIOD_MISMATCH:"
+            )
+        )
+
+        ev_context = dict(self.context)
+        ev_context["peer_count"] = 3
+        ev_context["peer_case"] = {
+            "metric": "ev_ebitda",
+            "company_metric_field": "ebitda",
+            "peers": [
+                {
+                    "ticker": f"EVPEER{index}",
+                    "usable": True,
+                    "period": "2025FY",
+                    "currency_checked": True,
+                    "accounting_checked": True,
+                    "evidence_ref": {
+                        "source_id": f"EV{index}",
+                        "field_name": "peer_ev_ebitda",
+                        "period": "2025FY",
+                    },
+                }
+                for index in range(1, 4)
+            ],
+        }
+        ev_run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=ev_context,
+                as_of_date="2026-07-07",
+            )
+        )
+        ev_peer = ev_run.methods["peer_comps"]
+        self.assertEqual("ready", ev_peer.status)
+        self.assertTrue(
+            ev_peer.metrics["exact_calculation"]["implied_per_share_median"].startswith(
+                "8.2880314463"
+            )
+        )
+        operations = {
+            step["operation"]
+            for step in ev_peer.metrics["exact_calculation"]["median_trace"]
+        }
+        self.assertIn("subtract_lease_debt", operations)
+        self.assertIn("add_associates_jv_value", operations)
+        self.assertIn("add_non_operating_assets", operations)
+        self.assertEqual(
+            "CNY",
+            ev_peer.metrics["exact_calculation"]["dimensioned_inputs"]["equity_bridge"]["lease_debt"]["unit"],
+        )
 
     def test_context_numbers_cannot_use_unknown_source_ids(self) -> None:
         context = dict(self.context)
