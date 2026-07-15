@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from .output_policy import normalize_action_language
+
+if TYPE_CHECKING:
+    from .forecast import ForecastRequest
 
 
 POLICY_IDENTIFIER_KEYS = {
@@ -84,6 +87,7 @@ class ResearchRequest:
     context: Mapping[str, Any] | None = None
     profile: str = "standard"
     render_html: bool = True
+    forecast_request: ForecastRequest | None = None
 
 
 @dataclass(frozen=True)

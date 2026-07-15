@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .evidence import EvidenceBook, canonical_field_name, numeric_value
@@ -23,6 +24,28 @@ DIMENSION_SPECS = (
     ("valuation", "估值视角"),
     ("governance_risk", "治理与风险"),
 )
+
+
+@dataclass(frozen=True)
+class LegacyNarrativeInputs:
+    """Explicit compatibility boundary for the pre-Forecast context contract."""
+
+    report_version: int
+    analyses: Mapping[str, Any]
+    debate: Mapping[str, Any] | None
+    synthesis: Mapping[str, Any] | None
+
+    @classmethod
+    def from_context(cls, context: Mapping[str, Any]) -> "LegacyNarrativeInputs":
+        raw_analyses = context.get("analyses", {})
+        raw_debate = context.get("debate")
+        raw_synthesis = context.get("synthesis")
+        return cls(
+            report_version=int(context.get("report_version", 0) or 0),
+            analyses=raw_analyses if isinstance(raw_analyses, Mapping) else {},
+            debate=raw_debate if isinstance(raw_debate, Mapping) else None,
+            synthesis=raw_synthesis if isinstance(raw_synthesis, Mapping) else None,
+        )
 
 
 def _has_unbound_number(text: str) -> bool:
@@ -52,14 +75,21 @@ def _metric_item(book: EvidenceBook, reference: Any) -> Any:
     )
 
 
-def _metric_units_valid(resolved: tuple[Any, ...], calculation: str, display: str) -> bool:
+def _metric_units_valid(
+    resolved: tuple[Any, ...], calculation: str, display: str
+) -> bool:
     units = tuple(item.unit.lower() for item in resolved)
     currencies = tuple(item.currency.upper() for item in resolved)
     if calculation == "direct":
         allowed = {
-            "cny_100m": len(resolved) == 1 and currencies[0] == "CNY" and units[0] in {"cny", "yuan", "rmb"},
-            "cny_per_share": len(resolved) == 1 and currencies[0] == "CNY" and units[0] in {"cny/share", "cny_per_share"},
-            "percent_upper_bound": len(resolved) == 1 and units[0] in {"ratio_upper_bound", "decimal"},
+            "cny_100m": len(resolved) == 1
+            and currencies[0] == "CNY"
+            and units[0] in {"cny", "yuan", "rmb"},
+            "cny_per_share": len(resolved) == 1
+            and currencies[0] == "CNY"
+            and units[0] in {"cny/share", "cny_per_share"},
+            "percent_upper_bound": len(resolved) == 1
+            and units[0] in {"ratio_upper_bound", "decimal"},
             "tpy_10k": len(resolved) == 1 and units[0] in {"tons/year", "tpy"},
             "number": len(resolved) == 1,
         }
@@ -117,19 +147,25 @@ def _metrics(value: Any, book: EvidenceBook) -> tuple[Mapping[str, Any], ...]:
             continue
         if calculation == "direct" and len(numbers) == 1:
             metric_value = numbers[0]
-        elif calculation == "ratio" and len(numbers) == 2 and numbers[1] not in (None, 0):
+        elif (
+            calculation == "ratio" and len(numbers) == 2 and numbers[1] not in (None, 0)
+        ):
             metric_value = numbers[0] / numbers[1]
         elif calculation == "difference" and len(numbers) == 2:
             metric_value = numbers[0] - numbers[1]
         else:
             continue
-        evidence_ids = tuple(dict.fromkeys(evidence.evidence_id for evidence in resolved))
+        evidence_ids = tuple(
+            dict.fromkeys(evidence.evidence_id for evidence in resolved)
+        )
         fields = tuple(dict.fromkeys(evidence.field_name for evidence in resolved))
         metrics.append(
             {
                 "label": label,
                 "value": _format_metric(float(metric_value), display),
-                "note": " · ".join(dict.fromkeys(evidence.period for evidence in resolved)),
+                "note": " · ".join(
+                    dict.fromkeys(evidence.period for evidence in resolved)
+                ),
                 "tone": str(item.get("tone", "neutral")).strip() or "neutral",
                 "evidence_fields": list(fields),
                 "evidence_ids": list(evidence_ids),
@@ -151,11 +187,15 @@ def _claims(
             continue
         raw = item
         text = str(raw.get("text", "")).strip()
-        fields = tuple(
-            canonical_field_name(field)
-            for field in raw.get("evidence_fields", default_fields)
-            if canonical_field_name(field)
-        ) if isinstance(raw.get("evidence_fields", default_fields), (list, tuple)) else ()
+        fields = (
+            tuple(
+                canonical_field_name(field)
+                for field in raw.get("evidence_fields", default_fields)
+                if canonical_field_name(field)
+            )
+            if isinstance(raw.get("evidence_fields", default_fields), (list, tuple))
+            else ()
+        )
         evidence_ids = _resolve_evidence(book, fields, allow_estimate=False)
         # Numeric facts belong in deterministic metrics, never in free-form claims.
         if (
@@ -183,12 +223,14 @@ def _resolve_evidence(
     return tuple(ids)
 
 
-def _analysis_bundle(book: EvidenceBook, context: Mapping[str, Any]) -> AnalysisBundle:
-    raw_dimensions = context.get("analyses", {})
-    raw_dimensions = raw_dimensions if isinstance(raw_dimensions, Mapping) else {}
+def _analysis_bundle(
+    book: EvidenceBook,
+    inputs: LegacyNarrativeInputs,
+) -> AnalysisBundle:
+    raw_dimensions = inputs.analyses
     dimensions: dict[str, AnalysisResult] = {}
     missing: list[str] = []
-    has_v3 = int(context.get("report_version", 0) or 0) >= 3
+    has_v3 = inputs.report_version >= 3
 
     for dimension_id, title in DIMENSION_SPECS:
         raw = raw_dimensions.get(dimension_id, {})
@@ -197,18 +239,26 @@ def _analysis_bundle(book: EvidenceBook, context: Mapping[str, Any]) -> Analysis
         conclusion = str(raw.get("conclusion", "")).strip()
         if _has_unbound_number(conclusion):
             conclusion = ""
-        fields = tuple(
-            canonical_field_name(item)
-            for item in raw.get("evidence_fields", [])
-            if canonical_field_name(item)
-        ) if isinstance(raw.get("evidence_fields", []), list) else ()
+        fields = (
+            tuple(
+                canonical_field_name(item)
+                for item in raw.get("evidence_fields", [])
+                if canonical_field_name(item)
+            )
+            if isinstance(raw.get("evidence_fields", []), list)
+            else ()
+        )
         sourced_ids = _resolve_evidence(book, fields, allow_estimate=False)
         evidence_ids = _resolve_evidence(book, fields, allow_estimate=True)
         key_findings = _claims(raw.get("key_findings"), book, fields)
         counterpoints = _claims(raw.get("counterpoints"), book, fields)
         uncertainties = _claims(raw.get("uncertainties"), book, fields)
         requested_status = str(raw.get("status", "ready")).strip().lower()
-        status = requested_status if requested_status in {"ready", "limited", "blocked"} else "limited"
+        status = (
+            requested_status
+            if requested_status in {"ready", "limited", "blocked"}
+            else "limited"
+        )
         if not conclusion or not evidence_ids:
             status = "blocked"
         elif len(sourced_ids) != len(set(fields)):
@@ -235,9 +285,7 @@ def _analysis_bundle(book: EvidenceBook, context: Mapping[str, Any]) -> Analysis
     completeness = (
         "complete"
         if not missing and all(item.status == "ready" for item in dimensions.values())
-        else "complete_with_limits"
-        if not missing
-        else "partial"
+        else "complete_with_limits" if not missing else "partial"
     )
     return AnalysisBundle(dimensions, completeness, tuple(missing))
 
@@ -250,20 +298,31 @@ def _debate_case(
     raw = raw if isinstance(raw, Mapping) else {}
     arguments: list[Mapping[str, Any]] = []
     ids: list[str] = []
-    for item in raw.get("arguments", []) if isinstance(raw.get("arguments", []), list) else []:
+    for item in (
+        raw.get("arguments", []) if isinstance(raw.get("arguments", []), list) else []
+    ):
         if not isinstance(item, Mapping):
             continue
-        fields = tuple(
-            canonical_field_name(field)
-            for field in item.get("evidence_fields", [])
-            if canonical_field_name(field)
-        ) if isinstance(item.get("evidence_fields", []), list) else ()
+        fields = (
+            tuple(
+                canonical_field_name(field)
+                for field in item.get("evidence_fields", [])
+                if canonical_field_name(field)
+            )
+            if isinstance(item.get("evidence_fields", []), list)
+            else ()
+        )
         item_ids = _resolve_evidence(book, fields, allow_estimate=False)
         for evidence_id in item_ids:
             if evidence_id not in ids:
                 ids.append(evidence_id)
         claim = str(item.get("claim", "")).strip()
-        if claim and not _has_unbound_number(claim) and fields and len(item_ids) == len(set(fields)):
+        if (
+            claim
+            and not _has_unbound_number(claim)
+            and fields
+            and len(item_ids) == len(set(fields))
+        ):
             arguments.append(
                 {
                     "argument_id": str(item.get("argument_id", "")).strip(),
@@ -280,9 +339,11 @@ def _debate_case(
     )
 
 
-def _debate(book: EvidenceBook, context: Mapping[str, Any]) -> DebateResult | None:
-    raw = context.get("debate")
-    if not isinstance(raw, Mapping):
+def _debate(
+    book: EvidenceBook,
+    raw: Mapping[str, Any] | None,
+) -> DebateResult | None:
+    if raw is None:
         return None
     bull = _debate_case("bull", raw.get("bull"), book)
     bear = _debate_case("bear", raw.get("bear"), book)
@@ -298,7 +359,9 @@ def _debate(book: EvidenceBook, context: Mapping[str, Any]) -> DebateResult | No
     for side, case in (("bull", bull), ("bear", bear)):
         for item in case.arguments:
             response_to = str(item.get("response_to", ""))
-            if response_to and argument_sides.get(response_to) != ("bear" if side == "bull" else "bull"):
+            if response_to and argument_sides.get(response_to) != (
+                "bear" if side == "bull" else "bull"
+            ):
                 return None
     if not any(item.get("response_to") for item in bull.arguments) or not any(
         item.get("response_to") for item in bear.arguments
@@ -316,7 +379,10 @@ def _debate(book: EvidenceBook, context: Mapping[str, Any]) -> DebateResult | No
         or not bull.evidence_ids
         or not bear.evidence_ids
         or not manager_summary
-        or any(_has_unbound_number(text) for text in (bull.thesis, bear.thesis, manager_summary))
+        or any(
+            _has_unbound_number(text)
+            for text in (bull.thesis, bear.thesis, manager_summary)
+        )
         or any(_has_unbound_number(text) for values in debate_lists for text in values)
     ):
         return None
@@ -330,15 +396,21 @@ def _debate(book: EvidenceBook, context: Mapping[str, Any]) -> DebateResult | No
     )
 
 
-def _synthesis(book: EvidenceBook, context: Mapping[str, Any]) -> ResearchSynthesis | None:
-    raw = context.get("synthesis")
-    if not isinstance(raw, Mapping):
+def _synthesis(
+    book: EvidenceBook,
+    raw: Mapping[str, Any] | None,
+) -> ResearchSynthesis | None:
+    if raw is None:
         return None
-    fields = tuple(
-        canonical_field_name(item)
-        for item in raw.get("evidence_fields", [])
-        if canonical_field_name(item)
-    ) if isinstance(raw.get("evidence_fields", []), list) else ()
+    fields = (
+        tuple(
+            canonical_field_name(item)
+            for item in raw.get("evidence_fields", [])
+            if canonical_field_name(item)
+        )
+        if isinstance(raw.get("evidence_fields", []), list)
+        else ()
+    )
     evidence_ids = _resolve_evidence(book, fields, allow_estimate=False)
     required = (
         "core_thesis",
@@ -373,14 +445,18 @@ def _synthesis(book: EvidenceBook, context: Mapping[str, Any]) -> ResearchSynthe
 
 def build_professional_narrative(
     book: EvidenceBook,
-    context: Mapping[str, Any],
+    inputs: LegacyNarrativeInputs,
 ) -> tuple[AnalysisBundle, DebateResult | None, ResearchSynthesis | None, str]:
-    bundle = _analysis_bundle(book, context)
+    bundle = _analysis_bundle(book, inputs)
     if bundle.completeness == "legacy":
         return bundle, None, None, "audit_report"
-    debate = _debate(book, context)
-    synthesis = _synthesis(book, context)
-    if bundle.completeness in {"complete", "complete_with_limits"} and debate and synthesis:
+    debate = _debate(book, inputs.debate)
+    synthesis = _synthesis(book, inputs.synthesis)
+    if (
+        bundle.completeness in {"complete", "complete_with_limits"}
+        and debate
+        and synthesis
+    ):
         return bundle, debate, synthesis, "professional"
     if bundle.dimensions:
         return bundle, debate, synthesis, "professional_limited"

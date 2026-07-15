@@ -5,9 +5,17 @@ import json
 from dataclasses import replace
 from typing import Any, Mapping
 
-from .evidence import EvidenceBook, build_evidence
-from .models import AnalysisBundle, IntegrityIssue, MethodResult, ResearchRequest, ResearchRun
-from .narrative import build_professional_narrative
+from .evidence import EvidenceBook, EvidenceBuild, build_evidence
+from .financial import FinancialInvariantError, exact_decimal_from_legacy
+from .forecast import ForecastEngine, ForecastInvariantError
+from .models import (
+    AnalysisBundle,
+    IntegrityIssue,
+    MethodResult,
+    ResearchRequest,
+    ResearchRun,
+)
+from .narrative import LegacyNarrativeInputs, build_professional_narrative
 from .output_policy import normalize_action_language
 from .policies import evaluate_capabilities
 from .valuation import route_methods
@@ -55,6 +63,7 @@ NARRATIVE_KEYS = {
     "response_to",
     "text",
 }
+
 
 def _normalize_context_language(
     value: Any,
@@ -114,6 +123,24 @@ class ResearchEngine:
             request.estimates,
             as_of_date=request.as_of_date,
         )
+        forecast_graph = None
+        if request.forecast_request is not None:
+            if request.forecast_request.as_of != request.as_of_date:
+                raise ForecastInvariantError(
+                    "FORECAST_RESEARCH_AS_OF_MISMATCH",
+                    "ResearchRequest and typed ForecastRequest must share one as-of date.",
+                )
+            manifest_security_id = str(build.company.get("ticker", "")).strip()
+            if (
+                not manifest_security_id
+                or request.forecast_request.security.security_id != manifest_security_id
+            ):
+                raise ForecastInvariantError(
+                    "FORECAST_RESEARCH_SECURITY_MISMATCH",
+                    "Typed Forecast Security must match the canonical manifest Security.",
+                )
+            self._validate_forecast_fact_manifest(request, build)
+            forecast_graph = ForecastEngine().build(request.forecast_request)
         extra_issues: list[IntegrityIssue] = list(policy_issues)
         if request.profile not in {"quick", "standard", "deep"}:
             extra_issues.append(
@@ -131,9 +158,7 @@ class ResearchEngine:
             subject_id=str(build.company.get("ticker", "")),
         )
         capabilities = evaluate_capabilities(book, context)
-        integrity_errors = tuple(
-            issue for issue in issues if issue.severity == "error"
-        )
+        integrity_errors = tuple(issue for issue in issues if issue.severity == "error")
         if integrity_errors:
             capabilities = {
                 name: replace(
@@ -155,7 +180,7 @@ class ResearchEngine:
 
         analysis, debate, synthesis, report_mode = build_professional_narrative(
             book,
-            context,
+            LegacyNarrativeInputs.from_context(context),
         )
         if integrity_errors:
             analysis = AnalysisBundle(
@@ -168,11 +193,12 @@ class ResearchEngine:
             report_mode = "audit_memo"
         elif int(context.get("report_version", 0) or 0) >= 3:
             report_capability = capabilities["research_report"]
-            dimension_statuses = [
-                item.status for item in analysis.dimensions.values()
-            ]
-            if synthesis is None or debate is None or not dimension_statuses or all(
-                status == "blocked" for status in dimension_statuses
+            dimension_statuses = [item.status for item in analysis.dimensions.values()]
+            if (
+                synthesis is None
+                or debate is None
+                or not dimension_statuses
+                or all(status == "blocked" for status in dimension_statuses)
             ):
                 capabilities = {
                     **capabilities,
@@ -212,6 +238,18 @@ class ResearchEngine:
             methods=methods,
             issue_count=len(issues),
         )
+        if forecast_graph is not None:
+            summary = {
+                **summary,
+                "forecast_graph": {
+                    "graph_id": forecast_graph.graph_id,
+                    "template_id": forecast_graph.template_id,
+                    "security_id": forecast_graph.security_id,
+                    "data_snapshot_id": forecast_graph.data_snapshot_id,
+                    "node_count": len(forecast_graph.nodes),
+                    "edge_count": len(forecast_graph.edges),
+                },
+            }
         plan = self._conditional_plan(context, capabilities, methods)
         diagnostics = self._diagnostics(issues, capabilities, methods)
 
@@ -243,6 +281,55 @@ class ResearchEngine:
 
             run = replace(run, html=render_html_report(run))
         return run
+
+    @staticmethod
+    def _validate_forecast_fact_manifest(
+        request: ResearchRequest,
+        build: EvidenceBuild,
+    ) -> None:
+        if request.forecast_request is None:
+            return
+        source_by_id = {source.source_id: source for source in build.sources}
+        for fact in request.forecast_request.data_snapshot.facts:
+            source = source_by_id.get(fact.source_id)
+            if (
+                source is None
+                or not source.official
+                or source.available_at[:10] != fact.available_at
+            ):
+                raise ForecastInvariantError(
+                    "FORECAST_FACT_MANIFEST_MISMATCH",
+                    f"Forecast Fact {fact.fact_id} is not bound to its declared official manifest source.",
+                )
+            candidates = [
+                item
+                for item in build.items
+                if item.source_id == fact.source_id
+                and item.subject_id == fact.subject_id
+                and item.field_name == fact.field_name
+                and item.period == fact.period
+                and item.unit == fact.unit
+                and item.currency == fact.currency
+                and item.official
+                and not item.estimated
+            ]
+            matched = False
+            for item in candidates:
+                try:
+                    value = exact_decimal_from_legacy(
+                        item.value,
+                        f"Forecast Fact {fact.fact_id}",
+                    )
+                except FinancialInvariantError:
+                    continue
+                if value == fact.value:
+                    matched = True
+                    break
+            if not matched:
+                raise ForecastInvariantError(
+                    "FORECAST_FACT_MANIFEST_MISMATCH",
+                    f"Forecast Fact {fact.fact_id} has no exact subject/PIT/dimension/value match in source_manifest.",
+                )
 
     @staticmethod
     def _blocked_methods(context: Mapping[str, Any]) -> dict[str, MethodResult]:
@@ -279,6 +366,11 @@ class ResearchEngine:
             "manifest": request.manifest,
             "estimates": request.estimates,
             "context": request.context,
+            "forecast_request": (
+                request.forecast_request.to_dict()
+                if request.forecast_request is not None
+                else None
+            ),
         }
         encoded = json.dumps(
             payload,
@@ -297,8 +389,7 @@ class ResearchEngine:
         methods: Mapping[str, Any],
     ) -> dict[str, bool]:
         research_report = (
-            not integrity_errors
-            and capabilities["research_report"].status != "blocked"
+            not integrity_errors and capabilities["research_report"].status != "blocked"
         )
         conditional_plan = (
             not integrity_errors
@@ -330,12 +421,24 @@ class ResearchEngine:
     ) -> str:
         if integrity_errors:
             return "blocked"
-        limited_statuses = {"blocked", "limited", "ready_with_estimates", "caution", "disabled"}
+        limited_statuses = {
+            "blocked",
+            "limited",
+            "ready_with_estimates",
+            "caution",
+            "disabled",
+        }
         capability_limited = any(
             value.status in limited_statuses for value in capabilities.values()
         )
-        method_limited = any(value.status in limited_statuses for value in methods.values())
-        return "completed_with_limits" if capability_limited or method_limited else "completed"
+        method_limited = any(
+            value.status in limited_statuses for value in methods.values()
+        )
+        return (
+            "completed_with_limits"
+            if capability_limited or method_limited
+            else "completed"
+        )
 
     @staticmethod
     def _summary(
@@ -407,16 +510,32 @@ class ResearchEngine:
                 "cross_subject_method_evidence": len(cross_subject_items),
             },
             "capability_counts": {
-                status: len([value for value in capabilities.values() if value.status == status])
+                status: len(
+                    [value for value in capabilities.values() if value.status == status]
+                )
                 for status in ("ready", "limited", "ready_with_estimates", "blocked")
             },
             "method_counts": {
-                status: len([value for value in methods.values() if value.status == status])
+                status: len(
+                    [value for value in methods.values() if value.status == status]
+                )
                 for status in ("ready", "limited", "caution", "blocked", "disabled")
             },
-            "theses": list(context.get("theses", [])) if isinstance(context.get("theses", []), list) else [],
-            "risks": list(context.get("risks", [])) if isinstance(context.get("risks", []), list) else [],
-            "catalysts": list(context.get("catalysts", [])) if isinstance(context.get("catalysts", []), list) else [],
+            "theses": (
+                list(context.get("theses", []))
+                if isinstance(context.get("theses", []), list)
+                else []
+            ),
+            "risks": (
+                list(context.get("risks", []))
+                if isinstance(context.get("risks", []), list)
+                else []
+            ),
+            "catalysts": (
+                list(context.get("catalysts", []))
+                if isinstance(context.get("catalysts", []), list)
+                else []
+            ),
             "scenarios": (
                 list(context.get("scenarios", []))
                 if capabilities["financial_model"].status
@@ -433,9 +552,11 @@ class ResearchEngine:
         methods: Mapping[str, Any],
     ) -> tuple[Mapping[str, Any], ...]:
         raw = context.get("conditional_plan", [])
-        plan: list[Mapping[str, Any]] = [
-            dict(item) for item in raw if isinstance(item, Mapping)
-        ] if isinstance(raw, list) else []
+        plan: list[Mapping[str, Any]] = (
+            [dict(item) for item in raw if isinstance(item, Mapping)]
+            if isinstance(raw, list)
+            else []
+        )
 
         existing_watch = {str(item.get("watch", "")) for item in plan}
         for method in methods.values():
