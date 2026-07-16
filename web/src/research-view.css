@@ -123,7 +123,7 @@
 }
 
 .implied-section { padding: 20px; border-radius: 18px; background: #eaf1f7; }
-.simulation-section { padding: 20px; border-radius: 18px; background: #f3f0e8; }
+.simulation-section, .market-path-section { padding: 20px; border-radius: 18px; background: #f3f0e8; }
 .quantile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .quantile-grid article, .simulation-detail-grid article { min-width: 0; padding: 14px; border-radius: 14px; background: #fff; }
 .quantile-grid h4 { margin: 0; color: #536174; }

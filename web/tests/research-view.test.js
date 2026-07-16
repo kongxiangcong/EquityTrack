@@ -60,6 +60,21 @@ const view = {
     sample_budget: 10000,
     invalid_path_rate: "0.01",
   },
+  market_price_paths: {
+    interpretation: "State-conditioned traded-price paths; not intrinsic value or a target price.",
+    price_unit: "CNY/share",
+    terminal_price_quantiles: {p50: {value: "11.8", unit: "CNY/share"}},
+    horizon_return_quantiles: {p50: {value: "-0.02", unit: "decimal"}},
+    maximum_drawdown_quantiles: {p50: {value: "-0.15", unit: "decimal"}},
+    threshold_trigger_probabilities: [{threshold: "<95>", probability: "0.2"}],
+    calibration: {series_identity: "<series@1>"},
+    constraints: {policy_identity: "cn-a-share@1"},
+    budget: {rng_algorithm: "splitmix64_state_block_bootstrap@1"},
+    tail_results: {return_threshold: "-0.1", probability_below_threshold: "0.2"},
+  },
+  value_market_divergence: {
+    explanation: "市场路径中位终点低于基本面价值分布中位数；背离不是目标价或交易动作。",
+  },
   audit: {artifact_records: [], fact_evidence: [], formula_identities: []},
   boundary: "条件研究结果，不构成个性化投资建议。",
 }
@@ -79,6 +94,12 @@ test("historical selection is exact and sandbox report escapes model text", () =
   assert.match(report, /&lt;calibration&gt;/)
   assert.match(report, /&lt;copula@1&gt;/)
   assert.match(report, /&lt;limited&gt;/)
+  assert.match(report, /状态条件下的价格与回撤分布/)
+  assert.match(report, /not intrinsic value or a target price/)
+  assert.match(report, /&lt;95&gt;/)
+  assert.match(report, /&lt;series@1&gt;/)
+  assert.match(report, /背离不是目标价或交易动作/)
+  assert.match(report, /收益低于 -10%/)
   assert.match(report, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
   assert.doesNotMatch(report, /<script|allow-scripts|allow-same-origin/i)
 })

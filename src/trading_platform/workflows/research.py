@@ -211,6 +211,7 @@ class ResearchWorkflowService:
                 code_identity=self.engine_identity,
                 drafts=request.analysis_artifacts,
                 workflow_run_id=run_id,
+                market_data_snapshot_id=request.workflow_snapshot_id,
             )
         except Exception:
             self._fail_node(
@@ -266,6 +267,8 @@ class ResearchWorkflowService:
             "Forecast": "forecast",
             "Valuation": "valuation",
             "Simulation": "simulation",
+            "MarketDataSnapshot": "market_data_snapshot",
+            "MarketPathSimulation": "market_path_simulation",
             "ForecastReview": "forecast_review",
         }[artifact_kind]
     def _validate_workflow_snapshot(self, workflow_snapshot_id: str, research_snapshot_id: str) -> None:

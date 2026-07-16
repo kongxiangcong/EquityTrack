@@ -169,6 +169,20 @@ class WorkspaceService:
                     if "Simulation" in artifact_ids
                     else None
                 ),
+                market_data_snapshot=(
+                    self.research_artifact_reader(
+                        artifact_ids["MarketDataSnapshot"]
+                    )
+                    if "MarketDataSnapshot" in artifact_ids
+                    else None
+                ),
+                market_path=(
+                    self.research_artifact_reader(
+                        artifact_ids["MarketPathSimulation"]
+                    )
+                    if "MarketPathSimulation" in artifact_ids
+                    else None
+                ),
                 research_run_payload=self.research_run_reader(
                     group["research_run_id"]
                 ),

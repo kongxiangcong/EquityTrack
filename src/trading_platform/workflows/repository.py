@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -239,6 +240,7 @@ class WorkflowRepository:
         code_identity: str,
         drafts: tuple[ImmutableArtifactDraft, ...],
         workflow_run_id: str | None = None,
+        market_data_snapshot_id: str | None = None,
     ) -> tuple[str, ...]:
         # The filesystem writer lock is deliberately fail-fast. Serialize same-process
         # replays here so identical requests can observe the first committed bundle.
@@ -249,6 +251,7 @@ class WorkflowRepository:
                 code_identity=code_identity,
                 drafts=drafts,
                 workflow_run_id=workflow_run_id,
+                market_data_snapshot_id=market_data_snapshot_id,
             )
 
     def _persist_research_artifact_bundle(
@@ -259,6 +262,7 @@ class WorkflowRepository:
         code_identity: str,
         drafts: tuple[ImmutableArtifactDraft, ...],
         workflow_run_id: str | None = None,
+        market_data_snapshot_id: str | None = None,
     ) -> tuple[str, ...]:
         if not isinstance(drafts, tuple) or any(
             not isinstance(draft, ImmutableArtifactDraft) for draft in drafts
@@ -299,6 +303,7 @@ class WorkflowRepository:
         model_data_snapshot_identity = self._validate_research_artifact_lineage(
             drafts,
             subject_aliases=subject_aliases,
+            market_data_snapshot_id=market_data_snapshot_id,
         )
 
         record_by_kind = {
@@ -311,7 +316,7 @@ class WorkflowRepository:
         for draft in drafts:
             record_id = record_by_kind[draft.artifact_kind]
             dependency_ids = tuple(
-                record_by_kind[kind] for kind in draft.dependency_kinds
+                sorted(record_by_kind[kind] for kind in draft.dependency_kinds)
             )
             envelope = {
                 "envelope_schema": "ResearchArtifactEnvelope@1",
@@ -443,11 +448,12 @@ class WorkflowRepository:
         self._fault("research_artifact.after_commit")
         return tuple(item[1] for item in prepared)
 
-    @staticmethod
     def _validate_research_artifact_lineage(
+        self,
         drafts: tuple[ImmutableArtifactDraft, ...],
         *,
         subject_aliases: frozenset[str],
+        market_data_snapshot_id: str | None,
     ) -> str:
         by_kind = {draft.artifact_kind: draft for draft in drafts}
         data_snapshot = by_kind.get("DataSnapshot")
@@ -583,7 +589,704 @@ class WorkflowRepository:
                 or simulation.source_identity != expected_source
             ):
                 raise ValueError("RESEARCH_ARTIFACT_SIMULATION_LINEAGE_MISMATCH")
+        market_data = by_kind.get("MarketDataSnapshot")
+        if market_data is not None:
+            payload = market_data.payload
+            expected_source = "market-data-snapshot:" + hashlib.sha256(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                payload.get("as_of") != market_data.as_of
+                or payload.get("snapshot_id")
+                != market_data.summary.get("snapshot_id")
+                or payload.get("market") != market_data.summary.get("market")
+                or payload.get("market_timezone")
+                != market_data.summary.get("market_timezone")
+                or payload.get("series_identity")
+                != market_data.summary.get("series_identity")
+                or payload.get("trading_calendar_identity")
+                != market_data.summary.get("trading_calendar_identity")
+                or len(payload.get("observations", ()))
+                != market_data.summary.get("observation_count")
+                or market_data.source_identity != expected_source
+            ):
+                raise ValueError(
+                    "RESEARCH_ARTIFACT_MARKET_DATA_LINEAGE_MISMATCH"
+                )
+            self._validate_frozen_market_calibration(
+                payload,
+                subject_aliases=subject_aliases,
+                market_data_snapshot_id=market_data_snapshot_id,
+                market_path=by_kind.get("MarketPathSimulation"),
+            )
+        market_path = by_kind.get("MarketPathSimulation")
+        if market_path is not None:
+            from equity_research import MarketPathEngine
+
+            if simulation is None or market_data is None:
+                raise ValueError(
+                    "RESEARCH_ARTIFACT_MARKET_PATH_PARENT_MISSING"
+                )
+            payload = market_path.payload
+            fallback = simulation.payload.get("deterministic_fallback")
+            constraints = payload.get("constraints")
+            budget = payload.get("budget")
+            if not isinstance(constraints, Mapping) or not isinstance(
+                budget,
+                Mapping,
+            ):
+                raise ValueError(
+                    "RESEARCH_ARTIFACT_MARKET_PATH_LINEAGE_MISMATCH"
+                )
+            lag = constraints.get("minimum_execution_lag_sessions")
+            horizon = budget.get("horizon_sessions")
+            if not isinstance(lag, int) or not isinstance(horizon, int):
+                raise ValueError(
+                    "RESEARCH_ARTIFACT_MARKET_PATH_LINEAGE_MISMATCH"
+                )
+            source_value = {
+                "simulation_id": payload.get("simulation_id"),
+                "as_of_at": payload.get("as_of_at"),
+                "valuation_simulation_input_fingerprint": simulation.content_hash,
+                "market_data_snapshot_identity": market_data.source_identity,
+                "market_data_input_fingerprint": market_data.content_hash,
+                "market_path_model_identity": payload.get("model_identity"),
+                "market_path_policy_identity": payload.get("policy_identity"),
+                "price_unit": payload.get("price_unit"),
+                "currency": payload.get("currency"),
+                "calibration": payload.get("calibration"),
+                "constraints": payload.get("constraints"),
+                "budget": payload.get("budget"),
+                "starting_price": payload.get("starting_price"),
+                "starting_price_session": payload.get(
+                    "starting_price_session"
+                ),
+                "starting_price_member_id": payload.get(
+                    "starting_price_member_id"
+                ),
+                "starting_price_available_at": payload.get(
+                    "starting_price_available_at"
+                ),
+                "starting_price_evidence_refs": payload.get(
+                    "starting_price_evidence_refs"
+                ),
+                "current_market_state": payload.get("current_market_state"),
+                "current_state_available_at": payload.get(
+                    "current_state_available_at"
+                ),
+                "current_state_evidence_refs": payload.get(
+                    "current_state_evidence_refs"
+                ),
+                "price_thresholds": payload.get("price_thresholds"),
+                "tail_return_threshold": payload.get(
+                    "tail_return_threshold"
+                ),
+            }
+            expected_source = "market-path-simulation:" + hashlib.sha256(
+                json.dumps(
+                    source_value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                payload.get("security_id") != subject_id
+                or payload.get("as_of") != market_path.as_of
+                or payload.get("valuation_simulation_source_identity")
+                != simulation.source_identity
+                or market_path.summary.get(
+                    "valuation_simulation_source_identity"
+                )
+                != simulation.source_identity
+                or market_path.summary.get(
+                    "valuation_simulation_input_fingerprint"
+                )
+                != simulation.content_hash
+                or payload.get("calibration") != market_data.payload
+                or market_path.summary.get("market_data_snapshot_identity")
+                != market_data.source_identity
+                or market_path.summary.get("market_data_input_fingerprint")
+                != market_data.content_hash
+                or payload.get("interpretation")
+                != market_path.summary.get("interpretation")
+                or payload.get("interpretation")
+                != MarketPathEngine.INTERPRETATION
+                or not isinstance(fallback, Mapping)
+                or payload.get("price_unit") != fallback.get("unit")
+                or payload.get("currency") != fallback.get("currency")
+                or payload.get("horizon_return_basis")
+                != "net_of_declared_round_trip_transaction_costs"
+                or payload.get("execution_period")
+                != f"T+{lag} trading sessions"
+                or payload.get("terminal_period")
+                != f"T+{lag + horizon} trading sessions"
+                or payload.get("risk_horizon_period")
+                != (
+                    f"T+{lag} through T+{lag + horizon} trading sessions"
+                )
+                or market_path.source_identity != expected_source
+            ):
+                raise ValueError("RESEARCH_ARTIFACT_MARKET_PATH_LINEAGE_MISMATCH")
         return model_snapshot_identity
+
+    def _validate_frozen_market_calibration(
+        self,
+        payload: Mapping[str, object],
+        *,
+        subject_aliases: frozenset[str],
+        market_data_snapshot_id: str | None,
+        market_path: ImmutableArtifactDraft | None,
+    ) -> None:
+        if (
+            market_data_snapshot_id is None
+            or payload.get("platform_snapshot_id")
+            != market_data_snapshot_id
+            or market_path is None
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_SNAPSHOT_UNBOUND"
+            )
+        snapshot = self.connection.execute(
+            "SELECT * FROM data_snapshot WHERE data_snapshot_id=?",
+            (market_data_snapshot_id,),
+        ).fetchone()
+        if (
+            snapshot is None
+            or snapshot["scope_id"] not in subject_aliases
+            or snapshot["snapshot_purpose"] not in {"workflow", "market"}
+            or snapshot["freshness_status"] != "valid"
+            or snapshot["quality_status"] == "blocking"
+            or snapshot["market_timezone"] != payload.get("market_timezone")
+            or snapshot["calendar_version"]
+            != payload.get("trading_calendar_identity")
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_SNAPSHOT_INVALID"
+            )
+        try:
+            snapshot_cutoff = datetime.fromisoformat(
+                str(snapshot["as_of_at"]).replace("Z", "+00:00")
+            )
+            result_cutoff = datetime.fromisoformat(
+                str(market_path.payload.get("as_of_at")).replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_SNAPSHOT_INVALID"
+            ) from None
+        if (
+            snapshot_cutoff.tzinfo is None
+            or result_cutoff.tzinfo is None
+            or snapshot_cutoff > result_cutoff
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_SNAPSHOT_INVALID"
+            )
+        calendar_ids = tuple(payload.get("calendar_member_ids", ()))
+        next_calendar_id = payload.get(
+            "next_session_calendar_member_id"
+        )
+        series_ids = tuple(payload.get("series_member_ids", ()))
+        adjustment_ids = tuple(payload.get("adjustment_member_ids", ()))
+        corporate_action_ids = tuple(
+            payload.get("corporate_action_member_ids", ())
+        )
+        member_ids = (
+            *calendar_ids,
+            next_calendar_id,
+            *series_ids,
+            *adjustment_ids,
+            *corporate_action_ids,
+        )
+        if (
+            not calendar_ids
+            or not series_ids
+            or not isinstance(next_calendar_id, str)
+            or not next_calendar_id
+            or len(member_ids) != len(set(member_ids))
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_MEMBER_INVALID"
+            )
+        placeholders = ",".join("?" for _ in member_ids)
+        rows = self.connection.execute(
+            "SELECT m.normalized_version_id,nr.dataset,nv.event_at,"
+            "nv.available_at,nv.quality_status,pa.source_identity,"
+            "pa.source_authority,pa.retrieved_at "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version nv USING(normalized_version_id) "
+            "JOIN normalized_record nr USING(normalized_record_id) "
+            "JOIN provider_attempt pa ON pa.attempt_id=nv.source_attempt_id "
+            f"WHERE m.data_snapshot_id=? AND m.normalized_version_id IN ({placeholders})",
+            (market_data_snapshot_id, *member_ids),
+        ).fetchall()
+        if len(rows) != len(member_ids):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_MEMBER_INVALID"
+            )
+        by_id = {row["normalized_version_id"]: row for row in rows}
+        try:
+            if any(
+                row["quality_status"] not in {"pass", "warning"}
+                or not row["source_identity"]
+                or not row["source_authority"]
+                or datetime.fromisoformat(
+                    str(row["available_at"]).replace("Z", "+00:00")
+                )
+                > snapshot_cutoff
+                for row in rows
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_MEMBER_INVALID"
+            ) from None
+        if (
+            any(by_id[item]["dataset"] != "trade_cal" for item in calendar_ids)
+            or by_id[next_calendar_id]["dataset"] != "trade_cal"
+            or any(by_id[item]["dataset"] != "daily" for item in series_ids)
+            or any(
+                by_id[item]["dataset"] != "adj_factor"
+                for item in adjustment_ids
+            )
+            or any(
+                by_id[item]["dataset"] != "corporate_action"
+                for item in corporate_action_ids
+            )
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_DATA_MEMBER_ROLE_INVALID"
+            )
+        calendar_rows = self.connection.execute(
+            "SELECT nv.normalized_version_id,nv.event_at,"
+            "ms.market,ms.session_date,ms.is_open,ms.calendar_version "
+            "FROM normalized_version nv "
+            "JOIN market_session_version ms "
+            "ON ms.source_attempt_id=nv.source_attempt_id "
+            "AND ms.session_date=nv.event_at "
+            f"WHERE nv.normalized_version_id IN ({','.join('?' for _ in calendar_ids)})",
+            calendar_ids,
+        ).fetchall()
+        trading_sessions = tuple(payload.get("trading_sessions", ()))
+        snapshot_calendar_rows = self.connection.execute(
+            "SELECT nv.normalized_version_id,ms.session_date "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version nv USING(normalized_version_id) "
+            "JOIN normalized_record nr USING(normalized_record_id) "
+            "JOIN market_session_version ms "
+            "ON ms.source_attempt_id=nv.source_attempt_id "
+            "AND ms.session_date=nv.event_at "
+            "WHERE m.data_snapshot_id=? AND nr.dataset='trade_cal' "
+            "AND ms.market=? AND ms.calendar_version=? AND ms.is_open=1 "
+            "AND ms.session_date BETWEEN ? AND ?",
+            (
+                market_data_snapshot_id,
+                payload.get("market"),
+                payload.get("trading_calendar_identity"),
+                payload.get("window_start"),
+                payload.get("window_end"),
+            ),
+        ).fetchall()
+        if (
+            len(calendar_rows) != len(calendar_ids)
+            or {row["normalized_version_id"] for row in calendar_rows}
+            != set(calendar_ids)
+            or any(
+                row["market"] != payload.get("market")
+                or row["is_open"] != 1
+                or row["calendar_version"]
+                != payload.get("trading_calendar_identity")
+                for row in calendar_rows
+            )
+            or tuple(
+                sorted(row["session_date"] for row in calendar_rows)
+            )
+            != trading_sessions
+            or {
+                row["normalized_version_id"]
+                for row in snapshot_calendar_rows
+            }
+            != set(calendar_ids)
+            or tuple(
+                sorted(row["session_date"] for row in snapshot_calendar_rows)
+            )
+            != trading_sessions
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_CALENDAR_INVALID"
+            )
+        next_calendar_rows = self.connection.execute(
+            "SELECT nv.normalized_version_id,ms.market,ms.session_date,"
+            "ms.is_open,ms.calendar_version "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version nv USING(normalized_version_id) "
+            "JOIN market_session_version ms "
+            "ON ms.source_attempt_id=nv.source_attempt_id "
+            "AND ms.session_date=nv.event_at "
+            "WHERE m.data_snapshot_id=? "
+            "AND ms.market=? AND ms.calendar_version=? AND ms.is_open=1 "
+            "AND ms.session_date>? AND ms.session_date<=?",
+            (
+                market_data_snapshot_id,
+                payload.get("market"),
+                payload.get("trading_calendar_identity"),
+                payload.get("window_end"),
+                market_path.payload.get("starting_price_session"),
+            ),
+        ).fetchall()
+        if (
+            len(next_calendar_rows) != 1
+            or next_calendar_rows[0]["normalized_version_id"]
+            != next_calendar_id
+            or next_calendar_rows[0]["session_date"]
+            != payload.get("next_session_date")
+            or next_calendar_rows[0]["session_date"]
+            != market_path.payload.get("starting_price_session")
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_CALENDAR_ADJACENCY_INVALID"
+            )
+        known_open_rows = self.connection.execute(
+            "SELECT session_date,available_at FROM market_session_version "
+            "WHERE market=? AND calendar_version=? AND is_open=1 "
+            "AND session_date>? AND session_date<=?",
+            (
+                payload.get("market"),
+                payload.get("trading_calendar_identity"),
+                payload.get("window_end"),
+                market_path.payload.get("starting_price_session"),
+            ),
+        ).fetchall()
+        try:
+            known_open_sessions = {
+                row["session_date"]
+                for row in known_open_rows
+                if datetime.fromisoformat(
+                    str(row["available_at"]).replace("Z", "+00:00")
+                )
+                <= snapshot_cutoff
+            }
+        except (TypeError, ValueError):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_CALENDAR_ADJACENCY_INVALID"
+            ) from None
+        if known_open_sessions != {
+            market_path.payload.get("starting_price_session")
+        }:
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_CALENDAR_ADJACENCY_INVALID"
+            )
+        observations = payload.get("observations")
+        if not isinstance(observations, list):
+            raise ValueError("RESEARCH_ARTIFACT_MARKET_SERIES_INVALID")
+        observation_by_session = {
+            item.get("session_date"): item
+            for item in observations
+            if isinstance(item, Mapping)
+        }
+        series_rows = self.connection.execute(
+            "SELECT o.* FROM ohlcv_version o "
+            f"WHERE o.normalized_version_id IN ({','.join('?' for _ in series_ids)})",
+            series_ids,
+        ).fetchall()
+        snapshot_series_rows = self.connection.execute(
+            "SELECT o.normalized_version_id,o.session_date "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version nv USING(normalized_version_id) "
+            "JOIN normalized_record nr USING(normalized_record_id) "
+            "JOIN ohlcv_version o USING(normalized_version_id) "
+            "WHERE m.data_snapshot_id=? AND nr.dataset='daily' "
+            "AND o.security_id IN "
+            f"({','.join('?' for _ in subject_aliases)}) "
+            "AND o.session_date BETWEEN ? AND ?",
+            (
+                market_data_snapshot_id,
+                *subject_aliases,
+                payload.get("window_start"),
+                payload.get("window_end"),
+            ),
+        ).fetchall()
+        try:
+            series_valid = (
+                len(series_rows) == len(series_ids)
+                and {
+                    row["normalized_version_id"] for row in series_rows
+                }
+                == set(series_ids)
+                and {
+                    row["session_date"] for row in series_rows
+                }
+                == set(trading_sessions)
+                and {
+                    row["normalized_version_id"]
+                    for row in snapshot_series_rows
+                }
+                == set(series_ids)
+                and {
+                    row["session_date"] for row in snapshot_series_rows
+                }
+                == set(trading_sessions)
+                and all(
+                    row["security_id"] in subject_aliases
+                    and row["market_timezone"]
+                    == payload.get("market_timezone")
+                    and row["adjustment_mode"] == "none"
+                    and row["currency"]
+                    == market_path.payload.get("currency")
+                    and Decimal(row["close_decimal"])
+                    == Decimal(
+                        str(
+                            observation_by_session[row["session_date"]][
+                                "unadjusted_close"
+                            ]
+                        )
+                    )
+                    and datetime.fromisoformat(
+                        str(
+                            observation_by_session[row["session_date"]][
+                                "close_available_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    == datetime.fromisoformat(
+                        str(
+                            by_id[row["normalized_version_id"]][
+                                "available_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    and datetime.fromisoformat(
+                        str(
+                            observation_by_session[row["session_date"]][
+                                "factor_available_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    == datetime.fromisoformat(
+                        str(
+                            by_id[row["normalized_version_id"]][
+                                "available_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    and datetime.fromisoformat(
+                        str(
+                            observation_by_session[row["session_date"]][
+                                "retrieved_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    == datetime.fromisoformat(
+                        str(
+                            by_id[row["normalized_version_id"]][
+                                "retrieved_at"
+                            ]
+                        ).replace("Z", "+00:00")
+                    )
+                    for row in series_rows
+                )
+            )
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            series_valid = False
+        if not series_valid:
+            raise ValueError("RESEARCH_ARTIFACT_MARKET_SERIES_INVALID")
+        starting_member_id = market_path.payload.get(
+            "starting_price_member_id"
+        )
+        starting_row = self.connection.execute(
+            "SELECT nr.dataset,nv.available_at,nv.quality_status,"
+            "pa.source_identity,pa.source_authority,o.* "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version nv USING(normalized_version_id) "
+            "JOIN normalized_record nr USING(normalized_record_id) "
+            "JOIN provider_attempt pa ON pa.attempt_id=nv.source_attempt_id "
+            "JOIN ohlcv_version o USING(normalized_version_id) "
+            "WHERE m.data_snapshot_id=? AND m.normalized_version_id=?",
+            (market_data_snapshot_id, starting_member_id),
+        ).fetchone()
+        try:
+            starting_valid = (
+                starting_row is not None
+                and starting_row["dataset"] == "daily"
+                and starting_row["quality_status"] in {"pass", "warning"}
+                and bool(starting_row["source_identity"])
+                and bool(starting_row["source_authority"])
+                and starting_row["security_id"] in subject_aliases
+                and starting_row["session_date"]
+                == market_path.payload.get("starting_price_session")
+                and starting_row["session_date"]
+                == market_path.payload.get("as_of")
+                and starting_row["market_timezone"]
+                == payload.get("market_timezone")
+                and starting_row["adjustment_mode"] == "none"
+                and starting_row["currency"]
+                == market_path.payload.get("currency")
+                and Decimal(starting_row["close_decimal"])
+                == Decimal(str(market_path.payload.get("starting_price")))
+                and datetime.fromisoformat(
+                    str(starting_row["available_at"]).replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+                <= snapshot_cutoff
+                and datetime.fromisoformat(
+                    str(
+                        market_path.payload.get(
+                            "starting_price_available_at"
+                        )
+                    ).replace("Z", "+00:00")
+                )
+                == datetime.fromisoformat(
+                    str(starting_row["available_at"]).replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+                and starting_member_id
+                in market_path.payload.get(
+                    "starting_price_evidence_refs",
+                    (),
+                )
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            starting_valid = False
+        if not starting_valid:
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_STARTING_PRICE_INVALID"
+            )
+        state_model_identity = payload.get("state_model_identity")
+        if state_model_identity != "one_session_return_sign@1":
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_STATE_LINEAGE_INVALID"
+            )
+
+        def state(current: Decimal, previous: Decimal) -> str:
+            if current > previous:
+                return "risk_on"
+            if current < previous:
+                return "risk_off"
+            return "flat"
+
+        try:
+            adjusted = tuple(
+                Decimal(str(item["unadjusted_close"]))
+                * Decimal(str(item["adjustment_factor"]))
+                for item in observations
+            )
+            for index, item in enumerate(observations):
+                expected = (
+                    "warmup"
+                    if index == 0
+                    else state(adjusted[index], adjusted[index - 1])
+                )
+                required_refs = {series_ids[index]}
+                required_available = datetime.fromisoformat(
+                    str(by_id[series_ids[index]]["available_at"]).replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+                if index:
+                    required_refs.add(series_ids[index - 1])
+                    required_available = max(
+                        required_available,
+                        datetime.fromisoformat(
+                            str(
+                                by_id[series_ids[index - 1]][
+                                    "available_at"
+                                ]
+                            ).replace("Z", "+00:00")
+                        ),
+                    )
+                state_available = datetime.fromisoformat(
+                    str(item["state_available_at"]).replace("Z", "+00:00")
+                )
+                if (
+                    item.get("market_state") != expected
+                    or not required_refs.issubset(
+                        item.get("evidence_refs", ())
+                    )
+                    or state_available < required_available
+                    or state_available > snapshot_cutoff
+                ):
+                    raise ValueError
+            starting_price = Decimal(
+                str(market_path.payload.get("starting_price"))
+            )
+            expected_current = state(starting_price, adjusted[-1])
+            current_refs = {
+                starting_member_id,
+                series_ids[-1],
+                state_model_identity,
+            }
+            current_available = datetime.fromisoformat(
+                str(
+                    market_path.payload.get("current_state_available_at")
+                ).replace("Z", "+00:00")
+            )
+            if (
+                market_path.payload.get("current_market_state")
+                != expected_current
+                or not current_refs.issubset(
+                    market_path.payload.get(
+                        "current_state_evidence_refs",
+                        (),
+                    )
+                )
+                or current_available
+                < max(
+                    datetime.fromisoformat(
+                        str(starting_row["available_at"]).replace(
+                            "Z",
+                            "+00:00",
+                        )
+                    ),
+                    datetime.fromisoformat(
+                        str(by_id[series_ids[-1]]["available_at"]).replace(
+                            "Z",
+                            "+00:00",
+                        )
+                    ),
+                )
+                or current_available > snapshot_cutoff
+            ):
+                raise ValueError
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_STATE_LINEAGE_INVALID"
+            ) from None
+        factors = {
+            str(item.get("adjustment_factor"))
+            for item in observations
+            if isinstance(item, Mapping)
+        }
+        actions = {
+            str(item.get("corporate_action_identity"))
+            for item in observations
+            if isinstance(item, Mapping)
+            and item.get("corporate_action_identity")
+        }
+        if (
+            factors != {"1"}
+            or actions
+            or adjustment_ids
+            or corporate_action_ids
+        ):
+            raise ValueError(
+                "RESEARCH_ARTIFACT_MARKET_ACTION_LINEAGE_INVALID"
+            )
 
     def _platform_subject_aliases(
         self,
@@ -951,5 +1654,7 @@ class WorkflowRepository:
             "Forecast": "forecast",
             "Valuation": "valuation",
             "Simulation": "simulation",
+            "MarketDataSnapshot": "market_data_snapshot",
+            "MarketPathSimulation": "market_path_simulation",
             "ForecastReview": "forecast_review",
         }[artifact_kind]

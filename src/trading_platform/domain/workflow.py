@@ -439,6 +439,205 @@ class ImmutableArtifactDraft:
         )
 
     @classmethod
+    def from_market_data_snapshot(
+        cls,
+        calibration: Any,
+        *,
+        security_id: str,
+        model_identity: str,
+        policy_identity: str,
+    ) -> ImmutableArtifactDraft:
+        from equity_research import MarketPathCalibration
+
+        if not isinstance(calibration, MarketPathCalibration):
+            raise TypeError(
+                "from_market_data_snapshot requires a typed market calibration."
+            )
+        payload = calibration.to_dict()
+        source_identity = "market-data-snapshot:" + hashlib.sha256(
+            _canonical_json(payload).encode("utf-8")
+        ).hexdigest()
+        return cls._build(
+            artifact_kind="MarketDataSnapshot",
+            schema_version="MarketDataSnapshotArtifact@1",
+            subject_id=security_id,
+            as_of=calibration.as_of,
+            source_identity=source_identity,
+            model_identity=model_identity,
+            policy_identity=policy_identity,
+            status="ready",
+            formula_identities=("market_calibration_content_hash@1",),
+            dependency_kinds=(),
+            payload=payload,
+            summary={
+                "snapshot_id": calibration.snapshot_id,
+                "market": calibration.market,
+                "market_timezone": calibration.market_timezone,
+                "series_identity": calibration.series_identity,
+                "trading_calendar_identity": (
+                    calibration.trading_calendar_identity
+                ),
+                "observation_count": len(calibration.observations),
+            },
+        )
+
+    @classmethod
+    def from_market_path_simulation(
+        cls,
+        result: Any,
+        *,
+        valuation_simulation_artifact: ImmutableArtifactDraft,
+        market_data_snapshot_artifact: ImmutableArtifactDraft,
+        model_identity: str,
+        policy_identity: str,
+    ) -> ImmutableArtifactDraft:
+        from equity_research import MarketPathEngine, MarketPathResult
+
+        if (
+            not isinstance(result, MarketPathResult)
+            or not isinstance(
+                valuation_simulation_artifact,
+                ImmutableArtifactDraft,
+            )
+            or not isinstance(
+                market_data_snapshot_artifact,
+                ImmutableArtifactDraft,
+            )
+        ):
+            raise TypeError(
+                "from_market_path_simulation requires a typed market-path "
+                "result, Simulation artifact, and market-data snapshot."
+            )
+        fallback = valuation_simulation_artifact.payload.get(
+            "deterministic_fallback"
+        )
+        execution_period = (
+            f"T+{result.constraints.minimum_execution_lag_sessions} "
+            "trading sessions"
+        )
+        terminal_period = (
+            "T+"
+            f"{result.constraints.minimum_execution_lag_sessions + result.budget.horizon_sessions} "
+            "trading sessions"
+        )
+        risk_horizon_period = (
+            f"T+{result.constraints.minimum_execution_lag_sessions} through "
+            "T+"
+            f"{result.constraints.minimum_execution_lag_sessions + result.budget.horizon_sessions} "
+            "trading sessions"
+        )
+        if (
+            valuation_simulation_artifact.artifact_kind != "Simulation"
+            or market_data_snapshot_artifact.artifact_kind
+            != "MarketDataSnapshot"
+            or result.security_id != valuation_simulation_artifact.subject_id
+            or result.security_id != market_data_snapshot_artifact.subject_id
+            or result.as_of != valuation_simulation_artifact.as_of
+            or result.as_of != market_data_snapshot_artifact.as_of
+            or result.valuation_simulation_source_identity
+            != valuation_simulation_artifact.source_identity
+            or result.calibration.to_dict()
+            != market_data_snapshot_artifact.payload
+            or not isinstance(fallback, Mapping)
+            or result.price_unit != fallback.get("unit")
+            or result.currency != fallback.get("currency")
+            or result.interpretation != MarketPathEngine.INTERPRETATION
+            or result.horizon_return_basis
+            != "net_of_declared_round_trip_transaction_costs"
+            or result.execution_period != execution_period
+            or result.terminal_period != terminal_period
+            or result.risk_horizon_period != risk_horizon_period
+            or {
+                item.adjustment_factor
+                for item in result.calibration.observations
+            }
+            != {Decimal("1")}
+            or any(
+                item.corporate_action_identity
+                for item in result.calibration.observations
+            )
+            or result.calibration.adjustment_member_ids
+            or result.calibration.corporate_action_member_ids
+        ):
+            raise ValueError("RESEARCH_ARTIFACT_MARKET_PATH_LINEAGE_INVALID")
+        source_value = {
+            "simulation_id": result.simulation_id,
+            "as_of_at": result.as_of_at,
+            "valuation_simulation_input_fingerprint": (
+                valuation_simulation_artifact.content_hash
+            ),
+            "market_data_snapshot_identity": (
+                market_data_snapshot_artifact.source_identity
+            ),
+            "market_data_input_fingerprint": (
+                market_data_snapshot_artifact.content_hash
+            ),
+            "market_path_model_identity": result.model_identity,
+            "market_path_policy_identity": result.policy_identity,
+            "price_unit": result.price_unit,
+            "currency": result.currency,
+            "calibration": result.calibration.to_dict(),
+            "constraints": result.constraints.to_dict(),
+            "budget": result.budget.to_dict(),
+            "starting_price": result.starting_price,
+            "starting_price_session": result.starting_price_session,
+            "starting_price_member_id": result.starting_price_member_id,
+            "starting_price_available_at": result.starting_price_available_at,
+            "starting_price_evidence_refs": list(
+                result.starting_price_evidence_refs
+            ),
+            "current_market_state": result.current_market_state,
+            "current_state_available_at": result.current_state_available_at,
+            "current_state_evidence_refs": list(
+                result.current_state_evidence_refs
+            ),
+            "price_thresholds": list(result.price_thresholds),
+            "tail_return_threshold": result.tail_return_threshold,
+        }
+        source_identity = "market-path-simulation:" + hashlib.sha256(
+            _canonical_json(source_value).encode("utf-8")
+        ).hexdigest()
+        return cls._build(
+            artifact_kind="MarketPathSimulation",
+            schema_version="MarketPathSimulationArtifact@1",
+            subject_id=result.security_id,
+            as_of=result.as_of,
+            source_identity=source_identity,
+            model_identity=model_identity,
+            policy_identity=policy_identity,
+            status=result.status,
+            formula_identities=tuple(
+                sorted(
+                    {
+                        result.model_identity,
+                        result.constraints.policy_identity,
+                        result.budget.rng_algorithm,
+                    }
+                )
+            ),
+            dependency_kinds=("Simulation", "MarketDataSnapshot"),
+            payload=result.to_dict(),
+            summary={
+                "simulation_id": result.simulation_id,
+                "valuation_simulation_source_identity": (
+                    valuation_simulation_artifact.source_identity
+                ),
+                "valuation_simulation_input_fingerprint": (
+                    valuation_simulation_artifact.content_hash
+                ),
+                "market_data_snapshot_identity": (
+                    market_data_snapshot_artifact.source_identity
+                ),
+                "market_data_input_fingerprint": (
+                    market_data_snapshot_artifact.content_hash
+                ),
+                "completed_paths": result.completed_paths,
+                "market_state": result.current_market_state,
+                "interpretation": result.interpretation,
+            },
+        )
+
+    @classmethod
     def from_serialized(cls, value: Mapping[str, Any]) -> ImmutableArtifactDraft:
         required = {
             "artifact_kind",
@@ -496,6 +695,8 @@ class ImmutableArtifactDraft:
             "Forecast": ("DataSnapshot",),
             "Valuation": ("Forecast",),
             "Simulation": ("Valuation",),
+            "MarketDataSnapshot": (),
+            "MarketPathSimulation": ("Simulation", "MarketDataSnapshot"),
             "ForecastReview": ("Forecast",),
         }
         if (

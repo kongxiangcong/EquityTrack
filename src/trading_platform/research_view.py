@@ -22,6 +22,7 @@ class ResearchDecisionView:
     model_data_snapshot_identity: str
     valuation_artifact_record_id: str
     simulation_artifact_record_id: str | None
+    market_path_artifact_record_id: str | None
     subject_id: str
     as_of: str
     model_identity: str
@@ -32,6 +33,8 @@ class ResearchDecisionView:
     scenarios: tuple[Mapping[str, Any], ...]
     market_implied_expectations: tuple[Mapping[str, Any], ...]
     valuation_simulation: Mapping[str, Any] | None
+    market_price_paths: Mapping[str, Any] | None
+    value_market_divergence: Mapping[str, Any] | None
     audit: Mapping[str, Any]
     boundary: str
 
@@ -67,6 +70,8 @@ class ResearchDecisionViewBuilder:
         forecast: ResearchArtifactView,
         valuation: ResearchArtifactView,
         simulation: ResearchArtifactView | None = None,
+        market_data_snapshot: ResearchArtifactView | None = None,
+        market_path: ResearchArtifactView | None = None,
         research_run_payload: Mapping[str, Any],
     ) -> ResearchDecisionView:
         self._validate_artifacts(
@@ -74,6 +79,8 @@ class ResearchDecisionViewBuilder:
             forecast,
             valuation,
             simulation,
+            market_data_snapshot,
+            market_path,
             research_run_payload,
         )
         scenario_payloads = valuation.payload.get("scenarios")
@@ -109,7 +116,14 @@ class ResearchDecisionViewBuilder:
                 "source_identity": item.source_identity,
                 "status": item.status,
             }
-            for item in (data_snapshot, forecast, valuation, simulation)
+            for item in (
+                data_snapshot,
+                forecast,
+                valuation,
+                simulation,
+                market_data_snapshot,
+                market_path,
+            )
             if item is not None
         )
         fact_evidence = tuple(
@@ -161,9 +175,25 @@ class ResearchDecisionViewBuilder:
                 if simulation is not None
                 else ()
             )
+        ) + tuple(
+            str(item)
+            for item in (
+                market_path.payload.get("diagnostics", ())
+                if market_path is not None
+                else ()
+            )
         )
         simulation_view = (
             self._simulation(simulation.payload) if simulation is not None else None
+        )
+        market_path_view = (
+            self._market_path(market_path.payload)
+            if market_path is not None
+            else None
+        )
+        divergence_view = self._value_market_divergence(
+            simulation_view,
+            market_path_view,
         )
         view_id = "research_view_" + canonical_hash(
             {
@@ -183,6 +213,9 @@ class ResearchDecisionViewBuilder:
             simulation_artifact_record_id=(
                 simulation.artifact_record_id if simulation is not None else None
             ),
+            market_path_artifact_record_id=(
+                market_path.artifact_record_id if market_path is not None else None
+            ),
             subject_id=valuation.subject_id,
             as_of=valuation.as_of,
             model_identity=valuation.model_identity,
@@ -193,6 +226,8 @@ class ResearchDecisionViewBuilder:
             scenarios=scenarios,
             market_implied_expectations=market_implied,
             valuation_simulation=simulation_view,
+            market_price_paths=market_path_view,
+            value_market_divergence=divergence_view,
             audit={
                 "artifact_records": artifact_records,
                 "sources": tuple(research_run_payload.get("sources", ())),
@@ -201,7 +236,14 @@ class ResearchDecisionViewBuilder:
                     sorted(
                         {
                             formula
-                            for item in (data_snapshot, forecast, valuation, simulation)
+                            for item in (
+                                data_snapshot,
+                                forecast,
+                                valuation,
+                                simulation,
+                                market_data_snapshot,
+                                market_path,
+                            )
                             if item is not None
                             for formula in item.formula_identities
                         }
@@ -225,6 +267,8 @@ class ResearchDecisionViewBuilder:
         forecast: ResearchArtifactView,
         valuation: ResearchArtifactView,
         simulation: ResearchArtifactView | None,
+        market_data_snapshot: ResearchArtifactView | None,
+        market_path: ResearchArtifactView | None,
         research_run_payload: Mapping[str, Any],
     ) -> None:
         if (
@@ -242,6 +286,26 @@ class ResearchDecisionViewBuilder:
             != valuation.source_identity
         ):
             raise ResearchViewError("RESEARCH_VIEW_SIMULATION_GRAPH_INVALID")
+        if market_path is not None and (
+            simulation is None
+            or market_data_snapshot is None
+            or market_path.artifact_kind != "MarketPathSimulation"
+            or set(market_path.dependency_record_ids)
+            != {
+                simulation.artifact_record_id,
+                market_data_snapshot.artifact_record_id,
+            }
+            or market_path.payload.get("valuation_simulation_source_identity")
+            != simulation.source_identity
+            or market_path.payload.get("calibration")
+            != market_data_snapshot.payload
+        ):
+            raise ResearchViewError("RESEARCH_VIEW_MARKET_PATH_GRAPH_INVALID")
+        if market_data_snapshot is not None and (
+            market_data_snapshot.artifact_kind != "MarketDataSnapshot"
+            or market_data_snapshot.dependency_record_ids
+        ):
+            raise ResearchViewError("RESEARCH_VIEW_MARKET_DATA_GRAPH_INVALID")
         identities = {
             (
                 item.research_run_id,
@@ -254,7 +318,14 @@ class ResearchDecisionViewBuilder:
                 item.policy_identity,
                 item.code_identity,
             )
-            for item in (data_snapshot, forecast, valuation, simulation)
+            for item in (
+                data_snapshot,
+                forecast,
+                valuation,
+                simulation,
+                market_data_snapshot,
+                market_path,
+            )
             if item is not None
         }
         if len(identities) != 1 or research_run_payload.get("run_id") != valuation.research_run_id:
@@ -322,6 +393,163 @@ class ResearchDecisionViewBuilder:
             "constraint_path": tuple(value.get("constraint_path", ())),
             "deterministic_fallback": value.get("deterministic_fallback"),
             "diagnostics": tuple(value.get("diagnostics", ())),
+        }
+
+    @staticmethod
+    def _market_path(value: Mapping[str, Any]) -> dict[str, Any]:
+        def quantity(
+            raw: object,
+            unit: str,
+            period: object,
+        ) -> dict[str, Any]:
+            return {
+                "value": raw,
+                "unit": unit,
+                "currency": value.get("currency") if unit != "decimal" else None,
+                "period": period,
+            }
+
+        def quantiles(
+            name: str,
+            unit: str,
+            period: object,
+        ) -> dict[str, Any] | None:
+            raw = value.get(name)
+            return (
+                {
+                    key: quantity(raw.get(key), unit, period)
+                    for key in ("p5", "p25", "p50", "p75", "p95")
+                }
+                if isinstance(raw, Mapping)
+                else None
+            )
+
+        return {
+            "status": value.get("status"),
+            "interpretation": value.get("interpretation"),
+            "starting_price": quantity(
+                value.get("starting_price"),
+                str(value.get("price_unit")),
+                value.get("starting_price_session"),
+            ),
+            "starting_price_session": value.get("starting_price_session"),
+            "starting_price_member_id": value.get("starting_price_member_id"),
+            "starting_price_available_at": value.get(
+                "starting_price_available_at"
+            ),
+            "starting_price_evidence_refs": tuple(
+                value.get("starting_price_evidence_refs", ())
+            ),
+            "current_market_state": value.get("current_market_state"),
+            "current_state_available_at": value.get(
+                "current_state_available_at"
+            ),
+            "current_state_evidence_refs": tuple(
+                value.get("current_state_evidence_refs", ())
+            ),
+            "terminal_price_quantiles": quantiles(
+                "terminal_price_quantiles",
+                str(value.get("price_unit")),
+                value.get("terminal_period"),
+            ),
+            "horizon_return_quantiles": quantiles(
+                "horizon_return_quantiles",
+                "decimal",
+                value.get("risk_horizon_period"),
+            ),
+            "maximum_drawdown_quantiles": quantiles(
+                "maximum_drawdown_quantiles",
+                "decimal",
+                value.get("risk_horizon_period"),
+            ),
+            "threshold_trigger_probabilities": tuple(
+                value.get("threshold_trigger_probabilities", ())
+            ),
+            "tail_results": value.get("tail_results"),
+            "price_unit": value.get("price_unit"),
+            "currency": value.get("currency"),
+            "horizon_return_basis": value.get("horizon_return_basis"),
+            "execution_period": value.get("execution_period"),
+            "terminal_period": value.get("terminal_period"),
+            "risk_horizon_period": value.get("risk_horizon_period"),
+            "calibration": value.get("calibration"),
+            "constraints": value.get("constraints"),
+            "budget": value.get("budget"),
+            "completed_paths": value.get("completed_paths"),
+            "diagnostics": tuple(value.get("diagnostics", ())),
+        }
+
+    @staticmethod
+    def _value_market_divergence(
+        valuation_simulation: Mapping[str, Any] | None,
+        market_path: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if valuation_simulation is None or market_path is None:
+            return None
+        valuation_quantiles = valuation_simulation.get("quantiles")
+        market_quantiles = market_path.get("terminal_price_quantiles")
+        if not isinstance(valuation_quantiles, Mapping) or not isinstance(
+            market_quantiles,
+            Mapping,
+        ):
+            return {
+                "status": "limited",
+                "explanation": (
+                    "价值分布或市场路径分布受限，当前不比较两者中位数。"
+                ),
+            }
+        valuation_p50 = valuation_quantiles.get("p50")
+        market_p50 = market_quantiles.get("p50")
+        if not isinstance(valuation_p50, Mapping) or not isinstance(
+            market_p50,
+            Mapping,
+        ):
+            return None
+        dimensions = (
+            valuation_p50.get("unit"),
+            valuation_p50.get("currency"),
+        )
+        if dimensions != (
+            market_p50.get("unit"),
+            market_p50.get("currency"),
+        ):
+            return {
+                "status": "not_comparable",
+                "explanation": (
+                    "价值分布与市场路径的单位或币种不同；未提供冻结汇率转换，"
+                    "因此禁止计算两者背离。"
+                ),
+            }
+        if valuation_p50.get("period") != market_p50.get("period"):
+            return {
+                "status": "not_comparable_horizon",
+                "valuation_p50": valuation_p50,
+                "market_path_p50": market_p50,
+                "explanation": (
+                    "基本面价值分布与市场路径终点的期限不同，禁止直接计算数值背离。"
+                    "两者仍可并列理解不同机制下的不确定性，但不是目标价或交易动作。"
+                ),
+            }
+        try:
+            value = Decimal(str(valuation_p50.get("value")))
+            price = Decimal(str(market_p50.get("value")))
+        except (InvalidOperation, ValueError):
+            return None
+        direction = "高于" if price > value else "低于" if price < value else "接近"
+        return {
+            "status": "comparable_with_limits",
+            "valuation_p50": valuation_p50,
+            "market_path_p50": market_p50,
+            "difference": {
+                "value": str(price - value),
+                "unit": valuation_p50.get("unit"),
+                "currency": valuation_p50.get("currency"),
+            },
+            "explanation": (
+                f"市场路径中位终点{direction}基本面价值分布中位数。"
+                "两者来自不同机制和期限：前者描述状态条件下的交易价格，"
+                "后者描述经营与估值假设下的条件价值；背离不是目标价或交易动作。"
+            ),
         }
 
     def _scenario(self, value: Mapping[str, Any]) -> dict[str, Any]:
