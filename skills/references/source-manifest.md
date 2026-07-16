@@ -1,5 +1,10 @@
 # Source Manifest Schema
 
+> The manifest format remains useful for legacy ingestion and evidence
+> collection. Formal platform authority is the frozen ResearchProjection /
+> DataSnapshot plus typed artifact invariants; the standalone validator is a
+> compatibility utility.
+
 The active research workflow uses `source_manifest_version: 2`. Version 1 remains supported for legacy report gates.
 
 This file defines the minimum source manifest required before an equity research output can contain valuation conclusions.

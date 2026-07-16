@@ -1,5 +1,9 @@
 # Equity Report — Phase 5: Quality Assurance
 
+> Legacy HTML QA only. Formal decision-first HTML embeds the exact
+> `ResearchDecisionView@2` JSON and is accepted through typed artifact and
+> presentation tests, not this appearance validator.
+
 > **This file is read by the agent during Phase 5 when `output_type = EQUITY_REPORT`.**
 > All paths are relative to the skill root directory.
 

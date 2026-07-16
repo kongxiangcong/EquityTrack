@@ -93,6 +93,26 @@ def _root(tmp_path: Path, engine: CountingEngine) -> ProductionCompositionRoot:
     return root
 
 
+def test_legacy_unknown_context_keys_are_diagnosed_and_version_identity() -> None:
+    assembler = SnapshotToResearchRequestAssembler()
+    baseline = _projection()
+    with_ignored = _projection(
+        {
+            **baseline.context,
+            "obsolete_magic_key": {"must": "not affect identity"},
+        }
+    )
+
+    assert assembler.fingerprint(baseline) != assembler.fingerprint(with_ignored)
+    request = assembler.assemble(with_ignored)
+    assert request.context is None
+    assert request.research_inputs is not None
+    assert any(
+        item.startswith("LEGACY_RESEARCH_CONTEXT_KEYS_IGNORED:")
+        for item in request.research_inputs.migration_diagnostics
+    )
+
+
 def test_public_workflow_creates_canonical_research_artifacts_and_replays_invocation(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)

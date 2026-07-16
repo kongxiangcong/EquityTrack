@@ -15,9 +15,10 @@ from .models import (
     ResearchRequest,
     ResearchRun,
 )
-from .narrative import LegacyNarrativeInputs, build_professional_narrative
+from .narrative import NarrativeInputs, build_professional_narrative
 from .output_policy import normalize_action_language
 from .policies import evaluate_capabilities
+from .research_inputs import LegacyResearchContextAdapter, ResearchInputs
 from .valuation import route_methods
 
 
@@ -110,14 +111,59 @@ def _normalize_context_language(
     return value, ()
 
 
+def _normalize_research_inputs(
+    inputs: ResearchInputs,
+) -> tuple[ResearchInputs, tuple[IntegrityIssue, ...]]:
+    narrative = {
+        "executive_summary": inputs.executive_summary,
+        "theses": list(inputs.theses),
+        "risks": list(inputs.risks),
+        "catalysts": list(inputs.catalysts),
+        "scenarios": list(inputs.scenarios),
+        "conditional_plan": list(inputs.conditional_plan),
+        "analyses": inputs.analyses,
+        "debate": inputs.debate,
+        "synthesis": inputs.synthesis,
+    }
+    normalized, issues = _normalize_context_language(
+        narrative,
+        path="$.research_inputs",
+    )
+    return (
+        replace(
+            inputs,
+            executive_summary=str(
+                normalized["executive_summary"]
+            ).strip(),
+            theses=tuple(normalized["theses"]),
+            risks=tuple(normalized["risks"]),
+            catalysts=tuple(normalized["catalysts"]),
+            scenarios=tuple(normalized["scenarios"]),
+            conditional_plan=tuple(normalized["conditional_plan"]),
+            analyses=normalized["analyses"],
+            debate=normalized["debate"],
+            synthesis=normalized["synthesis"],
+        ),
+        issues,
+    )
+
+
 class ResearchEngine:
     """Deep deterministic module behind the research workflow seam."""
 
     def run(self, request: ResearchRequest) -> ResearchRun:
-        normalized_context, policy_issues = _normalize_context_language(
-            request.context or {}
-        )
-        context: Mapping[str, Any] = normalized_context
+        if request.research_inputs is not None:
+            inputs, policy_issues = _normalize_research_inputs(
+                request.research_inputs
+            )
+        else:
+            normalized_context, policy_issues = _normalize_context_language(
+                request.context or {}
+            )
+            migration = LegacyResearchContextAdapter.adapt(
+                normalized_context
+            )
+            inputs = migration.inputs
         build = build_evidence(
             request.manifest,
             request.estimates,
@@ -157,7 +203,7 @@ class ResearchEngine:
             build.sources,
             subject_id=str(build.company.get("ticker", "")),
         )
-        capabilities = evaluate_capabilities(book, context)
+        capabilities = evaluate_capabilities(book, inputs)
         integrity_errors = tuple(issue for issue in issues if issue.severity == "error")
         if integrity_errors:
             capabilities = {
@@ -168,19 +214,19 @@ class ResearchEngine:
                 )
                 for name, result in capabilities.items()
             }
-            methods = self._blocked_methods(context)
+            methods = self._blocked_methods(inputs)
         else:
             methods = route_methods(
                 book,
                 capabilities,
                 build.company,
-                context,
+                inputs,
                 as_of_date=request.as_of_date,
             )
 
         analysis, debate, synthesis, report_mode = build_professional_narrative(
             book,
-            LegacyNarrativeInputs.from_context(context),
+            NarrativeInputs.from_research_inputs(inputs),
         )
         if integrity_errors:
             analysis = AnalysisBundle(
@@ -191,7 +237,7 @@ class ResearchEngine:
             debate = None
             synthesis = None
             report_mode = "audit_memo"
-        elif int(context.get("report_version", 0) or 0) >= 3:
+        elif inputs.report_version >= 3:
             report_capability = capabilities["research_report"]
             dimension_statuses = [item.status for item in analysis.dimensions.values()]
             if (
@@ -233,7 +279,7 @@ class ResearchEngine:
         run_id = self._run_id(request)
         summary = self._summary(
             book=book,
-            context=context,
+            inputs=inputs,
             capabilities=capabilities,
             methods=methods,
             issue_count=len(issues),
@@ -250,8 +296,11 @@ class ResearchEngine:
                     "edge_count": len(forecast_graph.edges),
                 },
             }
-        plan = self._conditional_plan(context, capabilities, methods)
-        diagnostics = self._diagnostics(issues, capabilities, methods)
+        plan = self._conditional_plan(inputs, capabilities, methods)
+        diagnostics = (
+            *inputs.migration_diagnostics,
+            *self._diagnostics(issues, capabilities, methods),
+        )
 
         run = ResearchRun(
             schema_version=SCHEMA_VERSION,
@@ -332,14 +381,14 @@ class ResearchEngine:
                 )
 
     @staticmethod
-    def _blocked_methods(context: Mapping[str, Any]) -> dict[str, MethodResult]:
+    def _blocked_methods(inputs: ResearchInputs) -> dict[str, MethodResult]:
         specs = [
             ("observed_multiples", "市场观察倍数", "context"),
             ("peer_comps", "可比公司法", "relative_valuation"),
             ("historical_band", "历史估值带", "relative_to_self"),
             ("dcf", "DCF", "intrinsic_valuation"),
         ]
-        if str(context.get("company_type", "")).strip().lower() in {
+        if inputs.company_type.strip().lower() in {
             "cyclical",
             "cyclical_manufacturing",
             "resources",
@@ -366,6 +415,11 @@ class ResearchEngine:
             "manifest": request.manifest,
             "estimates": request.estimates,
             "context": request.context,
+            "research_inputs": (
+                request.research_inputs.identity_payload()
+                if request.research_inputs is not None
+                else None
+            ),
             "forecast_request": (
                 request.forecast_request.to_dict()
                 if request.forecast_request is not None
@@ -444,7 +498,7 @@ class ResearchEngine:
     def _summary(
         *,
         book: EvidenceBook,
-        context: Mapping[str, Any],
+        inputs: ResearchInputs,
         capabilities: Mapping[str, Any],
         methods: Mapping[str, Any],
         issue_count: int,
@@ -489,7 +543,7 @@ class ResearchEngine:
         else:
             grade = "D"
 
-        executive = str(context.get("executive_summary", "")).strip()
+        executive = inputs.executive_summary
         if not executive:
             executive = (
                 "现有证据可以形成结构化研究视图；每项估值方法和分析能力按自身输入独立评估。"
@@ -521,42 +575,26 @@ class ResearchEngine:
                 )
                 for status in ("ready", "limited", "caution", "blocked", "disabled")
             },
-            "theses": (
-                list(context.get("theses", []))
-                if isinstance(context.get("theses", []), list)
-                else []
-            ),
-            "risks": (
-                list(context.get("risks", []))
-                if isinstance(context.get("risks", []), list)
-                else []
-            ),
-            "catalysts": (
-                list(context.get("catalysts", []))
-                if isinstance(context.get("catalysts", []), list)
-                else []
-            ),
+            "theses": list(inputs.theses),
+            "risks": list(inputs.risks),
+            "catalysts": list(inputs.catalysts),
             "scenarios": (
-                list(context.get("scenarios", []))
+                list(inputs.scenarios)
                 if capabilities["financial_model"].status
                 in {"ready", "limited", "ready_with_estimates"}
-                and isinstance(context.get("scenarios", []), list)
                 else []
             ),
         }
 
     @staticmethod
     def _conditional_plan(
-        context: Mapping[str, Any],
+        inputs: ResearchInputs,
         capabilities: Mapping[str, Any],
         methods: Mapping[str, Any],
     ) -> tuple[Mapping[str, Any], ...]:
-        raw = context.get("conditional_plan", [])
-        plan: list[Mapping[str, Any]] = (
-            [dict(item) for item in raw if isinstance(item, Mapping)]
-            if isinstance(raw, list)
-            else []
-        )
+        plan: list[Mapping[str, Any]] = [
+            dict(item) for item in inputs.conditional_plan
+        ]
 
         existing_watch = {str(item.get("watch", "")) for item in plan}
         for method in methods.values():

@@ -1,5 +1,10 @@
 # Output Schema: Interface Contract Between Analysis and Presentation Layers
 
+> Legacy compatibility contract. This schema describes historical
+> `ResearchRun@3` file outputs. New formal platform JSON/HTML/XLSX outputs derive
+> from `ResearchDecisionView@2`; standalone validator result paths are not
+> runtime authorities.
+
 This document defines the structured data contract that the analysis engine (Phase 0-3) produces and the presentation layer (Phase 4-5) consumes. Both `tear-sheet` and `equity-report` skills rely on this schema.
 
 ---

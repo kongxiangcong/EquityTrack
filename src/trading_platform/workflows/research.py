@@ -26,6 +26,10 @@ from trading_platform.domain.workflow import (
 )
 from trading_platform.identity.code import build_code_identity
 from trading_platform.research import ProjectionError, ResearchAdapter, SnapshotToResearchRequestAssembler
+from trading_platform.research_presentation import (
+    render_research_decision_html,
+)
+from trading_platform.research_view import ResearchDecisionViewBuilder
 
 from .registry import RESEARCH_WORKFLOW, NodeDefinition
 from .repository import WorkflowRepository
@@ -154,12 +158,25 @@ class ResearchWorkflowService:
 
     def _research(self, run_id: str, request: ResearchWorkflowRequest, owner: str, projection_id: str, snapshot_id: str, projection_artifact: str, research_fp: str, lease_seconds: int):
         contract = self._node("run_or_link_research")
-        fp = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "node": f"{contract.node_id}@{contract.version}", "research": research_fp, "policy": self.assembler.POLICY_VERSION, "code_identity": self.engine_identity, "analysis_artifacts": [item.content_hash for item in request.analysis_artifacts]})
+        analysis_artifact_hashes = [
+            item.content_hash for item in request.analysis_artifacts
+        ]
+        fp = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "node": f"{contract.node_id}@{contract.version}", "research": research_fp, "policy": self.assembler.POLICY_VERSION, "code_identity": self.engine_identity, "analysis_artifacts": analysis_artifact_hashes})
         completed = self.repository.validate_checkpoint(run_id, contract, fp)
         if completed is not None:
             member_rows = self.repository.checkpoint_members(completed["workflow_node_run_id"])
             members = {r["member_role"]: r["artifact_id"] for r in member_rows}
             record = self.repository.connection.execute("SELECT * FROM research_run_record WHERE canonical_json_artifact_id=?", (members["research_run_json"],)).fetchone()
+            if record is None:
+                record = self.repository.connection.execute(
+                    "SELECT DISTINCT r.* FROM research_run_record r "
+                    "JOIN research_artifact_record a "
+                    "ON a.research_run_id=r.research_run_id "
+                    "WHERE a.artifact_id IN ("
+                    + ",".join("?" for _ in member_rows)
+                    + ")",
+                    tuple(row["artifact_id"] for row in member_rows),
+                ).fetchone()
             attempt = self.repository.connection.execute("SELECT workflow_node_attempt_id FROM workflow_node_attempt WHERE workflow_node_run_id=? ORDER BY attempt_no DESC LIMIT 1", (completed["workflow_node_run_id"],)).fetchone()[0]
             decision = ReferenceDisposition.REUSED if self.repository.connection.execute("SELECT disposition FROM workflow_node_attempt WHERE workflow_node_attempt_id=?", (attempt,)).fetchone()[0] == "reused" else ReferenceDisposition.CREATED
             run_members = tuple(
@@ -181,9 +198,34 @@ class ResearchWorkflowService:
                 self.repository.heartbeat(run_id, owner, lease_seconds)
                 if not produced.html:
                     raise ValueError("RESEARCH_HTML_MISSING")
-                json_artifact = self.repository.publish_artifact(json.dumps(produced.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(), "application/json", f"ResearchRun@{produced.schema_version}")
-                html_artifact = self.repository.publish_artifact(produced.html.encode(), "text/html", "ResearchReportHtml@1")
-                request_fp = self._hash({"manifest": assembled.manifest, "estimates": assembled.estimates, "context": assembled.context, "as_of_date": assembled.as_of_date, "profile": assembled.profile})
+                typed_presentation_expected = {
+                    item.artifact_kind for item in request.analysis_artifacts
+                }.issuperset({"DataSnapshot", "Forecast", "Valuation"})
+                json_schema = (
+                    f"ResearchRunCompatibility@{produced.schema_version}"
+                    if typed_presentation_expected
+                    else f"ResearchRun@{produced.schema_version}"
+                )
+                html_schema = (
+                    "ResearchReportHtmlCompatibility@1"
+                    if typed_presentation_expected
+                    else "ResearchReportHtml@1"
+                )
+                json_artifact = self.repository.publish_artifact(json.dumps(produced.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(), "application/json", json_schema)
+                html_artifact = self.repository.publish_artifact(produced.html.encode(), "text/html", html_schema)
+                request_fp = self._hash(
+                    {
+                        "manifest": assembled.manifest,
+                        "estimates": assembled.estimates,
+                        "research_inputs": (
+                            assembled.research_inputs.identity_payload()
+                        )
+                        if assembled.research_inputs is not None
+                        else None,
+                        "as_of_date": assembled.as_of_date,
+                        "profile": assembled.profile,
+                    }
+                )
                 values = (produced.run_id, research_fp, projection_id, snapshot_id, request_fp, produced.schema_version, self.engine_identity, assembled.as_of_date, produced.status, json_artifact, html_artifact)
                 self.repository.persist_research_record(values)
                 record = self.repository.connection.execute(
@@ -221,6 +263,62 @@ class ResearchWorkflowService:
                 attempt,
                 "RESEARCH_ARTIFACT_PERSISTENCE_FAILED",
             )
+        typed_views = tuple(
+            self.repository.research_artifact_view(record_id)
+            for record_id in artifact_record_ids
+        )
+        by_kind = {item.artifact_kind: item for item in typed_views}
+        if {"DataSnapshot", "Forecast", "Valuation"}.issubset(by_kind):
+            research_payload = (
+                produced.to_dict()
+                if disposition is ReferenceDisposition.CREATED
+                else self.repository.research_run_payload(
+                    record["research_run_id"]
+                )
+            )
+            decision_view = ResearchDecisionViewBuilder().build(
+                workflow_run_id=run_id,
+                data_snapshot=by_kind["DataSnapshot"],
+                forecast=by_kind["Forecast"],
+                valuation=by_kind["Valuation"],
+                simulation=by_kind.get("Simulation"),
+                market_data_snapshot=by_kind.get("MarketDataSnapshot"),
+                market_path=by_kind.get("MarketPathSimulation"),
+                research_run_payload=research_payload,
+            )
+            decision_payload = decision_view.to_dict()
+            json_artifact = self.repository.publish_artifact(
+                json.dumps(
+                    decision_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode(),
+                "application/json",
+                decision_view.schema_version,
+            )
+            html_artifact = self.repository.publish_artifact(
+                render_research_decision_html(decision_view).encode(),
+                "text/html",
+                "ResearchDecisionHtml@1",
+            )
+            if disposition is ReferenceDisposition.CREATED:
+                with self.repository.connection:
+                    self.repository.connection.execute(
+                        "UPDATE research_run_record "
+                        "SET canonical_json_artifact_id=?,html_artifact_id=? "
+                        "WHERE research_run_id=?",
+                        (
+                            json_artifact,
+                            html_artifact,
+                            record["research_run_id"],
+                        ),
+                    )
+                record = self.repository.connection.execute(
+                    "SELECT * FROM research_run_record WHERE research_run_id=?",
+                    (record["research_run_id"],),
+                ).fetchone()
         typed_members = tuple(
             (
                 row["artifact_id"],

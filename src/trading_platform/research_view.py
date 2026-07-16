@@ -230,7 +230,20 @@ class ResearchDecisionViewBuilder:
             value_market_divergence=divergence_view,
             audit={
                 "artifact_records": artifact_records,
-                "sources": tuple(research_run_payload.get("sources", ())),
+                "sources": tuple(
+                    research_run_payload.get("sources", ())
+                    or (
+                        research_run_payload.get("audit", {}).get(
+                            "sources",
+                            (),
+                        )
+                        if isinstance(
+                            research_run_payload.get("audit"),
+                            Mapping,
+                        )
+                        else ()
+                    )
+                ),
                 "fact_evidence": fact_evidence,
                 "formula_identities": tuple(
                     sorted(
@@ -252,7 +265,9 @@ class ResearchDecisionViewBuilder:
                 "parameters": parameters,
                 "diagnostics": diagnostics,
                 "versions": {
-                    "research_schema": research_run_payload.get("schema_version"),
+                    "research_schema": research_run_payload.get(
+                        "schema_version"
+                    ),
                     "model_identity": valuation.model_identity,
                     "policy_identity": valuation.policy_identity,
                     "code_identity": valuation.code_identity,
@@ -328,7 +343,14 @@ class ResearchDecisionViewBuilder:
             )
             if item is not None
         }
-        if len(identities) != 1 or research_run_payload.get("run_id") != valuation.research_run_id:
+        payload_run_id = (
+            research_run_payload.get("research_run_id")
+            if str(research_run_payload.get("schema_version", "")).startswith(
+                "ResearchDecisionView@"
+            )
+            else research_run_payload.get("run_id")
+        )
+        if len(identities) != 1 or payload_run_id != valuation.research_run_id:
             raise ResearchViewError("RESEARCH_VIEW_IDENTITY_MISMATCH")
 
     @staticmethod
@@ -608,6 +630,14 @@ class ResearchDecisionViewBuilder:
     def _method(self, value: Mapping[str, Any]) -> dict[str, Any]:
         conditional = value.get("conditional_value_range")
         diagnostics = tuple(str(item) for item in value.get("diagnostics", ()))
+        reconciliation = (
+            {
+                point: self._valuation_point(conditional.get(point))
+                for point in ("low", "base", "high")
+            }
+            if isinstance(conditional, Mapping)
+            else None
+        )
         return {
             "method_id": value.get("method_id"),
             "status": value.get("status"),
@@ -626,9 +656,28 @@ class ResearchDecisionViewBuilder:
                 if isinstance(conditional, Mapping)
                 else None
             ),
+            "reconciliation": reconciliation,
             "diagnostics": diagnostics,
             "display_diagnostics": tuple(
                 self._diagnostic_text(item) for item in diagnostics
+            ),
+        }
+
+    def _valuation_point(self, value: object) -> dict[str, Any] | None:
+        if not isinstance(value, Mapping):
+            return None
+        return {
+            "basis_value": self._quantity(value.get("basis_value")),
+            "equity_value": self._quantity(value.get("equity_value")),
+            "per_share_value": self._quantity(value.get("per_share_value")),
+            "bridge_trace": tuple(
+                {
+                    "operation": str(item.get("operation", "")),
+                    "amount": item.get("amount"),
+                    "ref_ids": tuple(str(ref) for ref in item.get("ref_ids", ())),
+                }
+                for item in value.get("bridge_trace", ())
+                if isinstance(item, Mapping)
             ),
         }
 

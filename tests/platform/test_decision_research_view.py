@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from tests.platform.test_outlook_artifacts import (
     _drafts,
     _request,
 )
-from tests.platform.test_research_workflow import CountingEngine, _root
+from tests.platform.test_research_workflow import (
+    CountingEngine,
+    _artifact_bytes,
+    _root,
+)
 
 
 def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
@@ -55,6 +60,10 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
         }
         ready = [method for method in scenario["methods"] if method["status"] == "ready"]
         assert ready and all(method["conditional_per_share_range"] for method in ready)
+        assert all(
+            method["reconciliation"]["base"]["bridge_trace"]
+            for method in ready
+        )
         assert all(method["horizon"] and method["value_basis"] for method in ready)
         assert all("display_diagnostics" in method for method in ready)
     assert all("blocked:" not in item for item in view["story"]["counterevidence"])
@@ -73,6 +82,34 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
     root.close()
 
 
+def test_formal_json_and_html_share_the_exact_decision_view(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path, CountingEngine())
+    result = root.facade.run_research_workflow(
+        _request("decision-view:canonical-presentation")
+    )
+
+    payload = json.loads(
+        _artifact_bytes(root, result.json_artifact_id)
+    )
+    html = _artifact_bytes(root, result.html_artifact_id).decode("utf-8")
+    embedded = re.search(
+        r'<script type="application/json" '
+        r'id="research-decision-view">(.*?)</script>',
+        html,
+    )
+
+    assert payload["schema_version"] == "ResearchDecisionView@2"
+    assert embedded is not None
+    assert json.loads(embedded.group(1)) == payload
+    assert "未来故事" in html
+    assert payload["story"]["what_happens"] in html
+    assert "审计附录" in html
+    assert "ResearchReportHtml@1" not in html
+    root.close()
+
+
 def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
     first = root.facade.run_research_workflow(_request("decision-view:model-v1"))
@@ -88,6 +125,7 @@ def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> 
     )
     views = workspace["research_views"]
     assert len(views) == 2
+    assert first.research_run_id == second.research_run_id
     assert [view["workflow_run_id"] for view in views] == [
         first.workflow_run_id,
         second.workflow_run_id,
@@ -98,4 +136,8 @@ def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> 
     ]
     assert len({view["view_id"] for view in views}) == 2
     assert len({view["valuation_artifact_record_id"] for view in views}) == 2
+    second_payload = json.loads(
+        _artifact_bytes(root, second.json_artifact_id)
+    )
+    assert second_payload["model_identity"] == "company-outlook-model@2"
     root.close()

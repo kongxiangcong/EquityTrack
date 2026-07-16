@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate equity research source manifests.
+"""Validate legacy equity research source manifests.
 
-The validator turns ``references/source-manifest.md`` into an executable gate.
-It accepts JSON manifests by default. YAML manifests are supported when PyYAML is
-available; otherwise the validator returns a structured JSON failure instead of
-crashing.
+Compatibility only: this script is not the platform's formal runtime authority.
+New runs freeze source semantics in DataSnapshot/ResearchProjection artifacts;
+typed evidence and artifact factories own provenance, cutoff, hash, identity,
+and selected-method input invariants.
 
 Usage:
     python source_manifest_validator.py --manifest path/to/source_manifest.json
@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - depends on local environment
 
 
 VALID_TIERS = {"official", "terminal", "secondary", "news", "estimate", "missing"}
+VALIDATOR_AUTHORITY = "legacy_compatibility_only"
 VALID_OFFICIAL_FLAGS = {"official", "secondary"}
 VALID_CROSS_CHECK_STATUSES = {"match", "mismatch", "not_checked"}
 CONFLICT_STATUSES = {"mismatch", "conflict", "unresolved", "unresolved_conflict"}
@@ -805,6 +806,7 @@ class SourceManifestValidator:
         return {
             "validator": "source_manifest_validator",
             "validator_version": 2,
+            "authority": VALIDATOR_AUTHORITY,
             "manifest_version": self.manifest_version,
             "input_path": str(self.manifest_path),
             "passed": not errors,
@@ -1008,6 +1010,7 @@ def build_failure_result(path: Path, issues: Sequence[Issue]) -> Dict[str, Any]:
     return {
         "validator": "source_manifest_validator",
         "validator_version": 2,
+        "authority": VALIDATOR_AUTHORITY,
         "manifest_version": None,
         "input_path": str(path),
         "passed": False,

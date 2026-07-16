@@ -103,6 +103,14 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
         assert not any(token in symbol.replace("_", "") for token in forbidden_execution_symbols for symbol in public_symbols), path
         lowered = source.lower()
         assert not any(f"import {token}" in lowered or f"from {token}" in lowered for token in forbidden_tokens), path
+        assert not any(
+            legacy in lowered
+            for legacy in (
+                "source_manifest_validator",
+                "model_validator",
+                "report_validator",
+            )
+        ), path
 
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8").lower()
     assert not any(token in project for token in forbidden_tokens)

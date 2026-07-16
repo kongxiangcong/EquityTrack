@@ -2,6 +2,8 @@
 
 > 历史文档：本文记录 2026-07-10 V3 重构前的实现，用于解释旧架构问题，不代表当前运行入口。当前唯一入口是 `skills/SKILL.md`。
 
+> 2026-07-17 状态：下文列出的临时模型、双报告和外观校验问题已由 typed DataSnapshot/Forecast/Valuation/Simulation artifacts、`ResearchDecisionView@2`、decision-first HTML 与公式对账 XLSX 主链取代。`skills/scripts/*_validator.py` 仅保留历史兼容，不再是正式运行权威。
+
 审计日期：2026-07-10
 审计范围：`skills/`、现有校验器、历史运行产物和意华股份样例。本文只描述当前代码现实，不把计划中的能力算作已实现。
 

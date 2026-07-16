@@ -1,5 +1,9 @@
 # Financial Model Build Specification
 
+> Legacy workbook specification. Retained for reading and checking historical
+> models only. New workbooks are output adapters over
+> `ResearchDecisionView@2` and must reconcile the canonical Valuation artifact.
+
 > **This file is the sole source of truth for Task 2: Financial Model + Valuation.**
 > The agent MUST build a real, working Excel (.xlsx) file with formulas that link across sheets.
 > Do NOT produce a markdown table pretending to be a model. Do NOT calculate numbers "in your head."

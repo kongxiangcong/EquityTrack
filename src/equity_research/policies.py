@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .evidence import EvidenceBook
 from .models import CapabilityResult
+from .research_inputs import ResearchInputs
 
 
 @dataclass(frozen=True)
@@ -137,9 +138,13 @@ def _peer_evidence(peer: Mapping[str, Any], metric: str, book: EvidenceBook) -> 
     )
 
 
-def _context_check(check: str, context: Mapping[str, Any], book: EvidenceBook) -> bool:
+def _context_check(
+    check: str,
+    inputs: ResearchInputs,
+    book: EvidenceBook,
+) -> bool:
     if check == "dcf_case":
-        case = context.get("dcf_case")
+        case = inputs.dcf_case
         if not isinstance(case, Mapping):
             return False
         forecast_refs = case.get("forecast_evidence_refs")
@@ -201,7 +206,7 @@ def _context_check(check: str, context: Mapping[str, Any], book: EvidenceBook) -
             and isinstance(case.get("forecast_unit_scale"), (int, float))
         )
     if check == "peer_count_at_least_3":
-        peer_case = context.get("peer_case")
+        peer_case = inputs.peer_case
         if isinstance(peer_case, Mapping):
             peers = peer_case.get("peers")
             if isinstance(peers, list):
@@ -225,13 +230,16 @@ def _context_check(check: str, context: Mapping[str, Any], book: EvidenceBook) -
                     and len({ticker for ticker, _ in usable}) == len(usable)
                     and len({evidence_id for _, evidence_id in usable}) == len(usable)
                 )
-        value = context.get("peer_count", 0)
+        value = inputs.peer_count
         return isinstance(value, int) and value >= 3
     if check == "historical_multiples":
-        values = context.get("historical_multiples")
-        if not isinstance(values, list) or len(values) < 12:
+        values = inputs.historical_multiples
+        if len(values) < 12:
             return False
-        role = f"historical_multiple:{_peer_metric_key(context.get('historical_metric', 'pe'))}"
+        role = (
+            "historical_multiple:"
+            f"{_peer_metric_key(inputs.historical_metric)}"
+        )
         resolved: list[tuple[str, str]] = []
         for item in values:
             if not isinstance(item, Mapping):
@@ -251,16 +259,14 @@ def _context_check(check: str, context: Mapping[str, Any], book: EvidenceBook) -
             and len({evidence_id for _, evidence_id in resolved}) == len(resolved)
         )
     if check == "conditional_plan":
-        plan = context.get("conditional_plan")
-        return isinstance(plan, list) and bool(plan)
-    return bool(context.get(check))
+        return bool(inputs.conditional_plan)
+    return False
 
 
 def evaluate_capabilities(
     book: EvidenceBook,
-    context: Mapping[str, Any] | None,
+    inputs: ResearchInputs,
 ) -> dict[str, CapabilityResult]:
-    context = context or {}
     results: dict[str, CapabilityResult] = {}
 
     for spec in CAPABILITY_SPECS:
@@ -301,7 +307,9 @@ def evaluate_capabilities(
             field_name for field_name in spec.optional_fields if field_name not in book.fields
         )
         context_gaps = tuple(
-            check for check in spec.context_checks if not _context_check(check, context, book)
+            check
+            for check in spec.context_checks
+            if not _context_check(check, inputs, book)
         )
 
         if missing or context_gaps:

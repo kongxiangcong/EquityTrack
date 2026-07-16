@@ -11,7 +11,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from equity_research import ResearchEngine, ResearchRequest  # noqa: E402
+from equity_research import (  # noqa: E402
+    LegacyResearchContextAdapter,
+    ResearchEngine,
+    ResearchInputs,
+    ResearchRequest,
+)
 
 
 EXAMPLE = ROOT / "examples" / "yihua-002897"
@@ -1246,6 +1251,52 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertFalse(run.permissions["scenario_analysis"])
         self.assertEqual([], run.summary["scenarios"])
         self.assertNotIn("验证改善", run.html)
+
+    def test_legacy_context_is_migrated_once_with_versioned_diagnostic(
+        self,
+    ) -> None:
+        migration = LegacyResearchContextAdapter.adapt(self.context)
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                context=self.context,
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertEqual("ResearchInputs@1", migration.inputs.schema_version)
+        self.assertEqual(
+            1,
+            sum(
+                item.startswith("LEGACY_RESEARCH_CONTEXT_MIGRATED:")
+                for item in run.diagnostics
+            ),
+        )
+
+    def test_typed_research_inputs_bypass_legacy_magic_key_path(
+        self,
+    ) -> None:
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=self.manifest,
+                estimates=self.estimates,
+                research_inputs=ResearchInputs(
+                    executive_summary="BUY / 买入 / 目标价 100",
+                ),
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertFalse(
+            any(
+                item.startswith("LEGACY_RESEARCH_CONTEXT_")
+                for item in run.diagnostics
+            )
+        )
+        self.assertNotIn("BUY", run.summary["executive_summary"])
+        self.assertNotIn("买入", run.summary["executive_summary"])
+        self.assertNotIn("目标价", run.summary["executive_summary"])
 
 
 if __name__ == "__main__":

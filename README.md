@@ -1,13 +1,15 @@
 # Personal Equity Research System
 
-这是一个面向个人研究流程的、可审计的股票投研内核。V3 将公司研究设为主产品，把来源、门禁和诊断保留在后台审计附录：
+这是一个面向个人研究流程的、可审计股票投研平台。当前公司未来推演主链以 frozen DataSnapshot、typed Forecast 和 typed Valuation 为事实源：
 
 ```text
-Evidence Ledger -> AnalysisBundle -> DebateResult -> ResearchSynthesis
-                -> ResearchRun -> JSON + Professional HTML
+Frozen evidence -> Forecast Graph -> Scenario Valuation
+                -> optional Monte Carlo / market paths
+                -> ResearchDecisionView@2
+                -> canonical JSON + decision-first HTML + reconciled XLSX
 ```
 
-Skills 仍可用于寻找资料和撰写受证据约束的研究叙事；来源完整性、能力门禁、估值方法、DCF invariant、权限、诊断和报告渲染由 Python 实现。
+`ResearchRun@3` 与自由 `context` 只保留为历史输入兼容层。新平台执行先把旧输入迁移为 `ResearchInputs@1`，正式展示不再从 `analyses/debate/synthesis/scenarios/dcf_case` 等 magic keys 直接取数。
 
 ## 解决了什么
 
@@ -20,10 +22,13 @@ Skills 仍可用于寻找资料和撰写受证据约束的研究叙事；来源�
 - 公司、行业、基本面、技术、情绪事件、估值、治理风险成为一等分析维度；
 - 正反质询必须绑定 evidence IDs，Research Manager 记录分歧与未解决问题；
 - HTML 正文以公司研究为主，能力、方法、来源和诊断收进折叠审计附录；
-- HTML 和 JSON 从同一个 `ResearchRun` 生成；
+- 正式 HTML、JSON 和 XLSX 从同一个 `ResearchDecisionView@2` 生成；
+- XLSX 逐步重算 enterprise/equity/per-share bridge，核心输出硬编码或断链即失败；
 - 默认输出条件研究计划，不生成个性化投资指令。
 
-## 运行双股票 V3 样例
+## 运行遗留 V3 兼容样例
+
+以下文件式 CLI 用于读取历史 `research_context.json`。它会发出版本化迁移诊断，不是平台新执行的输入接口。
 
 意华股份：
 
@@ -74,8 +79,9 @@ src/equity_research/
   narrative.py    # AnalysisBundle、证据约束质询与 ResearchSynthesis
   output_policy.py # 默认金融语言边界
   engine.py       # 唯一确定性执行入口
-  report.py       # 报告模式路由与审计备忘录
-  professional_report.py # 公司研究正文 + 折叠审计附录
+  research_inputs.py # typed inputs + legacy context adapter
+  report.py       # 遗留 ResearchRun 兼容渲染
+  professional_report.py # 遗留专业报告兼容渲染
   cli.py          # 文件系统 adapter
 
 skills/
@@ -94,6 +100,16 @@ examples/duofuduo-002407/
 tests/
   test_research_engine.py
   test_cli.py
+```
+
+平台正式展示模块位于：
+
+```text
+src/trading_platform/
+  research_view.py          # typed artifacts -> ResearchDecisionView@2
+  research_presentation.py  # canonical view -> decision-first HTML
+  valuation_workbook.py     # canonical view -> reconciled XLSX adapter
+scripts/render_valuation_xlsx.mjs
 ```
 
 ## CLI
@@ -123,8 +139,12 @@ python -m unittest discover -s tests -v
 - peer comps：至少 3 个主体、语义角色和 evidence refs 均唯一且完成币种/会计口径检查的样本，计算四分位和每股映射；
 - historical band：至少 12 个带日期和 canonical evidence refs 的截止日前观察，计算分布位置，不自动解释为均值回归；
 - DCF：显式 FCFF 序列与单位、可重算 WACC components、`WACC > g`、完整且显式的股权桥和 5×5 敏感性；未知桥接项不会当作零。
+- 周期与资源：mid-cycle、周期历史带和有限资源 NAV；
+- 金融企业：P/B–ROE/COE、DDM、residual income / excess return；
+- 创新药：管线 rNPV、SOTP 与现金跑道；
+- 多情景 Monte Carlo：基于 frozen dependency model、事件和估值模型生成条件分布；市场价格路径与内在价值分布保持分离。
 
-尚未实现为计算器的行业模型会明确路由/禁用，不会伪装成已完成能力，包括 rNPV、NAV、residual income、DDM 和完整 mid-cycle builder。
+方法不适用或输入不足会在 typed artifact 中明确标记，不会用默认值补齐。
 
 方法复核见 [methodology-assessment.md](docs/research/methodology-assessment.md)。
 

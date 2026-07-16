@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate equity research financial model workbooks.
+"""Validate legacy equity research financial model workbooks.
 
-This validator is intentionally workbook-level. It does not try to rebuild a
-model, fetch market data, or calculate a valuation. Instead it checks that the
-Excel artifact contains the required control surfaces, source traceability, and
-method-specific guardrails before a full report is allowed.
+Compatibility only: this script is not a formal runtime authority. New XLSX
+outputs are rendered from ResearchDecisionView and reconcile the canonical
+Valuation artifact. Formal formula and financial invariants live in the typed
+forecast/valuation engines and immutable artifact factories.
 
 Usage:
     python model_validator.py --workbook path/to/model.xlsx --pretty
@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - depends on local environment
 
 
 VALID_DCF_STATUSES = {"auto", "allowed", "caution", "disabled", "not_selected"}
+VALIDATOR_AUTHORITY = "legacy_compatibility_only"
 VALID_COMPANY_TYPES = {
     "general",
     "financial",
@@ -538,6 +539,7 @@ class ModelValidator:
         return {
             "validator": "model_validator",
             "validator_version": 1,
+            "authority": VALIDATOR_AUTHORITY,
             "input_path": str(self.workbook_path),
             "passed": passed,
             "model_validation_status": "passed" if passed else "failed",
@@ -737,6 +739,7 @@ def build_failure_result(path: Path, issue: Issue) -> Dict[str, Any]:
     return {
         "validator": "model_validator",
         "validator_version": 1,
+        "authority": VALIDATOR_AUTHORITY,
         "input_path": str(path),
         "passed": False,
         "model_validation_status": "failed",

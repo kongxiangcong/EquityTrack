@@ -14,6 +14,7 @@ from .financial import (
     valuation_decimal_context,
 )
 from .models import CapabilityResult, EvidenceItem, MethodResult
+from .research_inputs import ResearchInputs
 
 
 FINANCIAL_TYPES = {"financial", "bank", "insurance", "broker"}
@@ -1087,12 +1088,11 @@ def route_methods(
     book: EvidenceBook,
     capabilities: Mapping[str, CapabilityResult],
     company: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
+    inputs: ResearchInputs,
     *,
     as_of_date: str,
 ) -> dict[str, MethodResult]:
-    context = context or {}
-    company_type = str(context.get("company_type", "general")).strip().lower()
+    company_type = inputs.company_type.strip().lower()
     methods: dict[str, MethodResult] = {
         "observed_multiples": _observed_multiples(book),
     }
@@ -1107,14 +1107,14 @@ def route_methods(
             explanation="同业样本或公司侧输入不足；该方法单独禁用，不影响基础研究。",
             missing_fields=peer_capability.missing_fields + peer_capability.context_gaps,
             evidence_ids=peer_capability.evidence_ids,
-            metrics={"peer_count": int(context.get("peer_count", 0) or 0)},
+            metrics={"peer_count": inputs.peer_count},
         )
-    elif isinstance(context.get("peer_case"), Mapping):
+    elif inputs.peer_case is not None:
         try:
             with valuation_decimal_context():
                 peer_metrics, peer_evidence_ids = _peer_metrics(
                     book,
-                    context["peer_case"],
+                    inputs.peer_case,
                     as_of_date,
                 )
             methods["peer_comps"] = MethodResult(
@@ -1150,7 +1150,7 @@ def route_methods(
             role="relative_valuation",
             explanation="同业数量声明满足最低要求，但没有结构化 peer_case，暂不计算区间。",
             evidence_ids=peer_capability.evidence_ids,
-            metrics={"peer_count": int(context.get("peer_count", 0) or 0)},
+            metrics={"peer_count": inputs.peer_count},
         )
 
     historical_capability = capabilities["historical_band"]
@@ -1168,12 +1168,12 @@ def route_methods(
         try:
             with valuation_decimal_context():
                 metrics, historical_evidence_ids = _historical_metrics(
-                    context.get("historical_multiples"),
+                    list(inputs.historical_multiples),
                     book,
                     as_of_date,
                     {"price_to_sales": "ps", "ev_to_ebitda": "ev_ebitda"}.get(
-                        str(context.get("historical_metric", "pe")).strip().lower(),
-                        str(context.get("historical_metric", "pe")).strip().lower(),
+                        inputs.historical_metric.strip().lower(),
+                        inputs.historical_metric.strip().lower(),
                     ),
                 )
             methods["historical_band"] = MethodResult(
@@ -1242,7 +1242,7 @@ def route_methods(
             evidence_ids=dcf_capability.evidence_ids,
         )
     else:
-        case = context.get("dcf_case")
+        case = inputs.dcf_case
         assert isinstance(case, Mapping)
         try:
             with valuation_decimal_context():
@@ -1297,11 +1297,11 @@ def route_methods(
             role="industry_specific",
             explanation=(
                 "公司类型要求用中周期收入、利润率和资本开支校准；当前结构化中周期 case 尚未提供。"
-                if context.get("mid_cycle_case") is None
+                if inputs.mid_cycle_case is None
                 else "已收到中周期输入，但完整 builder、证据校验和计算尚未实现，不能标记为已完成方法。"
             ),
             missing_fields=("mid_cycle_builder",),
-            assumptions={"input_received": context.get("mid_cycle_case") is not None},
+            assumptions={"input_received": inputs.mid_cycle_case is not None},
         )
 
     return methods

@@ -1774,11 +1774,20 @@ class WorkflowRepository:
                 "RESEARCH_RUN_JSON_INVALID",
                 "Canonical research JSON is not valid JSON.",
             ) from error
-        if (
-            not isinstance(decoded, Mapping)
-            or decoded.get("run_id") != research_run_id
-            or decoded.get("schema_version") != row["engine_schema_version"]
-        ):
+        legacy_identity = (
+            isinstance(decoded, Mapping)
+            and decoded.get("run_id") == research_run_id
+            and decoded.get("schema_version")
+            == row["engine_schema_version"]
+        )
+        decision_identity = (
+            isinstance(decoded, Mapping)
+            and decoded.get("research_run_id") == research_run_id
+            and str(decoded.get("schema_version", "")).startswith(
+                "ResearchDecisionView@"
+            )
+        )
+        if not legacy_identity and not decision_identity:
             raise PersistenceError(
                 "RESEARCH_RUN_JSON_IDENTITY_MISMATCH",
                 "Canonical research JSON identity does not match its database record.",
@@ -1868,6 +1877,17 @@ class WorkflowRepository:
         record = self.connection.execute("SELECT * FROM research_run_record WHERE research_run_id=?", (decision["research_run_id"],)).fetchone()
         workflow_snapshot = self.connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='workflow_snapshot'", (workflow_run_id,)).fetchone()
         final_manifest = self.connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='final_manifest'", (workflow_run_id,)).fetchone()
+        presentation_artifacts = {
+            row["member_role"]: row["artifact_id"]
+            for row in self.connection.execute(
+                "SELECT member_role,artifact_id "
+                "FROM artifact_manifest_member "
+                "WHERE artifact_manifest_id=? "
+                "AND member_role IN "
+                "('research_run_json','research_report_html')",
+                (final_manifest[0],),
+            )
+        }
         artifact_record_ids = tuple(
             row[0]
             for row in self.connection.execute(
@@ -1877,7 +1897,7 @@ class WorkflowRepository:
                 (final_manifest[0],),
             )
         )
-        return ResearchWorkflowResult(workflow_run_id, record["research_run_id"], record["research_snapshot_id"], workflow_snapshot[0] if workflow_snapshot else None, final_manifest[0], ReferenceDisposition(decision["disposition"]), decision["reason_code"], decision["stale_by_days"], record["canonical_json_artifact_id"], record["html_artifact_id"], artifact_record_ids)
+        return ResearchWorkflowResult(workflow_run_id, record["research_run_id"], record["research_snapshot_id"], workflow_snapshot[0] if workflow_snapshot else None, final_manifest[0], ReferenceDisposition(decision["disposition"]), decision["reason_code"], decision["stale_by_days"], presentation_artifacts["research_run_json"], presentation_artifacts["research_report_html"], artifact_record_ids)
 
     def history(self, workflow_run_id: str) -> WorkflowHistory:
         run = self.connection.execute("SELECT * FROM workflow_run WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-研报结构自动化预检脚本
+遗留研报结构自动化预检脚本
 Automated Structural Pre-check for Investment Research Reports
 
-检查内容：不判断内容质量，只验证"必填结构元素是否存在"
+兼容用途：不作为正式运行权威，只检查旧 HTML 的外观结构。
+新正式 HTML 直接渲染 ResearchDecisionView，并嵌入同一 canonical JSON。
 
 用法:
     python report_validator.py --html /path/to/report.html --source-validation-result source.json --model-validation-result model.json --json
@@ -864,6 +865,7 @@ def print_results(
 ):
     if use_json:
         output = {
+            "authority": "legacy_compatibility_only",
             "report_type": report_type,
             "source_gate": source_gate or gate_not_provided("source"),
             "model_gate": model_gate or gate_not_provided("model"),

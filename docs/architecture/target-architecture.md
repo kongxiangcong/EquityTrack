@@ -4,13 +4,20 @@
 
 外部最终体验采用 UZI-Skill 方案的默认简单性：`analyze(target)` 与 `resume(run_id)`。内部金融核心采用 daily_stock_analysis 方案的单一执行语义：`run/execute(request) -> outcome`。TradingAgents 的 `start/advance/inspect` 被吸收为持久化 facade 的生命周期能力，而不是暴露给最常见调用者。
 
-本轮已落地的核心 seam 是：
+遗留 evidence-to-outcome seam 仍用于兼容：
 
 ```python
 ResearchEngine.run(ResearchRequest) -> ResearchRun
 ```
 
-它是纯粹的 evidence-to-outcome Module；CLI 负责读取/写入文件。下一层 facade 可以在不改变金融核心的前提下增加数据 adapter、run store、`analyze` 与 `resume`。
+平台正式 seam 已提升为不可变 artifact pipeline：
+
+```python
+ApplicationFacade.run_research_workflow(request) -> ResearchWorkflowResult
+ResearchDecisionViewBuilder.build(...) -> ResearchDecisionView@2
+```
+
+自由 context 只经 `LegacyResearchContextAdapter` 转成 `ResearchInputs@1`。DataSnapshot、Forecast、Valuation、Simulation 和 MarketPathSimulation 由持久化 facade 管理身份、依赖和历史版本。
 
 ## 为什么采用这一接口
 
@@ -26,21 +33,21 @@ ResearchEngine.run(ResearchRequest) -> ResearchRun
 
 ```mermaid
 flowchart LR
-    A["ResearchRequest"] --> B["EvidenceBook"]
-    B --> C["Manifest Integrity"]
-    C --> D["Capability Matrix"]
-    D --> E["Method Registry"]
-    E --> F["Deterministic Calculations"]
-    D --> G["Conditional Research Plan"]
-    F --> H["ResearchRun"]
-    G --> H
-    H --> I["JSON Renderer"]
-    H --> J["HTML Renderer"]
-    H -. future .-> K["PDF / XLSX Renderers"]
-    L["Skills / LLM narrative"] -. evidence constrained .-> H
+    A["Frozen DataSnapshot"] --> B["Forecast Graph"]
+    B --> C["Scenario Valuation"]
+    C --> D["Monte Carlo Simulation"]
+    C --> E["ResearchDecisionView@2"]
+    D --> E
+    F["MarketDataSnapshot"] --> G["MarketPathSimulation"]
+    G --> E
+    E --> H["Canonical JSON"]
+    E --> I["Decision-first HTML"]
+    E --> J["Reconciled XLSX"]
+    K["Legacy context"] --> L["ResearchInputs@1 adapter"]
+    L --> B
 ```
 
-`ResearchRun` 是唯一事实源。Renderer 不抓数据、不选择方法、不修改估值数字。
+正式展示的唯一事实源是 `ResearchDecisionView@2`，它只由同一组 typed artifacts 组装。Renderer 不抓数据、不选择方法、不修改估值数字；XLSX 只能重算并对账 artifact 已声明的 bridge。
 
 ## Module 与 seam
 
@@ -108,7 +115,7 @@ flowchart LR
 5. method router 先于任何数值计算。
 6. DCF 不使用默认 WACC、默认增长、默认 FCF conversion 或固定净债务比例。
 7. LLM 只能解释 frozen facts/calculations，不能修改它们；报告指标必须通过 exact evidence refs 直接格式化或确定性计算。
-8. HTML、JSON 和未来 PDF/XLSX 必须来自同一 ResearchRun。
+8. 正式 HTML、JSON 和 XLSX 必须来自同一 ResearchDecisionView；遗留 ResearchRun renderer 仅用于历史读取。
 9. 默认不生成个性化投资指令。
 10. as-of 之后才公开可得的来源和 overlay 不得进入 run；`retrieved_at` 只用于采集审计。
 11. 完整性错误在方法路由前 fail-closed；blocked HTML 只能是数据不足备忘录。
@@ -138,16 +145,18 @@ flowchart LR
 - 公司、行业、基本面、技术、情绪事件、估值和治理风险分析；
 - 专业研究正文与折叠审计附录分离；
 - conditional research plan；
-- JSON/HTML 单一事实源；
+- Forecast/Valuation/Simulation 不可变 artifacts；
+- 通用 DCF/SOTP/reverse DCF/peer comps 与周期、资源、金融、创新药行业方法；
+- 条件 Monte Carlo 估值分布、独立市场价格路径和价值—市场背离诊断；
+- ResearchDecisionView@2 作为 JSON/HTML/XLSX 单一展示事实源；
+- XLSX bridge 公式对账与硬编码/断链失败门禁；
 - CLI 与行为测试。
 
 ### 后续扩展
 
-1. `ResearchSystem.analyze/resume` facade、SQLite run journal 和 artifact hashes；
-2. CNINFO/SSE/SZSE/HKEX/SEC disclosure adapters 与 `available_at`；
-3. 自动行情 adapter、K 线/成交量、新闻情绪采样和事件时间轴；
-4. linked statement builder、reverse DCF、mid-cycle、residual income、rNPV 和 NAV；
-5. PDF/XLSX renderer 与浏览器视觉回归；
-6. 独立的 portfolio/backtest Module。它不应塞进 equity research 根 Module。
+1. CNINFO/SSE/SZSE/HKEX/SEC disclosure adapters 的覆盖扩展；
+2. 自动行情、K 线/成交量、新闻情绪采样和事件时间轴；
+3. PDF adapter 与更多浏览器视觉回归；
+4. 独立的 portfolio/backtest Module。它不应塞进 equity research 根 Module。
 
 这些扩展不改变当前根金融接口，只在 facade、adapter 和 method registry 内增加实现。

@@ -1,5 +1,8 @@
 # Tear Sheet — Phase 5: Quality Assurance
 
+> Legacy tear-sheet QA only. This file does not define formal platform output
+> authority.
+
 > **This file is read by the agent during Phase 5 when `output_type = TEAR_SHEET`.**
 > All paths are relative to the skill root directory.
 

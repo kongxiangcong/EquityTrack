@@ -13,6 +13,7 @@ from .models import (
     EvidenceClaim,
     ResearchSynthesis,
 )
+from .research_inputs import ResearchInputs
 
 
 DIMENSION_SPECS = (
@@ -27,8 +28,8 @@ DIMENSION_SPECS = (
 
 
 @dataclass(frozen=True)
-class LegacyNarrativeInputs:
-    """Explicit compatibility boundary for the pre-Forecast context contract."""
+class NarrativeInputs:
+    """Typed narrative inputs consumed by the narrative module."""
 
     report_version: int
     analyses: Mapping[str, Any]
@@ -36,16 +37,19 @@ class LegacyNarrativeInputs:
     synthesis: Mapping[str, Any] | None
 
     @classmethod
-    def from_context(cls, context: Mapping[str, Any]) -> "LegacyNarrativeInputs":
-        raw_analyses = context.get("analyses", {})
-        raw_debate = context.get("debate")
-        raw_synthesis = context.get("synthesis")
+    def from_research_inputs(
+        cls,
+        inputs: ResearchInputs,
+    ) -> "NarrativeInputs":
         return cls(
-            report_version=int(context.get("report_version", 0) or 0),
-            analyses=raw_analyses if isinstance(raw_analyses, Mapping) else {},
-            debate=raw_debate if isinstance(raw_debate, Mapping) else None,
-            synthesis=raw_synthesis if isinstance(raw_synthesis, Mapping) else None,
+            report_version=inputs.report_version,
+            analyses=inputs.analyses or {},
+            debate=inputs.debate,
+            synthesis=inputs.synthesis,
         )
+
+
+LegacyNarrativeInputs = NarrativeInputs
 
 
 def _has_unbound_number(text: str) -> bool:

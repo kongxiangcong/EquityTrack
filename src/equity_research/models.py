@@ -8,6 +8,7 @@ from .output_policy import normalize_action_language
 
 if TYPE_CHECKING:
     from .forecast import ForecastRequest
+    from .research_inputs import ResearchInputs
 
 
 POLICY_IDENTIFIER_KEYS = {
@@ -85,6 +86,7 @@ class ResearchRequest:
     as_of_date: str
     estimates: Mapping[str, Any] | None = None
     context: Mapping[str, Any] | None = None
+    research_inputs: ResearchInputs | None = None
     profile: str = "standard"
     render_html: bool = True
     forecast_request: ForecastRequest | None = None

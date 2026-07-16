@@ -30,28 +30,41 @@ Use `provider_type = tushare_compatible` for the preconfigured Tushare-compatibl
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.
 
-For company research requests, continue with the workflow below.
+For company research requests, use the typed platform route below.
 
 # Equity Research
 
-Use one workflow for every new run:
+Use one formal workflow for every new run:
 
 ```text
-Evidence Ledger
-  -> AnalysisBundle
-  -> DebateResult
-  -> ResearchSynthesis
-  -> ResearchRun
-  -> canonical JSON + professional HTML
+Frozen DataSnapshot
+  -> Forecast Graph
+  -> Scenario Valuation
+  -> optional Monte Carlo / Market Path Simulation
+  -> ResearchDecisionView@2
+  -> canonical JSON + decision-first HTML + reconciled XLSX
 ```
 
-The deterministic interface is:
+The public interface is:
 
 ```python
-ResearchEngine.run(ResearchRequest) -> ResearchRun
+ApplicationFacade.run_research_workflow(request) -> ResearchWorkflowResult
 ```
 
-Skills collect evidence and prepare structured research context. Python owns identity and date checks, evidence resolution, capability readiness, method routing, calculations, permissions, report mode, and rendering.
+The retained deterministic compatibility seam is
+`ResearchEngine.run(ResearchRequest) -> ResearchRun`; it does not define the
+formal platform presentation model. Historical `ResearchSynthesis` remains a
+read-compatible part of that legacy contract.
+
+New execution must use typed request/artifact contracts. Free-form legacy
+`context` is accepted only by `LegacyResearchContextAdapter`, which converts it
+to `ResearchInputs@1` and emits a versioned migration diagnostic. No formal
+renderer reads `analyses`, `debate`, `synthesis`, `scenarios`, or `dcf_case`
+magic keys.
+
+Python owns identity and date checks, evidence resolution, capability
+readiness, method routing, calculations, simulation, immutable artifact
+identity, reconciliation, permissions, and rendering.
 
 ## 1. Lock the request
 
@@ -100,7 +113,43 @@ A disabled method limits only that method. It does not erase valid company resea
 
 Completion criterion: every candidate method is `ready`, `limited`, `caution`, `blocked`, or `disabled`, with an evidence-backed reason.
 
-## 4. Build the seven research dimensions
+## 4. Build typed Forecast and Valuation artifacts
+
+Represent the company story as Event -> Driver -> Forecast Financial ->
+Valuation transmission. Build stress, base, and improvement scenarios from
+explicit driver conditions; do not create arbitrary percentage bands.
+
+Route each scenario through every applicable method, including industry
+specializations. Use Monte Carlo only after a frozen dependency model,
+distributions, constraints, and valuation model exist. Keep simulated intrinsic
+value and simulated market price paths as separate artifacts.
+
+Completion criterion: typed Forecast and Valuation artifacts reconcile their
+facts, formulas, diluted shares, equity bridges, identities, and source refs.
+
+## 5. Build the decision-first view
+
+`ResearchDecisionView@2` is the sole formal presentation model. It must expose:
+
+- the future story and what would change it;
+- key Drivers and scenario financials;
+- method applicability and conditional value ranges;
+- optional valuation distributions and market paths;
+- value-market divergence without action language;
+- a complete audit appendix with artifact, source, parameter, formula, model,
+  policy, and code identities.
+
+Formal JSON and HTML must serialize this exact view. XLSX must import the same
+view, recompute every bridge step with formulas, and fail when canonical values
+are hardcoded or links are broken.
+
+## Legacy V3 narrative compatibility
+
+The following seven-dimension/debate/synthesis contract is retained only for
+historical `research_context.json` input and legacy `ResearchRun@3` reading.
+Do not use it as the new platform execution contract.
+
+### Build the seven legacy research dimensions
 
 Set `report_version = 3` and provide all dimensions under `analyses`:
 
@@ -151,7 +200,7 @@ Missing price history limits the technical dimension to a market snapshot. Missi
 
 Completion criterion: every non-blocked dimension has conclusion, finding, counterpoint, uncertainty, and resolved evidence IDs.
 
-## 5. Run evidence-constrained debate
+### Run legacy evidence-constrained debate
 
 Build positive and negative cases. Every argument needs:
 
@@ -171,7 +220,7 @@ Reject missing, same-side, or dangling response links.
 
 Completion criterion: both cases have sourced arguments and a valid cross-side challenge-response chain.
 
-## 6. Produce Research Synthesis
+### Produce legacy Research Synthesis
 
 Synthesis must include:
 
@@ -190,7 +239,7 @@ Use research language. Keep all numeric facts in deterministic metric or method 
 
 Completion criterion: synthesis resolves all declared evidence fields and remains consistent with dimension and debate results.
 
-## 7. Render and validate
+### Render and validate legacy file outputs
 
 Run the CLI through `scripts/research.py`:
 
@@ -204,7 +253,7 @@ python scripts\research.py run `
 
 Add `--estimates <estimate_overlay.json>` only when an explicit estimate overlay exists.
 
-Required artifacts:
+Legacy compatibility artifacts:
 
 - `research_run.json` — canonical evidence, dimensions, debate, synthesis, capabilities, methods, permissions, and diagnostics;
 - `research_report.html` — self-contained professional company-research report.
@@ -217,7 +266,10 @@ Run:
 python -B -m unittest discover -s tests -v
 ```
 
-For `source_manifest_version = 2`, the standalone source validator is an integrity gate. `valid_with_limits` is a passing manifest state: missing fields remain explicit capability limitations and do not globally replace a usable research report with an audit memo. Schema, provenance, time, numeric, or unresolved-conflict errors still fail closed.
+The standalone `source_manifest_validator.py`, `model_validator.py`, and
+`report_validator.py` are compatibility utilities only. Formal platform
+authority lives in frozen projection validation, typed artifact factories,
+forecast/valuation invariants, and canonical presentation reconciliation.
 
 Completion criterion: JSON and HTML come from the same `ResearchRun`, validation passes, and the report contains no unsupported numeric or action language.
 
