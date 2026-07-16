@@ -123,6 +123,12 @@
 }
 
 .implied-section { padding: 20px; border-radius: 18px; background: #eaf1f7; }
+.simulation-section { padding: 20px; border-radius: 18px; background: #f3f0e8; }
+.quantile-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.quantile-grid article, .simulation-detail-grid article { min-width: 0; padding: 14px; border-radius: 14px; background: #fff; }
+.quantile-grid h4 { margin: 0; color: #536174; }
+.quantile-grid p { margin: 8px 0 0; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.simulation-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
 .implied-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .implied-grid article {
   min-width: 0;
@@ -133,10 +139,10 @@
 }
 .implied-grid h3 { font-size: 1rem; }
 .implied-grid p { font-variant-numeric: tabular-nums; }
-.audit-disclosure, .report-disclosure { margin-top: 24px; border: 1px solid #cfd7e2; }
-.audit-disclosure summary, .report-disclosure summary { cursor: pointer; font-weight: 650; }
+.audit-disclosure, .report-disclosure, .simulation-basis-disclosure { margin-top: 24px; border: 1px solid #cfd7e2; }
+.audit-disclosure summary, .report-disclosure summary, .simulation-basis-disclosure summary { cursor: pointer; font-weight: 650; }
 
-.audit-disclosure pre {
+.audit-disclosure pre, .simulation-basis-disclosure pre {
   max-height: 60vh;
   padding: 16px;
   overflow: auto;
@@ -154,12 +160,15 @@
 
 @media (max-width: 1000px) {
   .scenario-grid, .implied-grid { grid-template-columns: minmax(0, 1fr); }
+  .quantile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .simulation-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .driver-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
   .decision-header { display: grid; align-items: stretch; }
   .story-grid, .driver-grid { grid-template-columns: minmax(0, 1fr); }
+  .quantile-grid { grid-template-columns: minmax(0, 1fr); }
   .decision-view { padding: 16px; border-radius: 16px; }
   .section-heading { display: block; }
   .scenario-card { padding: 16px; }

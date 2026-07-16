@@ -31,7 +31,7 @@ test("accessibility policy includes keyboard focus, narrow layout, zoom-safe uni
   assert.ok(html.includes('aria-label="工作区任务"')&&html.includes('role="status"'))
   assert.ok(css.includes(":focus-visible")&&css.includes("prefers-reduced-motion")&&css.includes("max-width:900px")&&css.includes("rem"))
   assert.ok(researchCss.includes(":focus-visible")&&researchCss.includes("prefers-reduced-motion")&&/max-width:\s*700px/.test(researchCss)&&researchCss.includes("rem"))
-  assert.ok(motionCss.includes(".reduce-motion")&&app.includes('import "./motion.css"'))
+  assert.ok(motionCss.includes(".reduce-motion")&&/import\s*["']\.\/motion\.css["']/.test(app))
 })
 
 test("decision cards cannot force horizontal overflow on narrow screens",()=>{

@@ -164,6 +164,11 @@ class WorkspaceService:
                 ),
                 forecast=self.research_artifact_reader(artifact_ids["Forecast"]),
                 valuation=self.research_artifact_reader(artifact_ids["Valuation"]),
+                simulation=(
+                    self.research_artifact_reader(artifact_ids["Simulation"])
+                    if "Simulation" in artifact_ids
+                    else None
+                ),
                 research_run_payload=self.research_run_reader(
                     group["research_run_id"]
                 ),

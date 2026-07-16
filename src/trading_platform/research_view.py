@@ -21,6 +21,7 @@ class ResearchDecisionView:
     data_snapshot_id: str
     model_data_snapshot_identity: str
     valuation_artifact_record_id: str
+    simulation_artifact_record_id: str | None
     subject_id: str
     as_of: str
     model_identity: str
@@ -30,6 +31,7 @@ class ResearchDecisionView:
     key_drivers: tuple[Mapping[str, Any], ...]
     scenarios: tuple[Mapping[str, Any], ...]
     market_implied_expectations: tuple[Mapping[str, Any], ...]
+    valuation_simulation: Mapping[str, Any] | None
     audit: Mapping[str, Any]
     boundary: str
 
@@ -38,7 +40,7 @@ class ResearchDecisionView:
 
 
 class ResearchDecisionViewBuilder:
-    SCHEMA_VERSION = "ResearchDecisionView@1"
+    SCHEMA_VERSION = "ResearchDecisionView@2"
     SCENARIO_LABELS = {
         "stress": "压力",
         "base": "基准",
@@ -64,12 +66,14 @@ class ResearchDecisionViewBuilder:
         data_snapshot: ResearchArtifactView,
         forecast: ResearchArtifactView,
         valuation: ResearchArtifactView,
+        simulation: ResearchArtifactView | None = None,
         research_run_payload: Mapping[str, Any],
     ) -> ResearchDecisionView:
         self._validate_artifacts(
             data_snapshot,
             forecast,
             valuation,
+            simulation,
             research_run_payload,
         )
         scenario_payloads = valuation.payload.get("scenarios")
@@ -105,7 +109,8 @@ class ResearchDecisionViewBuilder:
                 "source_identity": item.source_identity,
                 "status": item.status,
             }
-            for item in (data_snapshot, forecast, valuation)
+            for item in (data_snapshot, forecast, valuation, simulation)
+            if item is not None
         )
         fact_evidence = tuple(
             {
@@ -149,6 +154,16 @@ class ResearchDecisionViewBuilder:
             for method in scenario.get("methods", ())
             if isinstance(method, Mapping)
             for diagnostic in method.get("diagnostics", ())
+        ) + tuple(
+            str(item)
+            for item in (
+                simulation.payload.get("diagnostics", ())
+                if simulation is not None
+                else ()
+            )
+        )
+        simulation_view = (
+            self._simulation(simulation.payload) if simulation is not None else None
         )
         view_id = "research_view_" + canonical_hash(
             {
@@ -165,6 +180,9 @@ class ResearchDecisionViewBuilder:
             data_snapshot_id=valuation.data_snapshot_id,
             model_data_snapshot_identity=valuation.model_data_snapshot_identity,
             valuation_artifact_record_id=valuation.artifact_record_id,
+            simulation_artifact_record_id=(
+                simulation.artifact_record_id if simulation is not None else None
+            ),
             subject_id=valuation.subject_id,
             as_of=valuation.as_of,
             model_identity=valuation.model_identity,
@@ -174,6 +192,7 @@ class ResearchDecisionViewBuilder:
             key_drivers=key_drivers,
             scenarios=scenarios,
             market_implied_expectations=market_implied,
+            valuation_simulation=simulation_view,
             audit={
                 "artifact_records": artifact_records,
                 "sources": tuple(research_run_payload.get("sources", ())),
@@ -182,7 +201,8 @@ class ResearchDecisionViewBuilder:
                     sorted(
                         {
                             formula
-                            for item in (data_snapshot, forecast, valuation)
+                            for item in (data_snapshot, forecast, valuation, simulation)
+                            if item is not None
                             for formula in item.formula_identities
                         }
                     )
@@ -204,6 +224,7 @@ class ResearchDecisionViewBuilder:
         data_snapshot: ResearchArtifactView,
         forecast: ResearchArtifactView,
         valuation: ResearchArtifactView,
+        simulation: ResearchArtifactView | None,
         research_run_payload: Mapping[str, Any],
     ) -> None:
         if (
@@ -213,6 +234,14 @@ class ResearchDecisionViewBuilder:
             or valuation.dependency_record_ids != (forecast.artifact_record_id,)
         ):
             raise ResearchViewError("RESEARCH_VIEW_ARTIFACT_GRAPH_INVALID")
+        if simulation is not None and (
+            simulation.artifact_kind != "Simulation"
+            or simulation.dependency_record_ids
+            != (valuation.artifact_record_id,)
+            or simulation.payload.get("valuation_source_identity")
+            != valuation.source_identity
+        ):
+            raise ResearchViewError("RESEARCH_VIEW_SIMULATION_GRAPH_INVALID")
         identities = {
             (
                 item.research_run_id,
@@ -225,10 +254,75 @@ class ResearchDecisionViewBuilder:
                 item.policy_identity,
                 item.code_identity,
             )
-            for item in (data_snapshot, forecast, valuation)
+            for item in (data_snapshot, forecast, valuation, simulation)
+            if item is not None
         }
         if len(identities) != 1 or research_run_payload.get("run_id") != valuation.research_run_id:
             raise ResearchViewError("RESEARCH_VIEW_IDENTITY_MISMATCH")
+
+    @staticmethod
+    def _simulation(value: Mapping[str, Any]) -> dict[str, Any]:
+        model = value.get("valuation_model")
+        budget = value.get("budget")
+        if not isinstance(model, Mapping) or not isinstance(budget, Mapping):
+            raise ResearchViewError("RESEARCH_VIEW_SIMULATION_INVALID")
+        unit = model.get("output_unit")
+        currency = model.get("currency")
+        period = model.get("period")
+
+        def quantity(raw: object) -> dict[str, Any]:
+            return {
+                "value": raw,
+                "unit": unit,
+                "currency": currency,
+                "period": period,
+            }
+
+        raw_quantiles = value.get("quantiles")
+        quantiles = (
+            {
+                key: quantity(raw_quantiles.get(key))
+                for key in ("p5", "p25", "p50", "p75", "p95")
+            }
+            if isinstance(raw_quantiles, Mapping)
+            else None
+        )
+        tail = value.get("tail_results")
+        tail_view = (
+            {
+                "threshold": quantity(tail.get("threshold")),
+                "probability_below_threshold": {
+                    "value": tail.get("probability_below_threshold"),
+                    "unit": "decimal",
+                },
+                "conditional_tail_mean": quantity(
+                    tail.get("conditional_tail_mean")
+                ),
+            }
+            if isinstance(tail, Mapping)
+            else None
+        )
+        return {
+            "status": value.get("status"),
+            "converged": value.get("converged"),
+            "quantiles": quantiles,
+            "tail_results": tail_view,
+            "contributions": tuple(value.get("contributions", ())),
+            "assumptions": tuple(value.get("assumptions", ())),
+            "dependency_model": value.get("dependency_model"),
+            "rng_algorithm": budget.get("rng_algorithm"),
+            "seed": budget.get("seed"),
+            "sample_budget": budget.get("sample_budget"),
+            "completed_samples": value.get("completed_samples"),
+            "batch_size": budget.get("batch_size"),
+            "invalid_path_rate": value.get("invalid_path_rate"),
+            "convergence_tolerance": budget.get("convergence_tolerance"),
+            "stable_batches_required": budget.get("stable_batches_required"),
+            "stable_batches": value.get("stable_batches"),
+            "constraint_path": tuple(value.get("constraint_path", ())),
+            "deterministic_fallback": value.get("deterministic_fallback"),
+            "diagnostics": tuple(value.get("diagnostics", ())),
+        }
 
     def _scenario(self, value: Mapping[str, Any]) -> dict[str, Any]:
         role = str(value.get("role", ""))

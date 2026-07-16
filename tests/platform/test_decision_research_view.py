@@ -31,7 +31,7 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
     )
     assert len(workspace["research_views"]) == 1
     view = workspace["research_views"][0]
-    assert view["schema_version"] == "ResearchDecisionView@1"
+    assert view["schema_version"] == "ResearchDecisionView@2"
     assert view["subject_id"] == "002897.SZ"
     assert tuple(view["story"]) == (
         "what_happens",

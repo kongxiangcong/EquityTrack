@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Mapping
 
@@ -37,6 +38,70 @@ def _contains_float(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_contains_float(item) for item in value)
     return False
+
+
+def simulation_fallback_matches_valuation(
+    fallback: Mapping[str, Any],
+    valuation_payload: Mapping[str, Any],
+) -> bool:
+    def comparable_decimal(value: Any) -> str:
+        try:
+            rendered = format(
+                Decimal(str(value)).quantize(Decimal("0.000000000001")),
+                "f",
+            ).rstrip("0").rstrip(".")
+        except (InvalidOperation, ValueError):
+            return ""
+        return rendered or "0"
+
+    scenarios = valuation_payload.get("scenarios")
+    if not isinstance(scenarios, list):
+        return False
+    scenario = next(
+        (
+            item
+            for item in scenarios
+            if isinstance(item, Mapping)
+            and item.get("scenario_id") == fallback.get("scenario_id")
+        ),
+        None,
+    )
+    methods = scenario.get("methods") if isinstance(scenario, Mapping) else None
+    if not isinstance(methods, list):
+        return False
+    method = next(
+        (
+            item
+            for item in methods
+            if isinstance(item, Mapping)
+            and item.get("method_id") == fallback.get("method_id")
+        ),
+        None,
+    )
+    if (
+        not isinstance(method, Mapping)
+        or method.get("status") != "ready"
+        or method.get("formula_version") != fallback.get("formula_version")
+    ):
+        return False
+    value_range = method.get("conditional_value_range")
+    if not isinstance(value_range, Mapping):
+        return False
+    for label in ("low", "base", "high"):
+        item = value_range.get(label)
+        quantity = item.get("per_share_value") if isinstance(item, Mapping) else None
+        if (
+            not isinstance(quantity, Mapping)
+            or comparable_decimal(
+                quantity.get("normalized_value", quantity.get("value"))
+            )
+            != comparable_decimal(fallback.get(label))
+            or quantity.get("unit") != fallback.get("unit")
+            or quantity.get("currency") != fallback.get("currency")
+            or quantity.get("period") != fallback.get("period")
+        ):
+            return False
+    return True
 
 
 def forecast_structure_identity(value: Mapping[str, Any]) -> str:
@@ -287,6 +352,89 @@ class ImmutableArtifactDraft:
                 "blocked_method_count": sum(
                     method.status == "blocked" for method in methods
                 ),
+            },
+        )
+
+    @classmethod
+    def from_valuation_simulation(
+        cls,
+        result: Any,
+        *,
+        valuation_artifact: ImmutableArtifactDraft,
+        model_identity: str,
+        policy_identity: str,
+    ) -> ImmutableArtifactDraft:
+        from equity_research import ValuationSimulationResult
+
+        if not isinstance(result, ValuationSimulationResult) or not isinstance(
+            valuation_artifact, ImmutableArtifactDraft
+        ):
+            raise TypeError(
+                "from_valuation_simulation requires a typed simulation result "
+                "and valuation artifact."
+            )
+        if (
+            valuation_artifact.artifact_kind != "Valuation"
+            or result.security_id != valuation_artifact.subject_id
+            or result.as_of != valuation_artifact.as_of
+            or result.valuation_source_identity
+            != valuation_artifact.source_identity
+        ):
+            raise ValueError("RESEARCH_ARTIFACT_SIMULATION_LINEAGE_INVALID")
+        if not simulation_fallback_matches_valuation(
+            result.deterministic_fallback,
+            valuation_artifact.payload,
+        ):
+            raise ValueError("RESEARCH_ARTIFACT_SIMULATION_FALLBACK_INVALID")
+        source_identity = "valuation-simulation:" + hashlib.sha256(
+            _canonical_json(
+                {
+                    "simulation_id": result.simulation_id,
+                    "valuation_input_fingerprint": valuation_artifact.content_hash,
+                    "simulation_model_identity": result.model_identity,
+                    "simulation_policy_identity": result.policy_identity,
+                    "assumptions": [
+                        item.to_dict() for item in result.assumptions
+                    ],
+                    "dependency_model": result.dependency_model.to_dict(),
+                    "valuation_model": result.valuation_model.to_dict(),
+                    "deterministic_fallback": result.deterministic_fallback,
+                    "tail_threshold": result.tail_threshold,
+                    "budget": result.budget.to_dict(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls._build(
+            artifact_kind="Simulation",
+            schema_version="ValuationSimulationArtifact@1",
+            subject_id=result.security_id,
+            as_of=result.as_of,
+            source_identity=source_identity,
+            model_identity=model_identity,
+            policy_identity=policy_identity,
+            status=result.status,
+            formula_identities=tuple(
+                sorted(
+                    {
+                        result.valuation_model.formula_id,
+                        result.dependency_model.model_identity,
+                        result.budget.rng_algorithm,
+                        "variance_euler_linear@1",
+                    }
+                )
+            ),
+            dependency_kinds=("Valuation",),
+            payload=result.to_dict(),
+            summary={
+                "simulation_id": result.simulation_id,
+                "valuation_source_identity": valuation_artifact.source_identity,
+                "valuation_input_fingerprint": valuation_artifact.content_hash,
+                "converged": result.converged,
+                "sample_budget": result.budget.sample_budget,
+                "completed_samples": result.completed_samples,
+                "invalid_path_rate": result.invalid_path_rate,
+                "rng_algorithm": result.budget.rng_algorithm,
+                "seed": result.budget.seed,
             },
         )
 

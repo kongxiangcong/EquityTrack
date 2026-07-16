@@ -18,6 +18,7 @@ from trading_platform.domain.workflow import (
     ResearchArtifactView,
     ResearchProjection,
     ResearchWorkflowResult,
+    simulation_fallback_matches_valuation,
     WorkflowHistory,
 )
 from trading_platform.identity import canonical_hash
@@ -536,6 +537,52 @@ class WorkflowRepository:
                 != model_snapshot_identity
             ):
                 raise ValueError("RESEARCH_ARTIFACT_VALUATION_LINEAGE_MISMATCH")
+        simulation = by_kind.get("Simulation")
+        if simulation is not None:
+            if valuation is None:
+                raise ValueError("RESEARCH_ARTIFACT_VALUATION_MISSING")
+            payload = simulation.payload
+            fallback = payload.get("deterministic_fallback")
+            source_value = {
+                "simulation_id": payload.get("simulation_id"),
+                "valuation_input_fingerprint": valuation.content_hash,
+                "simulation_model_identity": payload.get("model_identity"),
+                "simulation_policy_identity": payload.get("policy_identity"),
+                "assumptions": payload.get("assumptions"),
+                "dependency_model": payload.get("dependency_model"),
+                "valuation_model": payload.get("valuation_model"),
+                "deterministic_fallback": fallback,
+                "tail_threshold": payload.get("tail_threshold"),
+                "budget": payload.get("budget"),
+            }
+            expected_source = "valuation-simulation:" + hashlib.sha256(
+                json.dumps(
+                    source_value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                payload.get("security_id") != subject_id
+                or payload.get("as_of") != simulation.as_of
+                or payload.get("valuation_source_identity")
+                != valuation.source_identity
+                or simulation.summary.get("valuation_source_identity")
+                != valuation.source_identity
+                or simulation.summary.get("valuation_input_fingerprint")
+                != valuation.content_hash
+                or payload.get("simulation_id")
+                != simulation.summary.get("simulation_id")
+                or not isinstance(fallback, Mapping)
+                or not simulation_fallback_matches_valuation(
+                    fallback,
+                    valuation.payload,
+                )
+                or simulation.source_identity != expected_source
+            ):
+                raise ValueError("RESEARCH_ARTIFACT_SIMULATION_LINEAGE_MISMATCH")
         return model_snapshot_identity
 
     def _platform_subject_aliases(

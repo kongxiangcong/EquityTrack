@@ -28,6 +28,38 @@ const view = {
     display_diagnostics: ["终值占比较高。"],
   }]}],
   market_implied_expectations: [{scenario_label: "基准", base: {value: "0.03", unit: "decimal"}, explanation: "当前价格需要该假设成立。"}],
+  valuation_simulation: {
+    converged: true,
+    quantiles: {p50: {value: "12.5", unit: "CNY/share"}},
+    contributions: [{assumption_id: "连接器需求", share: "0.6"}],
+    assumptions: [{
+      assumption_id: "连接器需求",
+      family: "empirical",
+      reference_value: "120",
+      unit: "units",
+      calibration: {
+        sample_id: "<calibration>",
+        window_start: "2021-01-01",
+        window_end: "2025-12-31",
+        available_at: "2026-01-02T00:00:00Z",
+      },
+    }],
+    dependency_model: {model_identity: "<copula@1>", correlation_matrix: [["1"]]},
+    deterministic_fallback: {
+      scenario_id: "base",
+      method_id: "fcff_dcf",
+      formula_version: "fcff_dcf@3",
+      low: "10",
+      base: "12",
+      high: "14",
+      unit: "CNY/share",
+    },
+    diagnostics: ["<limited>"],
+    rng_algorithm: "splitmix64_box_muller@1",
+    seed: 7,
+    sample_budget: 10000,
+    invalid_path_rate: "0.01",
+  },
   audit: {artifact_records: [], fact_evidence: [], formula_identities: []},
   boundary: "条件研究结果，不构成个性化投资建议。",
 }
@@ -36,11 +68,17 @@ test("historical selection is exact and sandbox report escapes model text", () =
   assert.equal(selectResearchView([view], "research_view_1"), view)
   assert.equal(selectResearchView([view], "missing"), null)
   const report = renderSandboxReport(view)
-  assert.match(report, /ResearchDecisionView@1/)
+  assert.match(report, /ResearchDecisionView@2/)
   assert.match(report, /关键业务 Driver/)
   assert.match(report, /当前价格隐含预期/)
   assert.match(report, /估值时点 2026-07-07/)
   assert.match(report, /终值占比较高/)
+  assert.match(report, /校准后的每股价值分布/)
+  assert.match(report, /splitmix64_box_muller@1/)
+  assert.match(report, /展开分布校准、依赖结构与降级依据/)
+  assert.match(report, /&lt;calibration&gt;/)
+  assert.match(report, /&lt;copula@1&gt;/)
+  assert.match(report, /&lt;limited&gt;/)
   assert.match(report, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
   assert.doesNotMatch(report, /<script|allow-scripts|allow-same-origin/i)
 })
