@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
-from math import isclose, isfinite
 from typing import Any, Mapping
 
 from .evidence import EvidenceBook, numeric_value, period_rank
@@ -1043,6 +1042,7 @@ def _historical_metrics(
         for item in observations
     ]
     metrics = {
+        "metric": metric,
         "observations": len(values),
         "series": legacy_series,
         "minimum": float(min(values)),
@@ -1054,6 +1054,7 @@ def _historical_metrics(
         "current_percentile": float(percentile_position),
         "exact_calculation": {
             "value_basis": "market_multiple_distribution",
+            "metric": metric,
             "observations": str(len(values)),
             "minimum": _exact_text(min(values)),
             "q25": _exact_text(q25),
