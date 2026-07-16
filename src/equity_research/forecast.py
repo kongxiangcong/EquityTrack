@@ -1460,6 +1460,7 @@ class ForecastEngine:
         if request.security.archetype not in {
             CompanyArchetype.GENERAL_MANUFACTURING,
             CompanyArchetype.MULTI_SEGMENT_MANUFACTURING,
+            CompanyArchetype.CYCLICAL_RESOURCE,
         }:
             raise ForecastInvariantError(
                 "FORECAST_TEMPLATE_UNSUPPORTED",
@@ -1539,8 +1540,13 @@ class ForecastEngine:
                 nodes.extend(company_built.values())
                 edges.extend(company_edges)
 
+        template_id = (
+            "cyclical_resource_driver_graph@1"
+            if request.security.archetype == CompanyArchetype.CYCLICAL_RESOURCE
+            else self.TEMPLATE_ID
+        )
         identity_payload = {
-            "template_id": self.TEMPLATE_ID,
+            "template_id": template_id,
             "security_id": request.security.security_id,
             "snapshot_id": request.data_snapshot.snapshot_id,
             "snapshot_hash": request.data_snapshot.content_hash,
@@ -1567,15 +1573,23 @@ class ForecastEngine:
         archetype_label = request.security.archetype.value.replace(
             "multi_segment", "multi-segment"
         ).replace("_", " ")
+        if request.security.archetype == CompanyArchetype.CYCLICAL_RESOURCE:
+            routing_explanation = (
+                "Routed cyclical/resource economics through explicit volume, utilization, "
+                "price, unit-cost, tax, and maintenance-capex drivers. Ordinary stable-growth "
+                "valuation is disabled downstream; finite-life NAV and mid-cycle methods are required."
+            )
+        else:
+            routing_explanation = (
+                f"Routed {archetype_label} through a typed demand, capacity, cost, "
+                "three-statement, FCFF manufacturing graph with consolidated tax."
+            )
         return ForecastGraph(
             graph_id=f"fg_{identity[:24]}",
             security_id=request.security.security_id,
             data_snapshot_id=request.data_snapshot.snapshot_id,
-            template_id=self.TEMPLATE_ID,
-            routing_explanation=(
-                f"Routed {archetype_label} through a typed demand, capacity, cost, "
-                "three-statement, FCFF manufacturing graph with consolidated tax."
-            ),
+            template_id=template_id,
+            routing_explanation=routing_explanation,
             nodes=tuple(nodes),
             edges=tuple(edges),
         )

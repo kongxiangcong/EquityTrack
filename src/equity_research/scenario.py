@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, cast
 
 from .financial import (
     EquityBridge,
@@ -17,6 +17,7 @@ from .financial import (
     valuation_decimal_context,
 )
 from .forecast import (
+    CompanyArchetype,
     ForecastEngine,
     ForecastGraph,
     ForecastInvariantError,
@@ -831,6 +832,561 @@ class ReverseDcfSpec:
             )
 
 
+@dataclass(frozen=True)
+class CommodityCurvePoint:
+    segment_id: str
+    period: str
+    price_low: ForecastQuantity
+    price_base: ForecastQuantity
+    price_high: ForecastQuantity
+
+    def __post_init__(self) -> None:
+        if not self.segment_id.strip() or not self.period.strip():
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_IDENTITY_INVALID",
+                "Commodity curve points require a segment and period.",
+            )
+        prices = (self.price_low, self.price_base, self.price_high)
+        if any(not isinstance(item, ForecastQuantity) for item in prices):
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_QUANTITY_INVALID",
+                "Commodity curve prices must be ForecastQuantity values.",
+            )
+        dimensions = {
+            (item.unit, item.scale, item.currency, item.period, item.as_of)
+            for item in prices
+        }
+        values = tuple(item.normalized_value for item in prices)
+        if (
+            len(dimensions) != 1
+            or self.price_base.period != self.period
+            or self.price_base.scale != Decimal("1")
+            or self.price_base.currency in {"", "N/A"}
+            or self.price_base.unit
+            != f"{self.price_base.currency}/unit"
+            or values[0] <= 0
+            or values[0] > values[1]
+            or values[1] > values[2]
+        ):
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_DIMENSION_INVALID",
+                "Commodity prices must be positive ordered currency/unit quantities on one exact time basis.",
+            )
+        for field_name, quantity in (
+            ("price_low", self.price_low),
+            ("price_base", self.price_base),
+            ("price_high", self.price_high),
+        ):
+            _require_refs(
+                quantity.lineage_refs,
+                f"CommodityCurvePoint.{field_name}",
+                facts_only=True,
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.price_low.lineage_refs,
+            self.price_base.lineage_refs,
+            self.price_high.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class ResourcePeriodSpec:
+    period: str
+    production_low: ForecastQuantity
+    production_base: ForecastQuantity
+    production_high: ForecastQuantity
+    unit_cost_low: ForecastQuantity
+    unit_cost_base: ForecastQuantity
+    unit_cost_high: ForecastQuantity
+    operating_expense_low: FinancialQuantity
+    operating_expense_base: FinancialQuantity
+    operating_expense_high: FinancialQuantity
+    maintenance_capex_low: FinancialQuantity
+    maintenance_capex_base: FinancialQuantity
+    maintenance_capex_high: FinancialQuantity
+    tax_rate: ForecastQuantity
+
+    def __post_init__(self) -> None:
+        if not self.period.strip():
+            raise ScenarioInvariantError(
+                "RESOURCE_PERIOD_INVALID",
+                "Resource schedules require a period.",
+            )
+        production = (
+            self.production_low,
+            self.production_base,
+            self.production_high,
+        )
+        costs = (self.unit_cost_low, self.unit_cost_base, self.unit_cost_high)
+        operating_expenses = (
+            self.operating_expense_low,
+            self.operating_expense_base,
+            self.operating_expense_high,
+        )
+        capex = (
+            self.maintenance_capex_low,
+            self.maintenance_capex_base,
+            self.maintenance_capex_high,
+        )
+        if (
+            any(not isinstance(item, ForecastQuantity) for item in production)
+            or len(
+                {
+                    (item.unit, item.scale, item.currency, item.period, item.as_of)
+                    for item in production
+                }
+            )
+            != 1
+            or self.production_base.period != self.period
+            or self.production_base.currency != "N/A"
+            or self.production_low.normalized_value <= 0
+            or self.production_low.normalized_value
+            > self.production_base.normalized_value
+            or self.production_base.normalized_value
+            > self.production_high.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_PRODUCTION_RANGE_INVALID",
+                "Resource production must be an ordered physical range on one exact time basis.",
+            )
+        if (
+            any(not isinstance(item, ForecastQuantity) for item in costs)
+            or len(
+                {
+                    (item.unit, item.scale, item.currency, item.period, item.as_of)
+                    for item in costs
+                }
+            )
+            != 1
+            or self.unit_cost_base.period != self.period
+            or self.unit_cost_base.currency in {"", "N/A"}
+            or self.unit_cost_base.unit
+            != f"{self.unit_cost_base.currency}/unit"
+            or self.unit_cost_low.normalized_value <= 0
+            or self.unit_cost_low.normalized_value
+            > self.unit_cost_base.normalized_value
+            or self.unit_cost_base.normalized_value
+            > self.unit_cost_high.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_COST_CURVE_INVALID",
+                "Resource unit costs must be a positive ordered currency/unit range.",
+            )
+        if (
+            any(
+                not isinstance(item, FinancialQuantity)
+                for item in operating_expenses
+            )
+            or any(item.kind != "money" for item in operating_expenses)
+            or len(
+                {
+                    (item.unit, item.scale, item.currency, item.period, item.as_of)
+                    for item in operating_expenses
+                }
+            )
+            != 1
+            or self.operating_expense_base.period != self.period
+            or self.operating_expense_low.normalized_value < 0
+            or self.operating_expense_low.normalized_value
+            > self.operating_expense_base.normalized_value
+            or self.operating_expense_base.normalized_value
+            > self.operating_expense_high.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_OPERATING_EXPENSE_INVALID",
+                "Resource operating expenses must be an ordered money range on one exact time basis.",
+            )
+        if (
+            any(not isinstance(item, FinancialQuantity) for item in capex)
+            or any(item.kind != "money" for item in capex)
+            or len(
+                {
+                    (item.unit, item.scale, item.currency, item.period, item.as_of)
+                    for item in capex
+                }
+            )
+            != 1
+            or self.maintenance_capex_base.period != self.period
+            or self.maintenance_capex_low.normalized_value < 0
+            or self.maintenance_capex_low.normalized_value
+            > self.maintenance_capex_base.normalized_value
+            or self.maintenance_capex_base.normalized_value
+            > self.maintenance_capex_high.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_MAINTENANCE_CAPEX_INVALID",
+                "Maintenance capex must be an ordered money range on one exact time basis.",
+            )
+        _validate_model_quantity(
+            self.tax_rate,
+            unit="decimal",
+            field_name="ResourcePeriodSpec.tax_rate",
+        )
+        if (
+            self.tax_rate.period != self.period
+            or not Decimal("0")
+            <= self.tax_rate.normalized_value
+            <= Decimal("1")
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_TAX_RATE_INVALID",
+                "Resource tax rates must bind the schedule period and remain within [0, 1].",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.production_low.lineage_refs,
+            self.production_base.lineage_refs,
+            self.production_high.lineage_refs,
+            self.unit_cost_low.lineage_refs,
+            self.unit_cost_base.lineage_refs,
+            self.unit_cost_high.lineage_refs,
+            self.operating_expense_low.provenance_refs,
+            self.operating_expense_base.provenance_refs,
+            self.operating_expense_high.provenance_refs,
+            self.maintenance_capex_low.provenance_refs,
+            self.maintenance_capex_base.provenance_refs,
+            self.maintenance_capex_high.provenance_refs,
+            self.tax_rate.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class ResourceAssetSpec:
+    segment_id: str
+    reserve_quantity: ForecastQuantity
+    schedule: tuple[ResourcePeriodSpec, ...]
+    grade_yield_low: ForecastQuantity
+    grade_yield_base: ForecastQuantity
+    grade_yield_high: ForecastQuantity
+    resource_life_years: int
+
+    def __post_init__(self) -> None:
+        if not self.segment_id.strip():
+            raise ScenarioInvariantError(
+                "RESOURCE_ASSET_IDENTITY_INVALID",
+                "Resource assets require a segment identifier.",
+            )
+        if (
+            not isinstance(self.resource_life_years, int)
+            or isinstance(self.resource_life_years, bool)
+            or self.resource_life_years <= 0
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_LIFE_INVALID",
+                "Resource life must be a positive whole number of years.",
+            )
+        if (
+            not isinstance(self.reserve_quantity, ForecastQuantity)
+            or self.reserve_quantity.normalized_value <= 0
+            or self.reserve_quantity.scale != Decimal("1")
+            or self.reserve_quantity.currency != "N/A"
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_RESERVE_INVALID",
+                "Resource reserves must be positive physical ForecastQuantity values.",
+            )
+        _require_refs(
+            self.reserve_quantity.lineage_refs,
+            "ResourceAssetSpec.reserve_quantity",
+            facts_only=True,
+        )
+        if (
+            not isinstance(self.schedule, tuple)
+            or not self.schedule
+            or any(
+                not isinstance(item, ResourcePeriodSpec)
+                for item in self.schedule
+            )
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_SCHEDULE_INVALID",
+                "Resource assets require a typed finite-life production and cost schedule.",
+            )
+        schedule_periods = tuple(item.period for item in self.schedule)
+        if len(schedule_periods) != len(set(schedule_periods)):
+            raise ScenarioInvariantError(
+                "RESOURCE_SCHEDULE_DUPLICATE",
+                "Resource schedule periods must be unique.",
+            )
+        schedule_years: list[int] = []
+        for period in schedule_periods:
+            match = re.fullmatch(r"(\d{4})(?:E|FY)", period)
+            if match is None:
+                raise ScenarioInvariantError(
+                    "RESOURCE_SCHEDULE_CHRONOLOGY_INVALID",
+                    "Resource schedules require annual E or FY periods.",
+                )
+            schedule_years.append(int(match.group(1)))
+        if any(
+            current != previous + 1
+            for previous, current in zip(
+                schedule_years,
+                schedule_years[1:],
+            )
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_SCHEDULE_CHRONOLOGY_INVALID",
+                "Resource schedule periods must be strictly increasing and contiguous.",
+            )
+        _validate_range(
+            self.grade_yield_low,
+            self.grade_yield_base,
+            self.grade_yield_high,
+            f"{self.segment_id}_grade_yield",
+            unit="decimal",
+            positive=True,
+        )
+        if self.grade_yield_high.normalized_value > Decimal("1.5"):
+            raise ScenarioInvariantError(
+                "RESOURCE_GRADE_YIELD_INVALID",
+                "Grade or yield cannot exceed the supported 1.5 upper bound.",
+            )
+        if (
+            self.resource_life_years != len(self.schedule)
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_LIFE_INVALID",
+                "Resource life must be a positive whole number of years.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.reserve_quantity.lineage_refs,
+            *(item.lineage_refs for item in self.schedule),
+            self.grade_yield_low.lineage_refs,
+            self.grade_yield_base.lineage_refs,
+            self.grade_yield_high.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class HistoricalCycleObservation:
+    observation_id: str
+    period: str
+    denominator_metric: Literal["ebit"]
+    observation_date: str
+    denominator_available_at: str
+    market_value: FinancialQuantity
+    pit_earnings_denominator: FinancialQuantity
+    reported_multiple: ForecastQuantity
+
+    def __post_init__(self) -> None:
+        if (
+            not self.observation_id.strip()
+            or not self.period.strip()
+            or self.denominator_metric != "ebit"
+        ):
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_IDENTITY_INVALID",
+                "Historical cycle observations require identity, period, and the supported EBIT denominator.",
+            )
+        try:
+            observation_date = date.fromisoformat(self.observation_date)
+            denominator_available_at = date.fromisoformat(
+                self.denominator_available_at
+            )
+        except (TypeError, ValueError) as exc:
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_PIT_INVALID",
+                "Historical observation and denominator availability dates must be ISO dates.",
+            ) from exc
+        if (
+            not isinstance(self.market_value, FinancialQuantity)
+            or not isinstance(self.pit_earnings_denominator, FinancialQuantity)
+            or self.market_value.kind != "money"
+            or self.pit_earnings_denominator.kind != "money"
+            or self.market_value.normalized_value <= 0
+            or self.pit_earnings_denominator.normalized_value <= 0
+            or self.market_value.currency
+            != self.pit_earnings_denominator.currency
+            or self.market_value.period != self.period
+            or self.pit_earnings_denominator.period != self.period
+            or self.market_value.as_of
+            != self.pit_earnings_denominator.as_of
+            or denominator_available_at > observation_date
+            or observation_date > date.fromisoformat(self.market_value.as_of)
+        ):
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_DENOMINATOR_INVALID",
+                "Historical bands require positive PIT market value and earnings on one currency/time basis.",
+            )
+        _require_refs(
+            self.market_value.provenance_refs,
+            "HistoricalCycleObservation.market_value",
+            facts_only=True,
+        )
+        _require_refs(
+            self.pit_earnings_denominator.provenance_refs,
+            "HistoricalCycleObservation.pit_earnings_denominator",
+            facts_only=True,
+        )
+        _validate_model_quantity(
+            self.reported_multiple,
+            unit="x",
+            field_name="HistoricalCycleObservation.reported_multiple",
+        )
+        expected_refs = _merge_refs(
+            self.market_value.provenance_refs,
+            self.pit_earnings_denominator.provenance_refs,
+        )
+        with valuation_decimal_context():
+            replayed = (
+                self.market_value.normalized_value
+                / self.pit_earnings_denominator.normalized_value
+            )
+        if (
+            self.reported_multiple.period != self.period
+            or self.reported_multiple.as_of != self.market_value.as_of
+            or self.reported_multiple.normalized_value != replayed
+            or not set(expected_refs).issubset(self.reported_multiple.lineage_refs)
+        ):
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_REPLAY_INVALID",
+                "Historical multiple must replay exactly from its PIT denominator and market value.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.market_value.provenance_refs,
+            self.pit_earnings_denominator.provenance_refs,
+            self.reported_multiple.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class CyclicalResourceValuationSpec:
+    curve_version: str
+    curve_as_of: str
+    commodity_curve: tuple[CommodityCurvePoint, ...]
+    assets: tuple[ResourceAssetSpec, ...]
+    mid_cycle_multiple_low: ForecastQuantity
+    mid_cycle_multiple_base: ForecastQuantity
+    mid_cycle_multiple_high: ForecastQuantity
+    nav_discount_rate_low: ForecastQuantity
+    nav_discount_rate_base: ForecastQuantity
+    nav_discount_rate_high: ForecastQuantity
+    peak_earnings_threshold: ForecastQuantity
+    historical_observations: tuple[HistoricalCycleObservation, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            date.fromisoformat(self.curve_as_of)
+        except (TypeError, ValueError) as exc:
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_VERSION_INVALID",
+                "Commodity curve requires a version and ISO as-of date.",
+            ) from exc
+        if not self.curve_version.strip():
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_VERSION_INVALID",
+                "Commodity curve requires a version and ISO as-of date.",
+            )
+        if (
+            not isinstance(self.commodity_curve, tuple)
+            or not self.commodity_curve
+            or any(
+                not isinstance(item, CommodityCurvePoint)
+                for item in self.commodity_curve
+            )
+        ):
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_INVALID",
+                "A versioned commodity curve requires typed points.",
+            )
+        curve_keys = tuple(
+            (item.segment_id, item.period) for item in self.commodity_curve
+        )
+        if len(curve_keys) != len(set(curve_keys)):
+            raise ScenarioInvariantError(
+                "COMMODITY_CURVE_DUPLICATE",
+                "Commodity curve may define each segment-period only once.",
+            )
+        if (
+            not isinstance(self.assets, tuple)
+            or not self.assets
+            or any(not isinstance(item, ResourceAssetSpec) for item in self.assets)
+        ):
+            raise ScenarioInvariantError(
+                "RESOURCE_ASSETS_INVALID",
+                "Resource NAV requires typed asset specifications.",
+            )
+        asset_ids = tuple(item.segment_id for item in self.assets)
+        if len(asset_ids) != len(set(asset_ids)):
+            raise ScenarioInvariantError(
+                "RESOURCE_ASSET_DUPLICATE",
+                "Resource NAV may define each segment only once.",
+            )
+        _validate_range(
+            self.mid_cycle_multiple_low,
+            self.mid_cycle_multiple_base,
+            self.mid_cycle_multiple_high,
+            "mid_cycle_multiple",
+            unit="x",
+            positive=True,
+        )
+        _validate_range(
+            self.nav_discount_rate_low,
+            self.nav_discount_rate_base,
+            self.nav_discount_rate_high,
+            "nav_discount_rate",
+            unit="decimal",
+            positive=True,
+        )
+        _validate_model_quantity(
+            self.peak_earnings_threshold,
+            unit="x",
+            field_name="peak_earnings_threshold",
+        )
+        if self.peak_earnings_threshold.normalized_value <= Decimal("1"):
+            raise ScenarioInvariantError(
+                "CYCLICAL_PEAK_THRESHOLD_INVALID",
+                "Peak-earnings recognition requires a threshold greater than one times the PIT median denominator.",
+            )
+        if (
+            not isinstance(self.historical_observations, tuple)
+            or len(self.historical_observations) < 3
+            or any(
+                not isinstance(item, HistoricalCycleObservation)
+                for item in self.historical_observations
+            )
+        ):
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_INSUFFICIENT",
+                "Cyclical historical bands require at least three replayable PIT observations.",
+            )
+        observation_ids = tuple(
+            item.observation_id for item in self.historical_observations
+        )
+        if len(observation_ids) != len(set(observation_ids)):
+            raise ScenarioInvariantError(
+                "CYCLICAL_HISTORY_DUPLICATE",
+                "Historical cycle observation identifiers must be unique.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            *(item.lineage_refs for item in self.commodity_curve),
+            *(item.lineage_refs for item in self.assets),
+            self.mid_cycle_multiple_low.lineage_refs,
+            self.mid_cycle_multiple_base.lineage_refs,
+            self.mid_cycle_multiple_high.lineage_refs,
+            self.nav_discount_rate_low.lineage_refs,
+            self.nav_discount_rate_base.lineage_refs,
+            self.nav_discount_rate_high.lineage_refs,
+            self.peak_earnings_threshold.lineage_refs,
+            *(item.lineage_refs for item in self.historical_observations),
+            (f"Assumption:commodity_curve_version:{self.curve_version}",),
+        )
+
+
 @dataclass(frozen=True, init=False)
 class RelativeMultipleSpec:
     """A copied, exact multiple range from the existing evidence-gated seam."""
@@ -1087,6 +1643,7 @@ class ValuationPlan:
     sotp: SotpValuationSpec
     reverse_dcf: ReverseDcfSpec
     relative_methods: tuple[RelativeMultipleSpec, ...] = ()
+    cyclical_resource: CyclicalResourceValuationSpec | None = None
 
     def __post_init__(self) -> None:
         if self.present_value_bridge.timing != EquityBridgeTiming.OPENING:
@@ -1112,6 +1669,13 @@ class ValuationPlan:
             raise ScenarioInvariantError(
                 "VALUATION_METHOD_DUPLICATE",
                 "Valuation method identifiers must be unique.",
+            )
+        if self.cyclical_resource is not None and not isinstance(
+            self.cyclical_resource, CyclicalResourceValuationSpec
+        ):
+            raise ScenarioInvariantError(
+                "CYCLICAL_RESOURCE_SPEC_INVALID",
+                "cyclical_resource must be a CyclicalResourceValuationSpec.",
             )
 
 
@@ -1370,16 +1934,14 @@ class _MethodBlocked(ValueError):
     pass
 
 
-MethodCalculation = Callable[
-    [],
-    tuple[
-        ConditionalValueRange,
-        tuple[ValuationAssumption, ...],
-        tuple[ValuationSensitivity, ...],
-        tuple[str, ...],
-        tuple[str, ...],
-    ],
+MethodCalculationResult = tuple[
+    ConditionalValueRange,
+    tuple[ValuationAssumption, ...],
+    tuple[ValuationSensitivity, ...],
+    tuple[str, ...],
+    tuple[str, ...],
 ]
+MethodCalculation = Callable[[], MethodCalculationResult]
 
 
 class ScenarioValuationEngine:
@@ -1389,6 +1951,9 @@ class ScenarioValuationEngine:
     SOTP_FORMULA_VERSION = "sotp_segment_multiple@2"
     REVERSE_DCF_FORMULA_VERSION = "reverse_dcf_terminal_growth_act365@3"
     RELATIVE_FORMULA_VERSION = "gated_relative_multiple@2"
+    MID_CYCLE_FORMULA_VERSION = "cycle_normalized_ev_ebitda@1"
+    RESOURCE_NAV_FORMULA_VERSION = "finite_resource_nav_after_tax@1"
+    CYCLICAL_HISTORY_FORMULA_VERSION = "pit_cycle_band_derived_peak@2"
 
     def run(self, request: DeterministicScenarioRequest) -> DeterministicScenarioResult:
         with valuation_decimal_context():
@@ -1754,6 +2319,18 @@ class ScenarioValuationEngine:
             self._relative(graph, plan, spec, terminal_horizon, base_request)
             for spec in plan.relative_methods
         )
+        if (
+            base_request.security.archetype
+            == CompanyArchetype.CYCLICAL_RESOURCE
+        ):
+            methods.extend(
+                self._cyclical_methods(
+                    graph,
+                    plan,
+                    base_request,
+                    terminal_horizon,
+                )
+            )
         return tuple(methods)
 
     def _isolate_method(
@@ -1885,6 +2462,13 @@ class ScenarioValuationEngine:
         tuple[str, ...],
     ]:
         spec = plan.dcf
+        if (
+            base_request.security.archetype
+            == CompanyArchetype.CYCLICAL_RESOURCE
+        ):
+            raise _MethodBlocked(
+                "CYCLICAL_STABLE_GROWTH_DISABLED: ordinary FCFF/WACC DCF is disabled because a current commodity price or peak margin must not be capitalized in perpetuity; use finite-life NAV and mid-cycle methods."
+            )
         self._validate_method_bridge(
             graph,
             plan.present_value_bridge,
@@ -2271,6 +2855,1057 @@ class ScenarioValuationEngine:
                 spec.evidence_refs,
                 plan.terminal_value_bridge.provenance_refs,
             ),
+        )
+
+    def _cyclical_methods(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        horizon: str,
+    ) -> tuple[ScenarioMethodResult, ...]:
+        spec = plan.cyclical_resource
+        missing_refs = ("Assumption:cyclical_resource_spec_missing",)
+        if spec is None:
+            return tuple(
+                ScenarioMethodResult(
+                    method_id=method_id,
+                    status="blocked",
+                    applicability=(
+                        "Cyclical/resource route requires a versioned commodity curve, "
+                        "asset reserves, cost, tax, life, and maintenance-capex inputs."
+                    ),
+                    value_basis=value_basis,
+                    horizon=horizon,
+                    assumptions=(),
+                    formula_version=formula_version,
+                    conditional_value_range=None,
+                    sensitivity=(),
+                    diagnostics=(
+                        "CYCLICAL_RESOURCE_SPEC_MISSING: specialized cyclical valuation inputs are required.",
+                    ),
+                    lineage_refs=missing_refs,
+                )
+                for method_id, value_basis, formula_version in (
+                    (
+                        "mid_cycle_ev_ebitda",
+                        "enterprise_value",
+                        self.MID_CYCLE_FORMULA_VERSION,
+                    ),
+                    (
+                        "resource_nav",
+                        "enterprise_value",
+                        self.RESOURCE_NAV_FORMULA_VERSION,
+                    ),
+                    (
+                        "cyclical_historical_band",
+                        "equity_value",
+                        self.CYCLICAL_HISTORY_FORMULA_VERSION,
+                    ),
+                )
+            )
+        common_refs = _merge_refs(
+            spec.lineage_refs,
+            plan.present_value_bridge.provenance_refs,
+            plan.terminal_value_bridge.provenance_refs,
+        )
+        curve_label = (
+            f"Applicable to {base_request.security.archetype.value}; "
+            f"uses finite, versioned commodity curve {spec.curve_version} "
+            f"as of {spec.curve_as_of}."
+        )
+        return (
+            self._isolate_method(
+                "mid_cycle_ev_ebitda",
+                curve_label
+                + " Normalizes price, volume, yield, and cost instead of extrapolating peak earnings.",
+                "enterprise_value",
+                horizon,
+                graph,
+                self.MID_CYCLE_FORMULA_VERSION,
+                lambda: self._mid_cycle(graph, plan, base_request, spec),
+                common_refs,
+            ),
+            self._isolate_method(
+                "resource_nav",
+                curve_label
+                + " Discounts only finite reserve-backed after-tax cash flows.",
+                "enterprise_value",
+                f"valuation_as_of={self._as_of(graph)};finite_resource_life",
+                graph,
+                self.RESOURCE_NAV_FORMULA_VERSION,
+                lambda: self._resource_nav(graph, plan, base_request, spec),
+                common_refs,
+            ),
+            self._isolate_method(
+                "cyclical_historical_band",
+                "PIT historical cross-check derives and excludes peak-earnings observations from the reusable range under a versioned threshold rule.",
+                "equity_value",
+                horizon,
+                graph,
+                self.CYCLICAL_HISTORY_FORMULA_VERSION,
+                lambda: self._cyclical_historical_band(
+                    graph, plan, base_request, spec
+                ),
+                common_refs,
+            ),
+        )
+
+    def _validate_cyclical_runtime(
+        self,
+        graph: ForecastGraph,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> None:
+        periods = self._periods(graph)
+        forecast_curve_keys = {
+            (segment_id, period)
+            for segment_id in base_request.security.segment_ids
+            for period in periods
+        }
+        schedule_curve_keys = {
+            (asset.segment_id, item.period)
+            for asset in spec.assets
+            for item in asset.schedule
+        }
+        curve_keys = {
+            (item.segment_id, item.period) for item in spec.commodity_curve
+        }
+        asset_ids = {item.segment_id for item in spec.assets}
+        if (
+            not forecast_curve_keys.issubset(curve_keys)
+            or curve_keys != schedule_curve_keys
+        ):
+            raise _MethodBlocked(
+                "COMMODITY_CURVE_COVERAGE_INVALID: curve must cover every forecast and finite resource-schedule segment-period exactly once."
+            )
+        if asset_ids != set(base_request.security.segment_ids):
+            raise _MethodBlocked(
+                "RESOURCE_ASSET_COVERAGE_INVALID: resource assets must cover every modeled segment exactly once."
+            )
+        if any(
+            asset.schedule[0].period != periods[0]
+            for asset in spec.assets
+        ):
+            raise _MethodBlocked(
+                "RESOURCE_SCHEDULE_ANCHOR_INVALID: every finite-life resource schedule must begin at the first forward forecast period."
+            )
+        if (
+            date.fromisoformat(spec.curve_as_of)
+            > date.fromisoformat(self._as_of(graph))
+            or any(
+                item.price_base.as_of != self._as_of(graph)
+                for item in spec.commodity_curve
+            )
+        ):
+            raise _MethodBlocked(
+                "COMMODITY_CURVE_AS_OF_INVALID: curve version and points must bind the frozen valuation as-of."
+            )
+        reporting_currency = base_request.security.reporting_currency
+        if any(
+            point.price_base.currency != reporting_currency
+            for point in spec.commodity_curve
+        ) or any(
+            quantity.currency != reporting_currency
+            for asset in spec.assets
+            for item in asset.schedule
+            for quantity in (
+                item.unit_cost_low,
+                item.unit_cost_base,
+                item.unit_cost_high,
+                item.operating_expense_low,
+                item.operating_expense_base,
+                item.operating_expense_high,
+                item.maintenance_capex_low,
+                item.maintenance_capex_base,
+                item.maintenance_capex_high,
+            )
+        ):
+            raise _MethodBlocked(
+                "RESOURCE_REPORTING_CURRENCY_MISMATCH: every asset curve, cost, opex, and capex input must use the reporting currency unless an explicit FX conversion model is present."
+            )
+        if (
+            spec.peak_earnings_threshold.as_of != self._as_of(graph)
+            or spec.peak_earnings_threshold.period != self._as_of(graph)
+        ):
+            raise _MethodBlocked(
+                "CYCLICAL_PEAK_THRESHOLD_BINDING_INVALID: peak-earnings rule must bind the valuation as-of."
+            )
+        self._validate_cyclical_evidence(base_request, spec)
+
+    def _validate_cyclical_evidence(
+        self,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> None:
+        facts = {
+            fact.fact_id: fact for fact in base_request.data_snapshot.facts
+        }
+
+        def exact_fact(
+            quantity: ForecastQuantity | FinancialQuantity,
+            *,
+            scope: str,
+            segment_id: str,
+            available_by: str,
+            official_required: bool,
+            metric_id: str,
+        ) -> None:
+            refs = (
+                quantity.lineage_refs
+                if isinstance(quantity, ForecastQuantity)
+                else quantity.provenance_refs
+            )
+            resolved = tuple(
+                facts.get(ref.removeprefix("Fact:")) for ref in refs
+            )
+            if (
+                not refs
+                or any(not ref.startswith("Fact:") for ref in refs)
+                or any(fact is None for fact in resolved)
+                or not any(
+                    fact.subject_id == base_request.security.security_id
+                    and fact.scope == scope
+                    and fact.segment_id == segment_id
+                    and fact.metric_id == metric_id
+                    and fact.period == quantity.period
+                    and fact.value == quantity.normalized_value
+                    and fact.unit == quantity.unit
+                    and fact.currency == quantity.currency
+                    and date.fromisoformat(fact.available_at)
+                    <= date.fromisoformat(available_by)
+                    and (not official_required or fact.official)
+                    for fact in resolved
+                    if fact is not None
+                )
+            ):
+                raise _MethodBlocked(
+                    "CYCLICAL_EVIDENCE_INVALID: critical curve, reserve, or PIT denominator quantities must resolve exactly through the frozen DataSnapshot."
+                )
+
+        for point in spec.commodity_curve:
+            for quantity in (
+                point.price_low,
+                point.price_base,
+                point.price_high,
+            ):
+                exact_fact(
+                    quantity,
+                    scope="segment",
+                    segment_id=point.segment_id,
+                    available_by=spec.curve_as_of,
+                    official_required=False,
+                    metric_id="commodity_curve_price",
+                )
+        for asset in spec.assets:
+            exact_fact(
+                asset.reserve_quantity,
+                scope="segment",
+                segment_id=asset.segment_id,
+                available_by=base_request.as_of,
+                official_required=True,
+                metric_id="proved_probable_reserves",
+            )
+        for observation in spec.historical_observations:
+            exact_fact(
+                observation.market_value,
+                scope="company",
+                segment_id="",
+                available_by=observation.observation_date,
+                official_required=False,
+                metric_id="historical_market_value",
+            )
+            exact_fact(
+                observation.pit_earnings_denominator,
+                scope="company",
+                segment_id="",
+                available_by=observation.denominator_available_at,
+                official_required=True,
+                metric_id=f"historical_{observation.denominator_metric}_denominator",
+            )
+
+    def _mid_cycle(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> MethodCalculationResult:
+        self._validate_cyclical_runtime(graph, base_request, spec)
+        self._validate_method_bridge(
+            graph,
+            plan.terminal_value_bridge,
+            base_request,
+        )
+        periods = self._periods(graph)
+        curve = {
+            (item.segment_id, item.period): item
+            for item in spec.commodity_curve
+        }
+        assets = {item.segment_id: item for item in spec.assets}
+        reference_graph = ForecastEngine().build(base_request)
+        case_ebitda = [Decimal("0"), Decimal("0"), Decimal("0")]
+        lineage: tuple[str, ...] = ()
+        for segment_id in base_request.security.segment_ids:
+            asset = assets[segment_id]
+            yields = (
+                asset.grade_yield_low.normalized_value,
+                asset.grade_yield_base.normalized_value,
+                asset.grade_yield_high.normalized_value,
+            )
+            production_totals = tuple(
+                sum(
+                    (
+                        getattr(item, field_name).normalized_value
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                for field_name in (
+                    "production_low",
+                    "production_base",
+                    "production_high",
+                )
+            )
+            if production_totals[1] <= 0:
+                raise _MethodBlocked(
+                    "RESOURCE_PRODUCTION_RANGE_INVALID: base finite-life production must be positive."
+                )
+            production_factors = tuple(
+                value / production_totals[1] for value in production_totals
+            )
+            weighted_costs = tuple(
+                sum(
+                    (
+                        getattr(item, production_name).normalized_value
+                        * getattr(item, cost_name).normalized_value
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                / production_total
+                for production_name, cost_name, production_total in (
+                    (
+                        "production_low",
+                        "unit_cost_low",
+                        production_totals[0],
+                    ),
+                    (
+                        "production_base",
+                        "unit_cost_base",
+                        production_totals[1],
+                    ),
+                    (
+                        "production_high",
+                        "unit_cost_high",
+                        production_totals[2],
+                    ),
+                )
+            )
+            cost_factors = (
+                weighted_costs[2] / weighted_costs[1],
+                Decimal("1"),
+                weighted_costs[0] / weighted_costs[1],
+            )
+            for period in periods:
+                point = curve[(segment_id, period)]
+                prices = (
+                    point.price_low.normalized_value,
+                    point.price_base.normalized_value,
+                    point.price_high.normalized_value,
+                )
+                volume = graph.quantity(f"{segment_id}.volume.{period}")
+                scenario_asp = graph.quantity(f"{segment_id}.asp.{period}")
+                reference_asp = reference_graph.quantity(
+                    f"{segment_id}.asp.{period}"
+                )
+                unit_cost = graph.quantity(f"{segment_id}.unit_cost.{period}")
+                operating_expense = graph.quantity(
+                    f"{segment_id}.operating_expense.{period}"
+                )
+                if (
+                    volume.unit != asset.reserve_quantity.unit
+                    or unit_cost.unit != point.price_base.unit
+                    or unit_cost.currency != point.price_base.currency
+                    or operating_expense.currency != point.price_base.currency
+                    or reference_asp.normalized_value <= 0
+                ):
+                    raise _MethodBlocked(
+                        "RESOURCE_UNIT_MISMATCH: curve price, production, reserve, cost, and operating expense dimensions must reconcile."
+                    )
+                for index in range(3):
+                    modeled_volume = (
+                        volume.normalized_value * production_factors[index]
+                    )
+                    saleable = modeled_volume * yields[index]
+                    case_ebitda[index] += (
+                        saleable
+                        * prices[index]
+                        * (
+                            scenario_asp.normalized_value
+                            / reference_asp.normalized_value
+                        )
+                        - modeled_volume
+                        * unit_cost.normalized_value
+                        * cost_factors[index]
+                        - operating_expense.normalized_value
+                    )
+                lineage = _merge_refs(
+                    lineage,
+                    point.lineage_refs,
+                    asset.lineage_refs,
+                    volume.lineage_refs,
+                    scenario_asp.lineage_refs,
+                    reference_asp.lineage_refs,
+                    unit_cost.lineage_refs,
+                    operating_expense.lineage_refs,
+                )
+        normalized = tuple(
+            value / Decimal(len(periods)) for value in case_ebitda
+        )
+        multiples = (
+            spec.mid_cycle_multiple_low.normalized_value,
+            spec.mid_cycle_multiple_base.normalized_value,
+            spec.mid_cycle_multiple_high.normalized_value,
+        )
+        values = tuple(
+            ebitda * multiple
+            for ebitda, multiple in zip(normalized, multiples, strict=True)
+        )
+        lineage = _merge_refs(
+            lineage,
+            spec.mid_cycle_multiple_low.lineage_refs,
+            spec.mid_cycle_multiple_base.lineage_refs,
+            spec.mid_cycle_multiple_high.lineage_refs,
+            (f"Assumption:formula:{self.MID_CYCLE_FORMULA_VERSION}",),
+        )
+        value_range = self._bridge_range(
+            graph,
+            plan.terminal_value_bridge,
+            "enterprise_value",
+            values,
+            self.MID_CYCLE_FORMULA_VERSION,
+            basis_period=periods[-1],
+            basis_refs=lineage,
+        )
+        assumptions = (
+            ValuationAssumption(
+                "mid_cycle_ebitda",
+                self._model_quantity(
+                    normalized[1],
+                    unit=base_request.security.reporting_currency,
+                    period=periods[-1],
+                    as_of=self._as_of(graph),
+                    refs=lineage,
+                ),
+            ),
+            ValuationAssumption(
+                "mid_cycle_multiple",
+                spec.mid_cycle_multiple_base,
+            ),
+        )
+        return (
+            value_range,
+            assumptions,
+            self._cyclical_sensitivities(graph, base_request, spec),
+            lineage,
+            (
+                "No terminal commodity-price perpetuity is used; the result is conditional on a finite explicit cycle window.",
+            ),
+        )
+
+    def _resource_nav(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> MethodCalculationResult:
+        self._validate_cyclical_runtime(graph, base_request, spec)
+        self._validate_method_bridge(
+            graph,
+            plan.present_value_bridge,
+            base_request,
+        )
+        forecast_periods = self._periods(graph)
+        curve = {
+            (item.segment_id, item.period): item
+            for item in spec.commodity_curve
+        }
+        assets = {item.segment_id: item for item in spec.assets}
+        reference_graph = ForecastEngine().build(base_request)
+        values = [Decimal("0"), Decimal("0"), Decimal("0")]
+        rates = (
+            spec.nav_discount_rate_high.normalized_value,
+            spec.nav_discount_rate_base.normalized_value,
+            spec.nav_discount_rate_low.normalized_value,
+        )
+        lineage: tuple[str, ...] = ()
+        for segment_id in base_request.security.segment_ids:
+            asset = assets[segment_id]
+            yields = (
+                asset.grade_yield_low.normalized_value,
+                asset.grade_yield_base.normalized_value,
+                asset.grade_yield_high.normalized_value,
+            )
+            scenario_volume = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.volume.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            reference_volume = sum(
+                (
+                    reference_graph.quantity(
+                        f"{segment_id}.volume.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            scenario_cost = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.unit_cost.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            reference_cost = sum(
+                (
+                    reference_graph.quantity(
+                        f"{segment_id}.unit_cost.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            scenario_price = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.asp.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            reference_price = sum(
+                (
+                    reference_graph.quantity(
+                        f"{segment_id}.asp.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            scenario_opex = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.operating_expense.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            reference_opex = sum(
+                (
+                    reference_graph.quantity(
+                        f"{segment_id}.operating_expense.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            scenario_capex = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.capex.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            reference_capex = sum(
+                (
+                    reference_graph.quantity(
+                        f"{segment_id}.capex.{period}"
+                    ).normalized_value
+                    for period in forecast_periods
+                ),
+                Decimal("0"),
+            )
+            if any(
+                value <= 0
+                for value in (
+                    reference_volume,
+                    reference_price,
+                    reference_cost,
+                    reference_opex,
+                    reference_capex,
+                )
+            ):
+                raise _MethodBlocked(
+                    "RESOURCE_SCENARIO_LINK_INVALID: reference forecast volume, cost, opex, and capex must be positive."
+                )
+            volume_factor = scenario_volume / reference_volume
+            price_factor = scenario_price / reference_price
+            cost_factor = scenario_cost / reference_cost
+            opex_factor = scenario_opex / reference_opex
+            capex_factor = scenario_capex / reference_capex
+            extracted = [Decimal("0"), Decimal("0"), Decimal("0")]
+            for year_index, schedule in enumerate(asset.schedule, start=1):
+                point = curve[(segment_id, schedule.period)]
+                prices = (
+                    point.price_low.normalized_value,
+                    point.price_base.normalized_value,
+                    point.price_high.normalized_value,
+                )
+                production = (
+                    schedule.production_low.normalized_value,
+                    schedule.production_base.normalized_value,
+                    schedule.production_high.normalized_value,
+                )
+                unit_costs = (
+                    schedule.unit_cost_high.normalized_value,
+                    schedule.unit_cost_base.normalized_value,
+                    schedule.unit_cost_low.normalized_value,
+                )
+                operating_expenses = (
+                    schedule.operating_expense_high.normalized_value,
+                    schedule.operating_expense_base.normalized_value,
+                    schedule.operating_expense_low.normalized_value,
+                )
+                maintenance_capex = (
+                    schedule.maintenance_capex_high.normalized_value,
+                    schedule.maintenance_capex_base.normalized_value,
+                    schedule.maintenance_capex_low.normalized_value,
+                )
+                if (
+                    schedule.production_base.unit
+                    != asset.reserve_quantity.unit
+                    or point.price_base.unit != schedule.unit_cost_base.unit
+                    or point.price_base.currency
+                    != schedule.unit_cost_base.currency
+                    or schedule.operating_expense_base.currency
+                    != schedule.unit_cost_base.currency
+                    or schedule.maintenance_capex_base.currency
+                    != schedule.unit_cost_base.currency
+                ):
+                    raise _MethodBlocked(
+                        "RESOURCE_UNIT_MISMATCH: NAV curve, schedule production, reserve, cost, opex, tax, and capex dimensions must reconcile."
+                    )
+                for index in range(3):
+                    modeled_production = production[index] * volume_factor
+                    saleable = modeled_production * yields[index]
+                    extracted[index] += modeled_production
+                    pre_tax = (
+                        saleable * prices[index] * price_factor
+                        - modeled_production
+                        * unit_costs[index]
+                        * cost_factor
+                        - operating_expenses[index] * opex_factor
+                    )
+                    after_tax = max(pre_tax, Decimal("0")) * (
+                        Decimal("1") - schedule.tax_rate.normalized_value
+                    ) + min(pre_tax, Decimal("0"))
+                    cash_flow = (
+                        after_tax
+                        - maintenance_capex[index] * capex_factor
+                    )
+                    values[index] += cash_flow / (
+                        (Decimal("1") + rates[index]) ** year_index
+                    )
+                lineage = _merge_refs(
+                    lineage,
+                    point.lineage_refs,
+                    asset.lineage_refs,
+                    *(
+                        graph.quantity(
+                            f"{segment_id}.{metric}.{period}"
+                        ).lineage_refs
+                        for metric in (
+                            "volume",
+                            "asp",
+                            "unit_cost",
+                            "operating_expense",
+                            "capex",
+                        )
+                        for period in forecast_periods
+                    ),
+                )
+            if any(
+                amount > asset.reserve_quantity.normalized_value
+                for amount in extracted
+            ):
+                raise _MethodBlocked(
+                    "RESOURCE_RESERVE_OVER_EXTRACTION: modeled saleable production exceeds documented reserves."
+                )
+        lineage = _merge_refs(
+            lineage,
+            spec.nav_discount_rate_low.lineage_refs,
+            spec.nav_discount_rate_base.lineage_refs,
+            spec.nav_discount_rate_high.lineage_refs,
+            (f"Assumption:formula:{self.RESOURCE_NAV_FORMULA_VERSION}",),
+        )
+        value_range = self._bridge_range(
+            graph,
+            plan.present_value_bridge,
+            "enterprise_value",
+            tuple(values),
+            self.RESOURCE_NAV_FORMULA_VERSION,
+            basis_period=self._as_of(graph),
+            basis_refs=lineage,
+        )
+        assumptions = (
+            ValuationAssumption(
+                "resource_nav_discount_rate",
+                spec.nav_discount_rate_base,
+            ),
+        )
+        return (
+            value_range,
+            assumptions,
+            self._cyclical_sensitivities(graph, base_request, spec),
+            lineage,
+            (
+                "NAV stops at documented resource life and reserves; no residual extraction or commodity-price perpetuity is added.",
+            ),
+        )
+
+    def _cyclical_historical_band(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> MethodCalculationResult:
+        self._validate_cyclical_runtime(graph, base_request, spec)
+        self._validate_method_bridge(
+            graph,
+            plan.terminal_value_bridge,
+            base_request,
+        )
+        denominator_values = tuple(
+            item.pit_earnings_denominator.normalized_value
+            for item in spec.historical_observations
+        )
+        median_denominator = _percentile(
+            denominator_values,
+            Decimal("0.50"),
+        )
+        peak_cutoff = (
+            median_denominator
+            * spec.peak_earnings_threshold.normalized_value
+        )
+        peak_observation_ids = {
+            item.observation_id
+            for item in spec.historical_observations
+            if item.pit_earnings_denominator.normalized_value >= peak_cutoff
+        }
+        observations = tuple(
+            item
+            for item in spec.historical_observations
+            if item.observation_id not in peak_observation_ids
+        )
+        if len(observations) < 3:
+            raise _MethodBlocked(
+                "CYCLICAL_HISTORY_INSUFFICIENT: fewer than three non-peak PIT observations remain."
+            )
+        if any(
+            date.fromisoformat(item.market_value.as_of)
+            > date.fromisoformat(self._as_of(graph))
+            for item in observations
+        ):
+            raise _MethodBlocked(
+                "CYCLICAL_HISTORY_LOOKAHEAD: historical observations must be available by the valuation as-of."
+            )
+        multiples = tuple(
+            item.reported_multiple.normalized_value for item in observations
+        )
+        ranges = (
+            _percentile(multiples, Decimal("0.25")),
+            _percentile(multiples, Decimal("0.50")),
+            _percentile(multiples, Decimal("0.75")),
+        )
+        periods = self._periods(graph)
+        denominator_values = tuple(
+            graph.quantity(f"company.ebit.{period}").normalized_value
+            for period in periods
+        )
+        denominator = sum(denominator_values, Decimal("0")) / Decimal(
+            len(denominator_values)
+        )
+        if denominator <= 0:
+            raise _MethodBlocked(
+                "CYCLICAL_HISTORY_DENOMINATOR_NON_POSITIVE: normalized forecast EBIT must be positive."
+            )
+        values = tuple(denominator * multiple for multiple in ranges)
+        lineage = _merge_refs(
+            *(item.lineage_refs for item in spec.historical_observations),
+            spec.peak_earnings_threshold.lineage_refs,
+            *(
+                graph.quantity(f"company.ebit.{period}").lineage_refs
+                for period in periods
+            ),
+            (f"Assumption:formula:{self.CYCLICAL_HISTORY_FORMULA_VERSION}",),
+        )
+        value_range = self._bridge_range(
+            graph,
+            plan.terminal_value_bridge,
+            "equity_value",
+            values,
+            self.CYCLICAL_HISTORY_FORMULA_VERSION,
+            basis_period=periods[-1],
+            basis_refs=lineage,
+        )
+        multiple_quantities = tuple(
+            self._model_quantity(
+                value,
+                unit="x",
+                period=self._as_of(graph),
+                as_of=self._as_of(graph),
+                refs=lineage,
+            )
+            for value in ranges
+        )
+        peak_count = len(peak_observation_ids)
+        return (
+            value_range,
+            (
+                ValuationAssumption(
+                    "normalized_cycle_ebit",
+                    self._model_quantity(
+                        denominator,
+                        unit=base_request.security.reporting_currency,
+                        period=periods[-1],
+                        as_of=self._as_of(graph),
+                        refs=lineage,
+                    ),
+                ),
+            ),
+            (
+                ValuationSensitivity(
+                    "pit_historical_multiple",
+                    multiple_quantities[0],
+                    multiple_quantities[1],
+                    multiple_quantities[2],
+                ),
+            ),
+            lineage,
+            (
+                f"{peak_count} peak-earnings observation(s) were derived by {self.CYCLICAL_HISTORY_FORMULA_VERSION} at or above {spec.peak_earnings_threshold.normalized_value}x the PIT median denominator because high earnings can create a mechanically low multiple.",
+                "This historical range is a conditional cross-check and does not assume mean reversion.",
+            ),
+        )
+
+    def _cyclical_sensitivities(
+        self,
+        graph: ForecastGraph,
+        base_request: ForecastRequest,
+        spec: CyclicalResourceValuationSpec,
+    ) -> tuple[ValuationSensitivity, ...]:
+        periods = self._periods(graph)
+        assets = spec.assets
+        reference_graph = ForecastEngine().build(base_request)
+        scenario_factors: dict[str, dict[str, Decimal]] = {}
+        for segment_id in base_request.security.segment_ids:
+            factors: dict[str, Decimal] = {}
+            for metric in (
+                "asp",
+                "volume",
+                "unit_cost",
+                "operating_expense",
+                "capex",
+            ):
+                scenario_total = sum(
+                    (
+                        graph.quantity(
+                            f"{segment_id}.{metric}.{period}"
+                        ).normalized_value
+                        for period in periods
+                    ),
+                    Decimal("0"),
+                )
+                reference_total = sum(
+                    (
+                        reference_graph.quantity(
+                            f"{segment_id}.{metric}.{period}"
+                        ).normalized_value
+                        for period in periods
+                    ),
+                    Decimal("0"),
+                )
+                if reference_total <= 0:
+                    raise _MethodBlocked(
+                        "RESOURCE_SCENARIO_LINK_INVALID: sensitivity reference inputs must be positive."
+                    )
+                factors[metric] = scenario_total / reference_total
+            scenario_factors[segment_id] = factors
+        curve_count = Decimal(len(spec.commodity_curve))
+        price_values = tuple(
+            sum(
+                (
+                    getattr(item, field_name).normalized_value
+                    * scenario_factors[item.segment_id]["asp"]
+                    for item in spec.commodity_curve
+                ),
+                Decimal("0"),
+            )
+            / curve_count
+            for field_name in ("price_low", "price_base", "price_high")
+        )
+        refs = _merge_refs(
+            spec.lineage_refs,
+            *(
+                graph.quantity(
+                    f"{segment_id}.{metric}.{period}"
+                ).lineage_refs
+                for segment_id in base_request.security.segment_ids
+                for metric in (
+                    "volume",
+                    "unit_cost",
+                    "operating_expense",
+                    "capex",
+                )
+                for period in periods
+            ),
+        )
+
+        def quantities(
+            values: tuple[Decimal, Decimal, Decimal],
+            unit: str,
+        ) -> tuple[ForecastQuantity, ForecastQuantity, ForecastQuantity]:
+            return cast(
+                tuple[
+                    ForecastQuantity,
+                    ForecastQuantity,
+                    ForecastQuantity,
+                ],
+                tuple(
+                    self._model_quantity(
+                        value,
+                        unit=unit,
+                        period=self._as_of(graph),
+                        as_of=self._as_of(graph),
+                        refs=refs,
+                    )
+                    for value in values
+                ),
+            )
+
+        grade_values = tuple(
+            sum(
+                (
+                    getattr(asset, field_name).normalized_value
+                    for asset in assets
+                ),
+                Decimal("0"),
+            )
+            / Decimal(len(assets))
+            for field_name in (
+                "grade_yield_low",
+                "grade_yield_base",
+                "grade_yield_high",
+            )
+        )
+        production_values = tuple(
+            sum(
+                (
+                    getattr(item, field_name).normalized_value
+                    * scenario_factors[asset.segment_id]["volume"]
+                    for asset in assets
+                    for item in asset.schedule
+                ),
+                Decimal("0"),
+            )
+            for field_name in (
+                "production_low",
+                "production_base",
+                "production_high",
+            )
+        )
+        cost_values = tuple(
+            sum(
+                (
+                    getattr(item, production_name).normalized_value
+                    * scenario_factors[asset.segment_id]["volume"]
+                    * getattr(item, cost_name).normalized_value
+                    * scenario_factors[asset.segment_id]["unit_cost"]
+                    for asset in assets
+                    for item in asset.schedule
+                ),
+                Decimal("0"),
+            )
+            / production
+            for production_name, cost_name, production in (
+                (
+                    "production_low",
+                    "unit_cost_low",
+                    production_values[0],
+                ),
+                (
+                    "production_base",
+                    "unit_cost_base",
+                    production_values[1],
+                ),
+                (
+                    "production_high",
+                    "unit_cost_high",
+                    production_values[2],
+                ),
+            )
+        )
+        opex_values = tuple(
+            sum(
+                (
+                    getattr(item, field_name).normalized_value
+                    * scenario_factors[asset.segment_id][
+                        "operating_expense"
+                    ]
+                    for asset in assets
+                    for item in asset.schedule
+                ),
+                Decimal("0"),
+            )
+            for field_name in (
+                "operating_expense_low",
+                "operating_expense_base",
+                "operating_expense_high",
+            )
+        )
+        capex_values = tuple(
+            sum(
+                (
+                    getattr(item, field_name).normalized_value
+                    * scenario_factors[asset.segment_id]["capex"]
+                    for asset in assets
+                    for item in asset.schedule
+                ),
+                Decimal("0"),
+            )
+            for field_name in (
+                "maintenance_capex_low",
+                "maintenance_capex_base",
+                "maintenance_capex_high",
+            )
+        )
+        price = quantities(price_values, "currency/unit")
+        volume = quantities(production_values, "units")
+        grade = quantities(grade_values, "decimal")
+        cost = quantities(cost_values, "currency/unit")
+        opex = quantities(opex_values, "currency")
+        capex = quantities(capex_values, "currency")
+        return (
+            ValuationSensitivity("commodity_price", *price),
+            ValuationSensitivity("production_volume", *volume),
+            ValuationSensitivity("grade_yield", *grade),
+            ValuationSensitivity("unit_cost", *cost),
+            ValuationSensitivity("operating_expense", *opex),
+            ValuationSensitivity("maintenance_capex", *capex),
         )
 
     def _bridge_range(

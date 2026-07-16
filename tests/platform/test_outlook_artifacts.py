@@ -21,7 +21,7 @@ from tests.platform.test_research_workflow import (
 from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash, _expire
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from test_scenario_valuation import scenario_request
+from test_scenario_valuation import cyclical_request, scenario_request
 
 
 def _drafts(
@@ -57,6 +57,33 @@ def _request(invocation: str, drafts=None):
         research_request(invocation),
         analysis_artifacts=_drafts() if drafts is None else drafts,
     )
+
+
+def test_cyclical_methods_are_preserved_in_immutable_valuation_artifact() -> None:
+    request = cyclical_request()
+    graph = ForecastEngine().build(request.base_forecast_request)
+    result = ScenarioValuationEngine().run(request)
+
+    draft = ImmutableArtifactDraft.from_scenario_valuation(
+        result,
+        forecast_graph=graph,
+        model_identity="company-outlook-model@1",
+        policy_identity="company-outlook-policy@1",
+    )
+
+    methods = {
+        method["method_id"]: method
+        for scenario in draft.payload["scenarios"]
+        for method in scenario["methods"]
+    }
+    assert methods["mid_cycle_ev_ebitda"]["status"] == "ready"
+    assert methods["resource_nav"]["status"] == "ready"
+    assert methods["cyclical_historical_band"]["status"] == "ready"
+    assert {
+        "cycle_normalized_ev_ebitda@1",
+        "finite_resource_nav_after_tax@1",
+        "pit_cycle_band_derived_peak@2",
+    } <= set(draft.formula_identities)
 
 
 def test_workflow_persists_restarts_and_reuses_typed_sibling_artifacts(
