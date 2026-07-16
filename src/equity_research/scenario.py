@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import date
@@ -153,6 +154,49 @@ def _validate_range(
             "VALUATION_RANGE_INVALID",
             f"{field_name} must be ordered low <= base <= high"
             + (" and positive." if positive else "."),
+        )
+
+
+def _validate_money_range(
+    low: FinancialQuantity,
+    base: FinancialQuantity,
+    high: FinancialQuantity,
+    field_name: str,
+    *,
+    nonnegative: bool = False,
+) -> None:
+    quantities = (low, base, high)
+    if (
+        any(not isinstance(item, FinancialQuantity) for item in quantities)
+        or any(item.kind != "money" for item in quantities)
+        or len(
+            {
+                (
+                    item.unit,
+                    item.scale,
+                    item.currency,
+                    item.period,
+                    item.as_of,
+                )
+                for item in quantities
+            }
+        )
+        != 1
+    ):
+        raise ScenarioInvariantError(
+            "VALUATION_MONEY_RANGE_DIMENSION_MISMATCH",
+            f"{field_name} requires money quantities on one exact dimension and time basis.",
+        )
+    values = tuple(item.normalized_value for item in quantities)
+    if (
+        values[0] > values[1]
+        or values[1] > values[2]
+        or (nonnegative and values[0] < 0)
+    ):
+        raise ScenarioInvariantError(
+            "VALUATION_MONEY_RANGE_INVALID",
+            f"{field_name} must be ordered low <= base <= high"
+            + (" and nonnegative." if nonnegative else "."),
         )
 
 
@@ -1807,6 +1851,921 @@ class FinancialInstitutionValuationSpec:
         )
 
 
+@dataclass(frozen=True)
+class BiopharmaEventSpec:
+    event_id: str
+    event_type: Literal["clinical", "regulatory", "commercial"]
+    probability_basis: Literal["standalone", "conditional_on_parents"]
+    period: str
+    parent_event_ids: tuple[str, ...]
+    probability_low: ForecastQuantity
+    probability_base: ForecastQuantity
+    probability_high: ForecastQuantity
+    calibration_version: str
+    calibration_method_version: str
+    calibration_window_start: str
+    calibration_window_end: str
+    calibration_sample_size: int
+    calibration_record_id: str
+
+    def __post_init__(self) -> None:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.:-]+", self.event_id or "")
+            or self.event_type
+            not in {"clinical", "regulatory", "commercial"}
+            or self.probability_basis
+            not in {"standalone", "conditional_on_parents"}
+            or not re.fullmatch(r"\d{4}(?:E|FY)", self.period or "")
+            or not self.calibration_version.strip()
+            or not self.calibration_method_version.strip()
+            or self.calibration_sample_size <= 0
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_IDENTITY_INVALID",
+                "Biopharma events require a stable id, typed event class, annual period, and calibration version.",
+            )
+        try:
+            window_start = date.fromisoformat(
+                self.calibration_window_start
+            )
+            window_end = date.fromisoformat(
+                self.calibration_window_end
+            )
+        except (TypeError, ValueError) as exc:
+            raise ScenarioInvariantError(
+                "BIOPHARMA_CALIBRATION_RECORD_INVALID",
+                "Probability calibration windows must use ISO dates.",
+            ) from exc
+        expected_record_id = (
+            "BIOPHARMA_POS_CALIBRATION:"
+            f"{self.event_id}:"
+            f"{self.calibration_version}:"
+            f"{self.calibration_method_version}:"
+            f"{self.probability_basis}:"
+            f"{self.calibration_window_start}:"
+            f"{self.calibration_window_end}:"
+            f"n={self.calibration_sample_size}"
+        )
+        if (
+            window_end < window_start
+            or self.calibration_record_id != expected_record_id
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_CALIBRATION_RECORD_INVALID",
+                "Calibration record identity must exactly bind version, method, basis, window, and sample size.",
+            )
+        if (
+            not isinstance(self.parent_event_ids, tuple)
+            or len(self.parent_event_ids) != len(set(self.parent_event_ids))
+            or self.event_id in self.parent_event_ids
+            or len(self.parent_event_ids) > 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_DEPENDENCY_INVALID",
+                "Event parents must be a unique zero-or-one tuple; unsupported multi-parent joint probabilities fail closed.",
+            )
+        if (
+            bool(self.parent_event_ids)
+            != (self.probability_basis == "conditional_on_parents")
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_PROBABILITY_BASIS_INVALID",
+                "Root probabilities must be standalone and dependent-event probabilities explicitly conditional on parents.",
+            )
+        _validate_range(
+            self.probability_low,
+            self.probability_base,
+            self.probability_high,
+            f"event_probability:{self.event_id}",
+            unit="decimal",
+        )
+        probabilities = (
+            self.probability_low,
+            self.probability_base,
+            self.probability_high,
+        )
+        if (
+            any(item.period != self.period for item in probabilities)
+            or self.probability_low.normalized_value < 0
+            or self.probability_high.normalized_value > 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_PROBABILITY_INVALID",
+                "Event probability ranges must bind the event period and remain within [0,1].",
+            )
+        base_fact_refs = tuple(
+            ref
+            for ref in self.probability_base.lineage_refs
+            if ref.startswith("Fact:")
+        )
+        if not base_fact_refs or any(
+            ref not in item.lineage_refs
+            for ref in base_fact_refs
+            for item in (
+                self.probability_low,
+                self.probability_high,
+            )
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_PROBABILITY_EVIDENCE_INVALID",
+                "Low, base, and high probabilities must share a frozen fact supporting the calibrated base probability.",
+            )
+
+    @property
+    def base_fact_refs(self) -> tuple[str, ...]:
+        return tuple(
+            ref
+            for ref in self.probability_base.lineage_refs
+            if ref.startswith("Fact:")
+        )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.probability_low.lineage_refs,
+            self.probability_base.lineage_refs,
+            self.probability_high.lineage_refs,
+            (
+                f"Assumption:biopharma_probability_calibration:{self.calibration_version}",
+                f"Assumption:biopharma_probability_method:{self.calibration_method_version}",
+                f"Assumption:biopharma_probability_window:{self.calibration_window_start}/{self.calibration_window_end}",
+                f"Assumption:biopharma_probability_sample_size:{self.calibration_sample_size}",
+                f"Fact:{self.calibration_record_id}",
+                f"Assumption:biopharma_probability_basis:{self.probability_basis}",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class BiopharmaCashFlowPeriodSpec:
+    period: str
+    gross_sales_low: FinancialQuantity
+    gross_sales_base: FinancialQuantity
+    gross_sales_high: FinancialQuantity
+    development_cost_low: FinancialQuantity
+    development_cost_base: FinancialQuantity
+    development_cost_high: FinancialQuantity
+    milestone_cash_low: FinancialQuantity
+    milestone_cash_base: FinancialQuantity
+    milestone_cash_high: FinancialQuantity
+    milestone_event_id: str
+    commercial_cost_rate_low: ForecastQuantity
+    commercial_cost_rate_base: ForecastQuantity
+    commercial_cost_rate_high: ForecastQuantity
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"\d{4}(?:E|FY)", self.period or ""):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_PERIOD_INVALID",
+                "Biopharma cash-flow schedules require annual E or FY periods.",
+            )
+        _validate_money_range(
+            self.gross_sales_low,
+            self.gross_sales_base,
+            self.gross_sales_high,
+            "biopharma_gross_sales",
+            nonnegative=True,
+        )
+        _validate_money_range(
+            self.development_cost_low,
+            self.development_cost_base,
+            self.development_cost_high,
+            "biopharma_development_cost",
+            nonnegative=True,
+        )
+        _validate_money_range(
+            self.milestone_cash_low,
+            self.milestone_cash_base,
+            self.milestone_cash_high,
+            "biopharma_milestone_cash",
+        )
+        money = (
+            self.gross_sales_low,
+            self.gross_sales_base,
+            self.gross_sales_high,
+            self.development_cost_low,
+            self.development_cost_base,
+            self.development_cost_high,
+            self.milestone_cash_low,
+            self.milestone_cash_base,
+            self.milestone_cash_high,
+        )
+        if any(item.period != self.period for item in money):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_PERIOD_BINDING_INVALID",
+                "Every biopharma cash-flow quantity must bind its schedule period.",
+            )
+        _validate_range(
+            self.commercial_cost_rate_low,
+            self.commercial_cost_rate_base,
+            self.commercial_cost_rate_high,
+            "biopharma_commercial_cost_rate",
+            unit="decimal",
+        )
+        rates = (
+            self.commercial_cost_rate_low,
+            self.commercial_cost_rate_base,
+            self.commercial_cost_rate_high,
+        )
+        if (
+            any(item.period != self.period for item in rates)
+            or self.commercial_cost_rate_low.normalized_value < 0
+            or self.commercial_cost_rate_high.normalized_value > 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_COMMERCIAL_COST_INVALID",
+                "Commercial cost rates must bind the schedule period and remain within [0,1].",
+            )
+        if self.milestone_event_id and not re.fullmatch(
+            r"[A-Za-z0-9_.:-]+",
+            self.milestone_event_id,
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_MILESTONE_EVENT_INVALID",
+                "Milestone event ids must be empty or stable tokens.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.gross_sales_low.provenance_refs,
+            self.gross_sales_base.provenance_refs,
+            self.gross_sales_high.provenance_refs,
+            self.development_cost_low.provenance_refs,
+            self.development_cost_base.provenance_refs,
+            self.development_cost_high.provenance_refs,
+            self.milestone_cash_low.provenance_refs,
+            self.milestone_cash_base.provenance_refs,
+            self.milestone_cash_high.provenance_refs,
+            self.commercial_cost_rate_low.lineage_refs,
+            self.commercial_cost_rate_base.lineage_refs,
+            self.commercial_cost_rate_high.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class BiopharmaAssetSpec:
+    asset_id: str
+    indication_id: str
+    economic_right_id: str
+    development_stage: Literal[
+        "discovery",
+        "preclinical",
+        "phase1",
+        "phase2",
+        "phase3",
+        "filed",
+        "approved",
+    ]
+    required_event_ids: tuple[str, ...]
+    ownership_low: ForecastQuantity
+    ownership_base: ForecastQuantity
+    ownership_high: ForecastQuantity
+    royalty_burden_low: ForecastQuantity
+    royalty_burden_base: ForecastQuantity
+    royalty_burden_high: ForecastQuantity
+    launch_delay_years_low: ForecastQuantity
+    launch_delay_years_base: ForecastQuantity
+    launch_delay_years_high: ForecastQuantity
+    delay_carry_cost_low: FinancialQuantity
+    delay_carry_cost_base: FinancialQuantity
+    delay_carry_cost_high: FinancialQuantity
+    periods: tuple[BiopharmaCashFlowPeriodSpec, ...]
+
+    def __post_init__(self) -> None:
+        stable = (self.asset_id, self.indication_id, self.economic_right_id)
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9_.:-]+", value or "")
+            for value in stable
+        ) or self.development_stage not in {
+            "discovery",
+            "preclinical",
+            "phase1",
+            "phase2",
+            "phase3",
+            "filed",
+            "approved",
+        }:
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSET_IDENTITY_INVALID",
+                "Assets require stable asset, indication, economic-right ids and a recognized development stage.",
+            )
+        if (
+            not isinstance(self.required_event_ids, tuple)
+            or not self.required_event_ids
+            or len(self.required_event_ids)
+            != len(set(self.required_event_ids))
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSET_EVENTS_INVALID",
+                "Every asset/indication requires a unique non-empty event path.",
+            )
+        _validate_range(
+            self.ownership_low,
+            self.ownership_base,
+            self.ownership_high,
+            "biopharma_ownership",
+            unit="decimal",
+        )
+        _validate_range(
+            self.royalty_burden_low,
+            self.royalty_burden_base,
+            self.royalty_burden_high,
+            "biopharma_royalty_burden",
+            unit="decimal",
+        )
+        if (
+            self.ownership_low.normalized_value < 0
+            or self.ownership_high.normalized_value > 1
+            or self.royalty_burden_low.normalized_value < 0
+            or self.royalty_burden_high.normalized_value > 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_LICENSE_ECONOMICS_INVALID",
+                "Ownership and royalty burdens must remain within [0,1].",
+            )
+        _validate_range(
+            self.launch_delay_years_low,
+            self.launch_delay_years_base,
+            self.launch_delay_years_high,
+            "biopharma_launch_delay",
+            unit="years",
+        )
+        delays = (
+            self.launch_delay_years_low.normalized_value,
+            self.launch_delay_years_base.normalized_value,
+            self.launch_delay_years_high.normalized_value,
+        )
+        if delays[0] < 0 or any(
+            value != value.to_integral_value() for value in delays
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_DELAY_INVALID",
+                "Launch delay must be a nonnegative whole number of years.",
+            )
+        _validate_money_range(
+            self.delay_carry_cost_low,
+            self.delay_carry_cost_base,
+            self.delay_carry_cost_high,
+            "biopharma_delay_carry_cost",
+            nonnegative=True,
+        )
+        if (
+            not isinstance(self.periods, tuple)
+            or not self.periods
+            or any(
+                not isinstance(item, BiopharmaCashFlowPeriodSpec)
+                for item in self.periods
+            )
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSET_PERIODS_INVALID",
+                "Every asset requires a typed finite cash-flow schedule.",
+            )
+        years = tuple(int(item.period[:4]) for item in self.periods)
+        if len(years) != len(set(years)) or any(
+            current != previous + 1
+            for previous, current in zip(years, years[1:])
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSET_PERIODS_INVALID",
+                "Asset cash-flow periods must be unique, increasing, and contiguous.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.ownership_low.lineage_refs,
+            self.ownership_base.lineage_refs,
+            self.ownership_high.lineage_refs,
+            self.royalty_burden_low.lineage_refs,
+            self.royalty_burden_base.lineage_refs,
+            self.royalty_burden_high.lineage_refs,
+            self.launch_delay_years_low.lineage_refs,
+            self.launch_delay_years_base.lineage_refs,
+            self.launch_delay_years_high.lineage_refs,
+            self.delay_carry_cost_low.provenance_refs,
+            self.delay_carry_cost_base.provenance_refs,
+            self.delay_carry_cost_high.provenance_refs,
+            *(item.lineage_refs for item in self.periods),
+            (
+                f"Assumption:biopharma_stage:{self.development_stage}",
+                f"Assumption:biopharma_economic_right:{self.economic_right_id}",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class BiopharmaFinancingSpec:
+    record_id: str
+    period: str
+    proceeds: FinancialQuantity
+    issue_price: FinancialQuantity
+    new_shares: FinancialQuantity
+
+    def __post_init__(self) -> None:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.:-]+", self.record_id or "")
+            or not re.fullmatch(r"\d{4}(?:E|FY)", self.period or "")
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_FINANCING_IDENTITY_INVALID",
+                "Committed financing requires a stable record id and annual period.",
+            )
+        if (
+            not isinstance(self.proceeds, FinancialQuantity)
+            or self.proceeds.kind != "money"
+            or not isinstance(self.issue_price, FinancialQuantity)
+            or self.issue_price.kind != "per_share"
+            or not isinstance(self.new_shares, FinancialQuantity)
+            or self.new_shares.kind != "shares"
+            or any(
+                item.normalized_value <= 0
+                for item in (
+                    self.proceeds,
+                    self.issue_price,
+                    self.new_shares,
+                )
+            )
+            or any(
+                item.period != self.period
+                for item in (
+                    self.proceeds,
+                    self.issue_price,
+                    self.new_shares,
+                )
+            )
+            or len(
+                {
+                    item.as_of
+                    for item in (
+                        self.proceeds,
+                        self.issue_price,
+                        self.new_shares,
+                    )
+                }
+            )
+            != 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_FINANCING_TERMS_INVALID",
+                "Committed financing requires positive proceeds, per-share issue price, and new shares on one period/as-of basis.",
+            )
+        if (
+            self.issue_price.currency != self.proceeds.currency
+            or self.issue_price.unit
+            != f"{self.proceeds.currency}/share"
+            or self.new_shares.unit != "shares"
+            or self.new_shares.currency != "N/A"
+            or self.proceeds.normalized_value
+            != self.issue_price.normalized_value
+            * self.new_shares.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_FINANCING_PRICING_INVALID",
+                "Committed proceeds must equal issue price times new shares with exact units.",
+            )
+        for field_name, quantity in (
+            ("proceeds", self.proceeds),
+            ("issue_price", self.issue_price),
+            ("new_shares", self.new_shares),
+        ):
+            _require_refs(
+                quantity.provenance_refs,
+                f"BiopharmaFinancingSpec.{field_name}",
+                facts_only=True,
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.proceeds.provenance_refs,
+            self.issue_price.provenance_refs,
+            self.new_shares.provenance_refs,
+            (f"Assumption:committed_financing_record:{self.record_id}",),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "record_id": self.record_id,
+            "period": self.period,
+            "proceeds": self.proceeds.to_dict(),
+            "issue_price": self.issue_price.to_dict(),
+            "new_shares": self.new_shares.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class BiopharmaRunwayPeriodSpec:
+    period: str
+    corporate_cash_burn_low: FinancialQuantity
+    corporate_cash_burn_base: FinancialQuantity
+    corporate_cash_burn_high: FinancialQuantity
+    financing: BiopharmaFinancingSpec | None = None
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"\d{4}(?:E|FY)", self.period or ""):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_RUNWAY_PERIOD_INVALID",
+                "Runway schedules require annual E or FY periods.",
+            )
+        _validate_money_range(
+            self.corporate_cash_burn_low,
+            self.corporate_cash_burn_base,
+            self.corporate_cash_burn_high,
+            "biopharma_corporate_cash_burn",
+            nonnegative=True,
+        )
+        money = (
+            self.corporate_cash_burn_low,
+            self.corporate_cash_burn_base,
+            self.corporate_cash_burn_high,
+        )
+        if any(item.period != self.period for item in money):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_RUNWAY_PERIOD_BINDING_INVALID",
+                "Runway cash quantities must bind the runway period.",
+            )
+        if self.financing is not None and (
+            not isinstance(self.financing, BiopharmaFinancingSpec)
+            or self.financing.period != self.period
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_FINANCING_PERIOD_INVALID",
+                "Committed financing must bind its runway period.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.corporate_cash_burn_low.provenance_refs,
+            self.corporate_cash_burn_base.provenance_refs,
+            self.corporate_cash_burn_high.provenance_refs,
+            (
+                self.financing.lineage_refs
+                if self.financing is not None
+                else ()
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class BiopharmaValuationSpec:
+    events: tuple[BiopharmaEventSpec, ...]
+    assets: tuple[BiopharmaAssetSpec, ...]
+    opening_cash: FinancialQuantity
+    minimum_cash_buffer: FinancialQuantity
+    discount_rate_low: ForecastQuantity
+    discount_rate_base: ForecastQuantity
+    discount_rate_high: ForecastQuantity
+    runway_periods: tuple[BiopharmaRunwayPeriodSpec, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.events, tuple)
+            or not self.events
+            or any(
+                not isinstance(item, BiopharmaEventSpec)
+                for item in self.events
+            )
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENTS_INVALID",
+                "Biopharma valuation requires a typed non-empty event tree.",
+            )
+        event_ids = tuple(item.event_id for item in self.events)
+        if len(event_ids) != len(set(event_ids)):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_DUPLICATE",
+                "Biopharma event ids must be unique.",
+            )
+        events = {item.event_id: item for item in self.events}
+        if any(
+            parent_id not in events
+            or int(events[parent_id].period[:4])
+            > int(item.period[:4])
+            for item in self.events
+            for parent_id in item.parent_event_ids
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_EVENT_DEPENDENCY_INVALID",
+                "Event parents must exist and cannot occur after their dependent event.",
+            )
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(event_id: str) -> None:
+            if event_id in visiting:
+                raise ScenarioInvariantError(
+                    "BIOPHARMA_EVENT_CYCLE",
+                    "Biopharma event dependencies must form an acyclic graph.",
+                )
+            if event_id in visited:
+                return
+            visiting.add(event_id)
+            for parent_id in events[event_id].parent_event_ids:
+                visit(parent_id)
+            visiting.remove(event_id)
+            visited.add(event_id)
+
+        for event_id in event_ids:
+            visit(event_id)
+        if (
+            not isinstance(self.assets, tuple)
+            or not self.assets
+            or any(
+                not isinstance(item, BiopharmaAssetSpec)
+                for item in self.assets
+            )
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSETS_INVALID",
+                "Biopharma valuation requires typed asset/indication schedules.",
+            )
+        asset_keys = tuple(
+            (item.asset_id, item.indication_id) for item in self.assets
+        )
+        rights = tuple(item.economic_right_id for item in self.assets)
+        if (
+            len(asset_keys) != len(set(asset_keys))
+            or len(rights) != len(set(rights))
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ECONOMIC_RIGHT_DUPLICATE",
+                "Each asset/indication and economic right may be valued exactly once.",
+            )
+        if any(
+            event_id not in events
+            for asset in self.assets
+            for event_id in asset.required_event_ids
+        ) or any(
+            period.milestone_event_id
+            and period.milestone_event_id not in events
+            for asset in self.assets
+            for period in asset.periods
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_ASSET_EVENTS_INVALID",
+                "Asset and milestone event references must resolve in the declared event tree.",
+            )
+        def ancestors(event_id: str) -> set[str]:
+            result: set[str] = set()
+            stack = list(events[event_id].parent_event_ids)
+            while stack:
+                parent_id = stack.pop()
+                if parent_id in result:
+                    continue
+                result.add(parent_id)
+                stack.extend(events[parent_id].parent_event_ids)
+            return result
+
+        if any(
+            left_id not in ancestors(right_id)
+            and right_id not in ancestors(left_id)
+            for asset in self.assets
+            for index, left_id in enumerate(asset.required_event_ids)
+            for right_id in asset.required_event_ids[index + 1 :]
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_JOINT_PROBABILITY_UNSUPPORTED",
+                "An asset event path must be a single dependency chain unless an explicit joint-probability model is supplied.",
+            )
+        for asset in self.assets:
+            latest_required_year = max(
+                int(events[event_id].period[:4])
+                for event_id in asset.required_event_ids
+            )
+            if any(
+                int(period.period[:4]) < latest_required_year
+                and period.gross_sales_high.normalized_value > 0
+                for period in asset.periods
+            ):
+                raise ScenarioInvariantError(
+                    "BIOPHARMA_COMMERCIAL_TIMING_INVALID",
+                    "Commercial sales cannot precede the asset's required event path.",
+                )
+            if any(
+                period.milestone_event_id
+                and events[period.milestone_event_id].period
+                != period.period
+                for period in asset.periods
+            ):
+                raise ScenarioInvariantError(
+                    "BIOPHARMA_MILESTONE_TIMING_INVALID",
+                    "Milestone cash must bind the exact period of its referenced event.",
+                )
+        opening = (self.opening_cash, self.minimum_cash_buffer)
+        if (
+            any(not isinstance(item, FinancialQuantity) for item in opening)
+            or any(item.kind != "money" for item in opening)
+            or self.opening_cash.normalized_value <= 0
+            or self.minimum_cash_buffer.normalized_value < 0
+            or len(
+                {
+                    (
+                        item.unit,
+                        item.scale,
+                        item.currency,
+                        item.period,
+                        item.as_of,
+                    )
+                    for item in opening
+                }
+            )
+            != 1
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_OPENING_CASH_INVALID",
+                "Opening cash and minimum cash buffer require one nonnegative money basis.",
+            )
+        _require_refs(
+            self.opening_cash.provenance_refs,
+            "BiopharmaValuationSpec.opening_cash",
+            facts_only=True,
+        )
+        _validate_range(
+            self.discount_rate_low,
+            self.discount_rate_base,
+            self.discount_rate_high,
+            "biopharma_discount_rate",
+            unit="decimal",
+            positive=True,
+        )
+        if (
+            not isinstance(self.runway_periods, tuple)
+            or not self.runway_periods
+            or any(
+                not isinstance(item, BiopharmaRunwayPeriodSpec)
+                for item in self.runway_periods
+            )
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_RUNWAY_INVALID",
+                "Biopharma valuation requires a typed finite runway schedule.",
+            )
+        runway_years = tuple(
+            int(item.period[:4]) for item in self.runway_periods
+        )
+        if len(runway_years) != len(set(runway_years)) or any(
+            current != previous + 1
+            for previous, current in zip(runway_years, runway_years[1:])
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_RUNWAY_INVALID",
+                "Runway periods must be unique, increasing, and contiguous.",
+            )
+        financing_record_ids = tuple(
+            period.financing.record_id
+            for period in self.runway_periods
+            if period.financing is not None
+        )
+        if len(financing_record_ids) != len(
+            set(financing_record_ids)
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_FINANCING_RECORD_DUPLICATE",
+                "Each committed financing tranche record may enter the runway and dilution bridge exactly once.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            *(item.lineage_refs for item in self.events),
+            *(item.lineage_refs for item in self.assets),
+            self.opening_cash.provenance_refs,
+            self.minimum_cash_buffer.provenance_refs,
+            self.discount_rate_low.lineage_refs,
+            self.discount_rate_base.lineage_refs,
+            self.discount_rate_high.lineage_refs,
+            *(item.lineage_refs for item in self.runway_periods),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        def money_range(
+            owner: Any,
+            prefix: str,
+        ) -> dict[str, Any]:
+            return {
+                case_name: getattr(
+                    owner,
+                    f"{prefix}_{case_name}",
+                ).to_dict()
+                for case_name in ("low", "base", "high")
+            }
+
+        def model_range(
+            owner: Any,
+            prefix: str,
+        ) -> dict[str, Any]:
+            return {
+                case_name: getattr(
+                    owner,
+                    f"{prefix}_{case_name}",
+                ).to_dict()
+                for case_name in ("low", "base", "high")
+            }
+
+        return {
+            "schema_version": "biopharma_valuation_spec@1",
+            "events": [
+                {
+                    "event_id": event.event_id,
+                    "event_type": event.event_type,
+                    "probability_basis": event.probability_basis,
+                    "period": event.period,
+                    "parent_event_ids": list(event.parent_event_ids),
+                    "probability": model_range(event, "probability"),
+                    "calibration_version": event.calibration_version,
+                    "calibration_method_version": (
+                        event.calibration_method_version
+                    ),
+                    "calibration_window_start": (
+                        event.calibration_window_start
+                    ),
+                    "calibration_window_end": (
+                        event.calibration_window_end
+                    ),
+                    "calibration_sample_size": (
+                        event.calibration_sample_size
+                    ),
+                    "calibration_record_id": (
+                        event.calibration_record_id
+                    ),
+                    "base_fact_refs": list(event.base_fact_refs),
+                }
+                for event in self.events
+            ],
+            "assets": [
+                {
+                    "asset_id": asset.asset_id,
+                    "indication_id": asset.indication_id,
+                    "economic_right_id": asset.economic_right_id,
+                    "development_stage": asset.development_stage,
+                    "required_event_ids": list(
+                        asset.required_event_ids
+                    ),
+                    "ownership": model_range(asset, "ownership"),
+                    "royalty_burden": model_range(
+                        asset,
+                        "royalty_burden",
+                    ),
+                    "launch_delay_years": model_range(
+                        asset,
+                        "launch_delay_years",
+                    ),
+                    "delay_carry_cost": money_range(
+                        asset,
+                        "delay_carry_cost",
+                    ),
+                    "periods": [
+                        {
+                            "period": period.period,
+                            "gross_sales": money_range(
+                                period,
+                                "gross_sales",
+                            ),
+                            "development_cost": money_range(
+                                period,
+                                "development_cost",
+                            ),
+                            "milestone_cash": money_range(
+                                period,
+                                "milestone_cash",
+                            ),
+                            "milestone_event_id": (
+                                period.milestone_event_id
+                            ),
+                            "commercial_cost_rate": model_range(
+                                period,
+                                "commercial_cost_rate",
+                            ),
+                        }
+                        for period in asset.periods
+                    ],
+                }
+                for asset in self.assets
+            ],
+            "opening_cash": self.opening_cash.to_dict(),
+            "minimum_cash_buffer": self.minimum_cash_buffer.to_dict(),
+            "discount_rate": model_range(self, "discount_rate"),
+            "runway_periods": [
+                {
+                    "period": period.period,
+                    "corporate_cash_burn": money_range(
+                        period,
+                        "corporate_cash_burn",
+                    ),
+                    "financing": (
+                        period.financing.to_dict()
+                        if period.financing is not None
+                        else None
+                    ),
+                }
+                for period in self.runway_periods
+            ],
+        }
+
+
 @dataclass(frozen=True, init=False)
 class RelativeMultipleSpec:
     """A copied, exact multiple range from the existing evidence-gated seam."""
@@ -2065,6 +3024,7 @@ class ValuationPlan:
     relative_methods: tuple[RelativeMultipleSpec, ...] = ()
     cyclical_resource: CyclicalResourceValuationSpec | None = None
     financial_institution: FinancialInstitutionValuationSpec | None = None
+    biopharma: BiopharmaValuationSpec | None = None
 
     def __post_init__(self) -> None:
         if self.present_value_bridge.timing != EquityBridgeTiming.OPENING:
@@ -2105,6 +3065,14 @@ class ValuationPlan:
             raise ScenarioInvariantError(
                 "FINANCIAL_INSTITUTION_SPEC_INVALID",
                 "financial_institution must be a FinancialInstitutionValuationSpec.",
+            )
+        if self.biopharma is not None and not isinstance(
+            self.biopharma,
+            BiopharmaValuationSpec,
+        ):
+            raise ScenarioInvariantError(
+                "BIOPHARMA_SPEC_INVALID",
+                "biopharma must be a BiopharmaValuationSpec.",
             )
 
 
@@ -2240,6 +3208,7 @@ class ScenarioMethodResult:
     sensitivity: tuple[ValuationSensitivity, ...]
     diagnostics: tuple[str, ...]
     lineage_refs: tuple[str, ...]
+    component_trace: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -2258,6 +3227,9 @@ class ScenarioMethodResult:
             "sensitivity": [item.to_dict() for item in self.sensitivity],
             "diagnostics": list(self.diagnostics),
             "lineage_refs": list(self.lineage_refs),
+            "component_trace": [
+                json.loads(item) for item in self.component_trace
+            ],
         }
 
 
@@ -2386,6 +3358,8 @@ class ScenarioValuationEngine:
     FINANCIAL_PB_FORMULA_VERSION = "justified_pb_roe_coe_act365@3"
     FINANCIAL_DDM_FORMULA_VERSION = "financial_ddm_clean_surplus_act365@3"
     FINANCIAL_RI_FORMULA_VERSION = "residual_income_clean_surplus_act365@3"
+    BIOPHARMA_RNPV_FORMULA_VERSION = "pipeline_rnpv_event_tree_act365@1"
+    BIOPHARMA_SOTP_FORMULA_VERSION = "pipeline_sotp_unique_rights_act365@1"
 
     def run(self, request: DeterministicScenarioRequest) -> DeterministicScenarioResult:
         with valuation_decimal_context():
@@ -2777,6 +3751,15 @@ class ScenarioValuationEngine:
                     scenario_role,
                 )
             )
+        if base_request.security.archetype == CompanyArchetype.BIOPHARMA:
+            methods.extend(
+                self._biopharma_methods(
+                    graph,
+                    plan,
+                    base_request,
+                    scenario_role,
+                )
+            )
         return tuple(methods)
 
     def _isolate_method(
@@ -2913,6 +3896,7 @@ class ScenarioValuationEngine:
             in {
                 CompanyArchetype.CYCLICAL_RESOURCE,
                 CompanyArchetype.FINANCIAL_INSTITUTION,
+                CompanyArchetype.BIOPHARMA,
             }
         ):
             archetype = base_request.security.archetype.value
@@ -2920,7 +3904,12 @@ class ScenarioValuationEngine:
                 (
                     "CYCLICAL_STABLE_GROWTH_DISABLED: ordinary FCFF/WACC DCF is disabled because a current commodity price or peak margin must not be capitalized in perpetuity; use finite-life NAV and mid-cycle methods."
                     if archetype == CompanyArchetype.CYCLICAL_RESOURCE.value
-                    else "FINANCIAL_FCFF_DISABLED: deposits, policyholder liabilities, and regulatory capital are operating inputs rather than industrial financing debt; use P/B-ROE/COE, DDM, or residual income."
+                    else (
+                        "FINANCIAL_FCFF_DISABLED: deposits, policyholder liabilities, and regulatory capital are operating inputs rather than industrial financing debt; use P/B-ROE/COE, DDM, or residual income."
+                        if archetype
+                        == CompanyArchetype.FINANCIAL_INSTITUTION.value
+                        else "BIOPHARMA_FCFF_DISABLED: pre-revenue pipeline economics require finite asset/indication rNPV, event probabilities, licensing terms, and cash runway rather than ordinary FCFF/WACC."
+                    )
                 )
             )
         self._validate_method_bridge(
@@ -3055,12 +4044,17 @@ class ScenarioValuationEngine:
         tuple[str, ...],
         tuple[str, ...],
     ]:
-        if (
-            base_request.security.archetype
-            == CompanyArchetype.FINANCIAL_INSTITUTION
-        ):
+        if base_request.security.archetype in {
+            CompanyArchetype.FINANCIAL_INSTITUTION,
+            CompanyArchetype.BIOPHARMA,
+        }:
             raise _MethodBlocked(
-                "FINANCIAL_INDUSTRIAL_METHOD_DISABLED: industrial segment EV multiples are disabled for financial institutions."
+                (
+                    "FINANCIAL_INDUSTRIAL_METHOD_DISABLED: industrial segment EV multiples are disabled for financial institutions."
+                    if base_request.security.archetype
+                    == CompanyArchetype.FINANCIAL_INSTITUTION
+                    else "BIOPHARMA_INDUSTRIAL_METHOD_DISABLED: generic industrial SOTP is disabled; use unique-right asset/indication rNPV SOTP."
+                )
             )
         self._validate_method_bridge(
             graph,
@@ -3144,12 +4138,17 @@ class ScenarioValuationEngine:
         tuple[str, ...],
         tuple[str, ...],
     ]:
-        if (
-            base_request.security.archetype
-            == CompanyArchetype.FINANCIAL_INSTITUTION
-        ):
+        if base_request.security.archetype in {
+            CompanyArchetype.FINANCIAL_INSTITUTION,
+            CompanyArchetype.BIOPHARMA,
+        }:
             raise _MethodBlocked(
-                "FINANCIAL_FCFF_DISABLED: reverse FCFF DCF is not meaningful for financial institutions."
+                (
+                    "FINANCIAL_FCFF_DISABLED: reverse FCFF DCF is not meaningful for financial institutions."
+                    if base_request.security.archetype
+                    == CompanyArchetype.FINANCIAL_INSTITUTION
+                    else "BIOPHARMA_FCFF_DISABLED: reverse FCFF DCF is not meaningful for a pre-revenue event-driven pipeline."
+                )
             )
         spec = plan.reverse_dcf
         self._validate_method_bridge(
@@ -3261,12 +4260,17 @@ class ScenarioValuationEngine:
             tuple[str, ...],
             tuple[str, ...],
         ]:
-            if (
-                base_request.security.archetype
-                == CompanyArchetype.FINANCIAL_INSTITUTION
-            ):
+            if base_request.security.archetype in {
+                CompanyArchetype.FINANCIAL_INSTITUTION,
+                CompanyArchetype.BIOPHARMA,
+            }:
                 raise _MethodBlocked(
-                    "FINANCIAL_GENERIC_RELATIVE_DISABLED: use the specialized P/B-ROE/COE method instead of industrial revenue multiples."
+                    (
+                        "FINANCIAL_GENERIC_RELATIVE_DISABLED: use the specialized P/B-ROE/COE method instead of industrial revenue multiples."
+                        if base_request.security.archetype
+                        == CompanyArchetype.FINANCIAL_INSTITUTION
+                        else "BIOPHARMA_GENERIC_RELATIVE_DISABLED: pre-revenue pipeline value cannot be inferred from generic mature-company revenue multiples."
+                    )
                 )
             self._validate_method_bridge(
                 graph,
@@ -4906,6 +5910,7 @@ class ScenarioValuationEngine:
                 tuple[Decimal, Decimal, Decimal],
                 tuple(item["dilution"] for item in projections),
             ),
+            share_multiplier_ref_prefix="financial_cumulative_dilution",
         )
         terminal = spec.periods[-1]
         sensitivities = (
@@ -5164,6 +6169,1212 @@ class ScenarioValuationEngine:
             ),
         )
 
+    def _biopharma_methods(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        scenario_role: ScenarioRole,
+    ) -> tuple[ScenarioMethodResult, ...]:
+        spec = plan.biopharma
+        method_definitions = (
+            (
+                "pipeline_rnpv",
+                self.BIOPHARMA_RNPV_FORMULA_VERSION,
+                "Finite asset/indication rNPV discounts probability-gated development, milestone, licensing, and commercial cash flows.",
+            ),
+            (
+                "pipeline_sotp",
+                self.BIOPHARMA_SOTP_FORMULA_VERSION,
+                "Pipeline SOTP aggregates each unique economic right exactly once using the same audited event-tree cash flows.",
+            ),
+        )
+        horizon = (
+            f"valuation_as_of={self._as_of(graph)};"
+            f"pipeline_periods={self._periods(graph)[0]}..{self._periods(graph)[-1]}"
+        )
+        if spec is None:
+            return tuple(
+                ScenarioMethodResult(
+                    method_id=method_id,
+                    status="blocked",
+                    applicability=(
+                        "Pre-revenue biopharma requires typed asset/indication "
+                        "cash flows, calibrated event probabilities, licensing "
+                        "terms, and a financing-aware cash-runway schedule."
+                    ),
+                    value_basis="enterprise_value",
+                    horizon=horizon,
+                    assumptions=(),
+                    formula_version=formula_version,
+                    conditional_value_range=None,
+                    sensitivity=(),
+                    diagnostics=(
+                        "BIOPHARMA_SPECIALIZED_INPUT_MISSING: no biopharma valuation specification was supplied.",
+                    ),
+                    lineage_refs=("Assumption:biopharma_spec_missing",),
+                )
+                for method_id, formula_version, _ in method_definitions
+            )
+        common_refs = _merge_refs(
+            spec.lineage_refs,
+            plan.present_value_bridge.provenance_refs,
+        )
+        results: list[ScenarioMethodResult] = []
+        scenario_case = {
+            ScenarioRole.STRESS: "low",
+            ScenarioRole.BASE: "base",
+            ScenarioRole.IMPROVEMENT: "high",
+        }[scenario_role]
+        for method_id, formula_version, diagnostic in method_definitions:
+            result = self._isolate_method(
+                method_id,
+                (
+                    "Applicable to a pre-revenue or pipeline-driven biopharma "
+                    "company; ordinary FCFF and mature-company multiples are disabled."
+                ),
+                "enterprise_value",
+                horizon,
+                graph,
+                formula_version,
+                lambda formula_version=formula_version, diagnostic=diagnostic: (
+                    self._biopharma_value(
+                        graph,
+                        plan,
+                        base_request,
+                        spec,
+                        scenario_role,
+                        formula_version=formula_version,
+                        method_diagnostic=diagnostic,
+                    )
+                ),
+                common_refs,
+            )
+            trace: list[dict[str, Any]] = [
+                {
+                    "kind": "biopharma_model_spec",
+                    "scenario_case": scenario_case,
+                    "model_spec": spec.to_dict(),
+                }
+            ]
+            if result.status == "ready":
+                projection = self._biopharma_projection(
+                    graph,
+                    plan,
+                    base_request,
+                    spec,
+                    scenario_role,
+                )
+                trace.append(
+                    {
+                        "kind": "biopharma_selected_projection",
+                        "scenario_case": scenario_case,
+                        "event_probabilities": {
+                            key: _decimal_text(value)
+                            for key, value in projection[
+                                "event_probabilities"
+                            ].items()
+                        },
+                        "asset_cash_flows": list(
+                            projection["asset_cash_flow_trace"]
+                        ),
+                        "corporate_cash_flows": list(
+                            projection["corporate_cash_flow_trace"]
+                        ),
+                        "discount_rate_cases": [
+                            _decimal_text(value)
+                            for value in projection[
+                                "discount_rate_cases"
+                            ]
+                        ],
+                        "enterprise_value_range": [
+                            _decimal_text(value)
+                            for value in projection["values"]
+                        ],
+                        "runway_paths": [
+                            {
+                                **path,
+                                "ending_cash": _decimal_text(
+                                    path["ending_cash"]
+                                ),
+                                "minimum_cash": _decimal_text(
+                                    path["minimum_cash"]
+                                ),
+                                "period_ledger": [
+                                    {
+                                        **entry,
+                                        "opening_cash": _decimal_text(
+                                            entry["opening_cash"]
+                                        ),
+                                        "asset_cash_flow": (
+                                            _decimal_text(
+                                                entry[
+                                                    "asset_cash_flow"
+                                                ]
+                                            )
+                                        ),
+                                        "corporate_cash_burn": (
+                                            _decimal_text(
+                                                entry[
+                                                    "corporate_cash_burn"
+                                                ]
+                                            )
+                                        ),
+                                        "committed_financing": (
+                                            _decimal_text(
+                                                entry[
+                                                    "committed_financing"
+                                                ]
+                                            )
+                                        ),
+                                        "ending_cash": _decimal_text(
+                                            entry["ending_cash"]
+                                        ),
+                                        "minimum_buffer": (
+                                            _decimal_text(
+                                                entry[
+                                                    "minimum_buffer"
+                                                ]
+                                            )
+                                        ),
+                                    }
+                                    for entry in path[
+                                        "period_ledger"
+                                    ]
+                                ],
+                            }
+                            for path in projection["runway_paths"]
+                        ],
+                    }
+                )
+            results.append(
+                replace(
+                    result,
+                    component_trace=tuple(
+                        json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        for item in trace
+                    ),
+                )
+            )
+        return tuple(results)
+
+    def _validate_biopharma_runtime(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: BiopharmaValuationSpec,
+    ) -> None:
+        self._validate_method_bridge(
+            graph,
+            plan.present_value_bridge,
+            base_request,
+        )
+        periods = self._periods(graph)
+        if (
+            tuple(item.period for item in spec.runway_periods) != periods
+            or any(
+                tuple(item.period for item in asset.periods) != periods
+                for asset in spec.assets
+            )
+            or any(event.period not in periods for event in spec.events)
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_PERIOD_COVERAGE_INVALID: events, assets, and runway must bind the routed finite forecast periods."
+            )
+        as_of = self._as_of(graph)
+        top_quantities = (
+            spec.opening_cash,
+            spec.minimum_cash_buffer,
+            spec.discount_rate_low,
+            spec.discount_rate_base,
+            spec.discount_rate_high,
+        )
+        nested_quantities = tuple(
+            quantity
+            for owner in (
+                *spec.events,
+                *spec.assets,
+                *(
+                    period
+                    for asset in spec.assets
+                    for period in asset.periods
+                ),
+                *spec.runway_periods,
+            )
+            for field in fields(owner)
+            for quantity in (getattr(owner, field.name),)
+            if isinstance(
+                quantity,
+                (ForecastQuantity, FinancialQuantity),
+            )
+        )
+        financing_quantities = tuple(
+            quantity
+            for runway in spec.runway_periods
+            if runway.financing is not None
+            for quantity in (
+                runway.financing.proceeds,
+                runway.financing.issue_price,
+                runway.financing.new_shares,
+            )
+        )
+        if any(
+            quantity.as_of != as_of
+            for quantity in (
+                *top_quantities,
+                *nested_quantities,
+                *financing_quantities,
+            )
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_AS_OF_INVALID: every pipeline, probability, licensing, runway, and financing input must bind the frozen valuation as-of."
+            )
+        if (
+            spec.opening_cash.period
+            != plan.present_value_bridge.balance_sheet_period
+            or spec.minimum_cash_buffer.period
+            != plan.present_value_bridge.balance_sheet_period
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_OPENING_PERIOD_INVALID: opening cash and minimum buffer must bind the present-value bridge balance-sheet period."
+            )
+        reporting_currency = base_request.security.reporting_currency
+        money_quantities = tuple(
+            quantity
+            for quantity in (
+                *top_quantities,
+                *nested_quantities,
+                *financing_quantities,
+            )
+            if isinstance(quantity, FinancialQuantity)
+            and quantity.kind == "money"
+        )
+        if any(
+            quantity.currency != reporting_currency
+            or quantity.unit != reporting_currency
+            for quantity in money_quantities
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_CURRENCY_MISMATCH: every pipeline and runway money quantity must use the reporting currency."
+            )
+        if (
+            spec.opening_cash.normalized_value
+            != base_request.data_snapshot.company_opening_balance_sheet.cash.normalized_value
+            or spec.opening_cash.period
+            != base_request.data_snapshot.company_opening_balance_sheet.cash.period
+            or spec.opening_cash.currency
+            != base_request.data_snapshot.company_opening_balance_sheet.cash.currency
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_OPENING_CASH_RECONCILIATION_INVALID: runway opening cash must equal the frozen opening balance-sheet cash used by the equity bridge."
+            )
+        for asset in spec.assets:
+            valuation_date_quantities = (
+                asset.ownership_low,
+                asset.ownership_base,
+                asset.ownership_high,
+                asset.royalty_burden_low,
+                asset.royalty_burden_base,
+                asset.royalty_burden_high,
+                asset.launch_delay_years_low,
+                asset.launch_delay_years_base,
+                asset.launch_delay_years_high,
+                asset.delay_carry_cost_low,
+                asset.delay_carry_cost_base,
+                asset.delay_carry_cost_high,
+            )
+            if any(
+                quantity.period != as_of
+                for quantity in valuation_date_quantities
+            ):
+                raise _MethodBlocked(
+                    "BIOPHARMA_ASSUMPTION_PERIOD_INVALID: ownership, royalties, delay, and delay carry cost must bind the valuation as-of."
+                )
+        if any(
+            quantity.period != as_of
+            for quantity in (
+                spec.discount_rate_low,
+                spec.discount_rate_base,
+                spec.discount_rate_high,
+            )
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_DISCOUNT_RATE_PERIOD_INVALID: discount rates must bind the valuation as-of."
+            )
+        facts = {
+            fact.fact_id: fact
+            for fact in base_request.data_snapshot.facts
+        }
+        opening_facts = tuple(
+            facts.get(ref.removeprefix("Fact:"))
+            for ref in spec.opening_cash.provenance_refs
+        )
+        if (
+            any(fact is None for fact in opening_facts)
+            or not any(
+                fact.subject_id == graph.security_id
+                and fact.scope == "company"
+                and fact.metric_id == "cash"
+                and fact.value == spec.opening_cash.normalized_value
+                and fact.unit == spec.opening_cash.unit
+                and fact.currency == spec.opening_cash.currency
+                and fact.period == spec.opening_cash.period
+                and fact.official
+                and date.fromisoformat(fact.available_at)
+                <= date.fromisoformat(as_of)
+                for fact in opening_facts
+                if fact is not None
+            )
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_OPENING_CASH_EVIDENCE_INVALID: opening cash must resolve exactly through an official frozen fact."
+            )
+        for event in spec.events:
+            resolved = tuple(
+                facts.get(ref.removeprefix("Fact:"))
+                for ref in event.base_fact_refs
+            )
+            if (
+                any(fact is None for fact in resolved)
+                or not any(
+                    fact.subject_id == graph.security_id
+                    and fact.scope == "company"
+                    and fact.metric_id == "biopharma_event_probability"
+                    and fact.field_name == event.event_id
+                    and fact.value
+                    == event.probability_base.normalized_value
+                    and fact.unit == "decimal"
+                    and fact.currency == "N/A"
+                    and fact.period == event.period
+                    and fact.source_id
+                    == event.calibration_record_id
+                    and date.fromisoformat(
+                        event.calibration_window_end
+                    )
+                    <= date.fromisoformat(as_of)
+                    and date.fromisoformat(fact.available_at)
+                    >= date.fromisoformat(
+                        event.calibration_window_end
+                    )
+                    and date.fromisoformat(fact.available_at)
+                    <= date.fromisoformat(as_of)
+                    for fact in resolved
+                    if fact is not None
+                )
+            ):
+                raise _MethodBlocked(
+                    "BIOPHARMA_PROBABILITY_EVIDENCE_INVALID: every event probability must resolve through its exact registered calibration record, method, conditional basis, window, and sample."
+                )
+        for runway in spec.runway_periods:
+            financing = runway.financing
+            if financing is None:
+                continue
+            source_id = f"COMMITTED_FINANCING:{financing.record_id}"
+            expected = (
+                (
+                    "biopharma_financing_proceeds",
+                    financing.proceeds,
+                ),
+                (
+                    "biopharma_financing_issue_price",
+                    financing.issue_price,
+                ),
+                (
+                    "biopharma_financing_new_shares",
+                    financing.new_shares,
+                ),
+            )
+            for metric_id, quantity in expected:
+                resolved = tuple(
+                    facts.get(ref.removeprefix("Fact:"))
+                    for ref in quantity.provenance_refs
+                )
+                if (
+                    any(fact is None for fact in resolved)
+                    or not any(
+                        fact.subject_id == graph.security_id
+                        and fact.scope == "company"
+                        and fact.metric_id == metric_id
+                        and fact.field_name == financing.record_id
+                        and fact.value == quantity.normalized_value
+                        and fact.unit == quantity.unit
+                        and fact.currency == quantity.currency
+                        and fact.period == financing.period
+                        and fact.source_id == source_id
+                        and fact.official
+                        and date.fromisoformat(fact.available_at)
+                        <= date.fromisoformat(as_of)
+                        for fact in resolved
+                        if fact is not None
+                    )
+                ):
+                    raise _MethodBlocked(
+                        "BIOPHARMA_FINANCING_EVIDENCE_INVALID: financing proceeds, issue price, and new shares must resolve exactly to frozen committed terms."
+                    )
+        events = {item.event_id: item for item in spec.events}
+        for asset in spec.assets:
+            closure = self._biopharma_event_closure(
+                events,
+                asset.required_event_ids,
+            )
+            if any(
+                period.milestone_event_id
+                and period.milestone_event_id not in closure
+                for period in asset.periods
+            ):
+                raise _MethodBlocked(
+                    "BIOPHARMA_MILESTONE_EVENT_INVALID: milestone cash must bind an event in the asset's dependency path."
+                )
+
+    def _biopharma_event_closure(
+        self,
+        events: Mapping[str, BiopharmaEventSpec],
+        event_ids: tuple[str, ...],
+    ) -> set[str]:
+        closure: set[str] = set()
+        stack = list(event_ids)
+        while stack:
+            event_id = stack.pop()
+            if event_id in closure:
+                continue
+            closure.add(event_id)
+            stack.extend(events[event_id].parent_event_ids)
+        return closure
+
+    def _biopharma_projection(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: BiopharmaValuationSpec,
+        scenario_role: ScenarioRole,
+    ) -> dict[str, Any]:
+        self._validate_biopharma_runtime(
+            graph,
+            plan,
+            base_request,
+            spec,
+        )
+        scenario_case = {
+            ScenarioRole.STRESS: "low",
+            ScenarioRole.BASE: "base",
+            ScenarioRole.IMPROVEMENT: "high",
+        }[scenario_role]
+        adverse_case = {
+            "low": "high",
+            "base": "base",
+            "high": "low",
+        }[scenario_case]
+        periods = self._periods(graph)
+        valuation_date = date.fromisoformat(self._as_of(graph))
+
+        def period_date(period: str, delay: int = 0) -> date:
+            return date(int(period[:4]) + delay, 12, 31)
+
+        def discount_time(period: str, delay: int = 0) -> Decimal:
+            return Decimal(
+                (period_date(period, delay) - valuation_date).days
+            ) / Decimal("365")
+        events = {item.event_id: item for item in spec.events}
+        event_probabilities = {
+            event.event_id: getattr(
+                event,
+                f"probability_{scenario_case}",
+            ).normalized_value
+            for event in spec.events
+        }
+
+        def probability(event_ids: set[str]) -> Decimal:
+            result = Decimal("1")
+            for event_id in sorted(event_ids):
+                result *= event_probabilities[event_id]
+            return result
+
+        asset_components: dict[
+            str,
+            tuple[tuple[Decimal, Decimal], ...],
+        ] = {}
+        asset_cash_flow_trace: list[dict[str, Any]] = []
+        full_probabilities: dict[str, Decimal] = {}
+        for asset in spec.assets:
+            closure = self._biopharma_event_closure(
+                events,
+                asset.required_event_ids,
+            )
+            full_probability = probability(closure)
+            full_probabilities[
+                f"{asset.asset_id}:{asset.indication_id}"
+            ] = full_probability
+            ownership = getattr(
+                asset,
+                f"ownership_{scenario_case}",
+            ).normalized_value
+            royalty = getattr(
+                asset,
+                f"royalty_burden_{adverse_case}",
+            ).normalized_value
+            delay = getattr(
+                asset,
+                f"launch_delay_years_{adverse_case}",
+            ).normalized_value
+            delay_years = int(delay)
+            carry_cost = getattr(
+                asset,
+                f"delay_carry_cost_{adverse_case}",
+            ).normalized_value
+            components: list[tuple[Decimal, Decimal]] = []
+            for period_spec in asset.periods:
+                period = period_spec.period
+                period_year = int(period[:4])
+                timing = discount_time(period, delay_years)
+                prior_events = {
+                    event_id
+                    for event_id in closure
+                    if int(events[event_id].period[:4]) < period_year
+                }
+                survival_probability = probability(prior_events)
+                gross_sales = getattr(
+                    period_spec,
+                    f"gross_sales_{scenario_case}",
+                ).normalized_value
+                commercial_cost_rate = getattr(
+                    period_spec,
+                    f"commercial_cost_rate_{adverse_case}",
+                ).normalized_value
+                expected_sales = (
+                    gross_sales
+                    * ownership
+                    * (Decimal("1") - royalty)
+                    * (Decimal("1") - commercial_cost_rate)
+                    * full_probability
+                )
+                development_cost = getattr(
+                    period_spec,
+                    f"development_cost_{adverse_case}",
+                ).normalized_value
+                expected_development_cost = (
+                    development_cost * survival_probability
+                )
+                milestone_cash = getattr(
+                    period_spec,
+                    f"milestone_cash_{scenario_case}",
+                ).normalized_value
+                milestone_probability = (
+                    probability(
+                        self._biopharma_event_closure(
+                            events,
+                            (period_spec.milestone_event_id,),
+                        )
+                    )
+                    if period_spec.milestone_event_id
+                    else Decimal("1")
+                )
+                expected_milestone = (
+                    milestone_cash * milestone_probability
+                )
+                components.extend(
+                    (
+                        (expected_sales, timing),
+                        (-expected_development_cost, timing),
+                        (expected_milestone, timing),
+                    )
+                )
+                shifted_period = (
+                    f"{int(period[:4]) + delay_years}E"
+                )
+                asset_cash_flow_trace.extend(
+                    (
+                        {
+                            "asset_key": (
+                                f"{asset.asset_id}:{asset.indication_id}"
+                            ),
+                            "cash_flow_type": "commercial_cash",
+                            "source_period": period,
+                            "shifted_period": shifted_period,
+                            "timing_act365": _decimal_text(timing),
+                            "amount": _decimal_text(expected_sales),
+                        },
+                        {
+                            "asset_key": (
+                                f"{asset.asset_id}:{asset.indication_id}"
+                            ),
+                            "cash_flow_type": "development_cost",
+                            "source_period": period,
+                            "shifted_period": shifted_period,
+                            "timing_act365": _decimal_text(timing),
+                            "amount": _decimal_text(
+                                -expected_development_cost
+                            ),
+                        },
+                        {
+                            "asset_key": (
+                                f"{asset.asset_id}:{asset.indication_id}"
+                            ),
+                            "cash_flow_type": "milestone_cash",
+                            "source_period": period,
+                            "shifted_period": shifted_period,
+                            "timing_act365": _decimal_text(timing),
+                            "amount": _decimal_text(expected_milestone),
+                        },
+                    )
+                )
+            for carry_year in range(1, delay_years + 1):
+                carry_anchor = max(
+                    (
+                        events[event_id].period
+                        for event_id in closure
+                    ),
+                    key=lambda item: int(item[:4]),
+                )
+                carry_timing = discount_time(
+                    carry_anchor,
+                    carry_year,
+                )
+                components.append(
+                    (
+                        -(carry_cost * full_probability),
+                        carry_timing,
+                    )
+                )
+                asset_cash_flow_trace.append(
+                    {
+                        "asset_key": (
+                            f"{asset.asset_id}:{asset.indication_id}"
+                        ),
+                        "cash_flow_type": "delay_carry_cost",
+                        "source_period": carry_anchor,
+                        "shifted_period": (
+                            f"{int(carry_anchor[:4]) + carry_year}E"
+                        ),
+                        "timing_act365": _decimal_text(carry_timing),
+                        "amount": _decimal_text(
+                            -(carry_cost * full_probability)
+                        ),
+                    }
+                )
+            asset_components[
+                f"{asset.asset_id}:{asset.indication_id}"
+            ] = tuple(components)
+
+        rate_cases = (
+            spec.discount_rate_high.normalized_value,
+            spec.discount_rate_base.normalized_value,
+            spec.discount_rate_low.normalized_value,
+        )
+        corporate_components: list[tuple[Decimal, Decimal]] = []
+        corporate_cash_flow_trace: list[dict[str, Any]] = []
+        current_shares = (
+            plan.present_value_bridge.diluted_shares.normalized_value
+        )
+        final_shares = current_shares
+        for runway in spec.runway_periods:
+            burn = getattr(
+                runway,
+                f"corporate_cash_burn_{adverse_case}",
+            ).normalized_value
+            financing = (
+                runway.financing.proceeds.normalized_value
+                if runway.financing is not None
+                else Decimal("0")
+            )
+            if runway.financing is not None:
+                final_shares += (
+                    runway.financing.new_shares.normalized_value
+                )
+            timing = discount_time(runway.period)
+            corporate_components.extend(((-burn, timing), (financing, timing)))
+            corporate_cash_flow_trace.extend(
+                (
+                    {
+                        "cash_flow_type": "corporate_cash_burn",
+                        "period": runway.period,
+                        "timing_act365": _decimal_text(timing),
+                        "amount": _decimal_text(-burn),
+                    },
+                    {
+                        "cash_flow_type": "committed_financing",
+                        "period": runway.period,
+                        "timing_act365": _decimal_text(timing),
+                        "amount": _decimal_text(financing),
+                        "record_id": (
+                            runway.financing.record_id
+                            if runway.financing is not None
+                            else ""
+                        ),
+                        "issue_price": (
+                            _decimal_text(
+                                runway.financing.issue_price.normalized_value
+                            )
+                            if runway.financing is not None
+                            else "0"
+                        ),
+                        "new_shares": (
+                            _decimal_text(
+                                runway.financing.new_shares.normalized_value
+                            )
+                            if runway.financing is not None
+                            else "0"
+                        ),
+                    },
+                )
+            )
+
+        if len(spec.events) > 12:
+            raise _MethodBlocked(
+                "BIOPHARMA_RUNWAY_PATH_LIMIT: more than 12 dependent events requires an explicit path-aggregation model."
+            )
+        ordered_events: list[BiopharmaEventSpec] = []
+        remaining = list(spec.events)
+        while remaining:
+            ready = [
+                event
+                for event in remaining
+                if all(
+                    parent_id in {
+                        item.event_id for item in ordered_events
+                    }
+                    for parent_id in event.parent_event_ids
+                )
+            ]
+            if not ready:
+                raise _MethodBlocked(
+                    "BIOPHARMA_EVENT_DEPENDENCY_INVALID: event paths could not be ordered."
+                )
+            ready.sort(key=lambda item: (item.period, item.event_id))
+            ordered_events.extend(ready)
+            remaining = [
+                item for item in remaining if item not in ready
+            ]
+
+        path_states: list[dict[str, bool]] = [dict()]
+        for event in ordered_events:
+            next_states: list[dict[str, bool]] = []
+            conditional_probability = event_probabilities[event.event_id]
+            for state in path_states:
+                if any(
+                    not state[parent_id]
+                    for parent_id in event.parent_event_ids
+                ):
+                    next_states.append({**state, event.event_id: False})
+                    continue
+                if conditional_probability < 1:
+                    next_states.append({**state, event.event_id: False})
+                if conditional_probability > 0:
+                    next_states.append({**state, event.event_id: True})
+            path_states = next_states
+
+        path_results: list[dict[str, Any]] = []
+        for path_index, state in enumerate(path_states):
+            path_cash_flows = {period: Decimal("0") for period in periods}
+            for asset in spec.assets:
+                closure = self._biopharma_event_closure(
+                    events,
+                    asset.required_event_ids,
+                )
+                ownership = getattr(
+                    asset, f"ownership_{scenario_case}"
+                ).normalized_value
+                royalty = getattr(
+                    asset, f"royalty_burden_{adverse_case}"
+                ).normalized_value
+                delay_years = int(
+                    getattr(
+                        asset,
+                        f"launch_delay_years_{adverse_case}",
+                    ).normalized_value
+                )
+                for period_spec in asset.periods:
+                    shifted_year = int(period_spec.period[:4]) + delay_years
+                    development_cost = getattr(
+                        period_spec,
+                        f"development_cost_{adverse_case}",
+                    ).normalized_value
+                    milestone_cash = getattr(
+                        period_spec,
+                        f"milestone_cash_{scenario_case}",
+                    ).normalized_value
+                    shifted_period = next(
+                        (
+                            item
+                            for item in periods
+                            if int(item[:4]) == shifted_year
+                        ),
+                        "",
+                    )
+                    if not shifted_period:
+                        if development_cost > 0 or milestone_cash < 0:
+                            raise _MethodBlocked(
+                                "BIOPHARMA_RUNWAY_COVERAGE_INSUFFICIENT: "
+                                f"{asset.asset_id}:{asset.indication_id} has a delayed cash obligation in {shifted_year}E beyond the declared runway."
+                            )
+                        continue
+                    prior_events = {
+                        event_id
+                        for event_id in closure
+                        if int(events[event_id].period[:4])
+                        < int(period_spec.period[:4])
+                    }
+                    if all(state[event_id] for event_id in prior_events):
+                        path_cash_flows[shifted_period] -= development_cost
+                    if (
+                        not period_spec.milestone_event_id
+                        or state[period_spec.milestone_event_id]
+                    ):
+                        path_cash_flows[shifted_period] += milestone_cash
+                    if all(state[event_id] for event_id in closure):
+                        gross_sales = getattr(
+                            period_spec,
+                            f"gross_sales_{scenario_case}",
+                        ).normalized_value
+                        cost_rate = getattr(
+                            period_spec,
+                            f"commercial_cost_rate_{adverse_case}",
+                        ).normalized_value
+                        path_cash_flows[shifted_period] += (
+                            gross_sales
+                            * ownership
+                            * (Decimal("1") - royalty)
+                            * (Decimal("1") - cost_rate)
+                        )
+                carry_cost = getattr(
+                    asset,
+                    f"delay_carry_cost_{adverse_case}",
+                ).normalized_value
+                if delay_years and all(
+                    state[event_id] for event_id in closure
+                ):
+                    carry_anchor_year = max(
+                        int(events[event_id].period[:4])
+                        for event_id in closure
+                    )
+                    for carry_year in range(1, delay_years + 1):
+                        shifted_year = carry_anchor_year + carry_year
+                        shifted_period = next(
+                            (
+                                item
+                                for item in periods
+                                if int(item[:4]) == shifted_year
+                            ),
+                            "",
+                        )
+                        if not shifted_period and carry_cost > 0:
+                            raise _MethodBlocked(
+                                "BIOPHARMA_RUNWAY_COVERAGE_INSUFFICIENT: "
+                                f"{asset.asset_id}:{asset.indication_id} has delay carry cost in {shifted_year}E beyond the declared runway."
+                            )
+                        if shifted_period:
+                            path_cash_flows[shifted_period] -= carry_cost
+            cash = spec.opening_cash.normalized_value
+            minimum_cash = cash
+            breach_period = ""
+            period_ledger: list[dict[str, Any]] = []
+            for runway in spec.runway_periods:
+                financing = (
+                    runway.financing.proceeds.normalized_value
+                    if runway.financing is not None
+                    else Decimal("0")
+                )
+                burn = getattr(
+                    runway,
+                    f"corporate_cash_burn_{adverse_case}",
+                ).normalized_value
+                opening_cash = cash
+                cash += path_cash_flows[runway.period] - burn + financing
+                minimum_cash = min(minimum_cash, cash)
+                period_ledger.append(
+                    {
+                        "period": runway.period,
+                        "opening_cash": opening_cash,
+                        "asset_cash_flow": path_cash_flows[
+                            runway.period
+                        ],
+                        "corporate_cash_burn": burn,
+                        "committed_financing": financing,
+                        "ending_cash": cash,
+                        "minimum_buffer": (
+                            spec.minimum_cash_buffer.normalized_value
+                        ),
+                        "above_buffer": (
+                            cash
+                            >= spec.minimum_cash_buffer.normalized_value
+                        ),
+                    }
+                )
+                if (
+                    not breach_period
+                    and cash < spec.minimum_cash_buffer.normalized_value
+                ):
+                    breach_period = runway.period
+            path_results.append(
+                {
+                    "path_id": path_index,
+                    "events": dict(sorted(state.items())),
+                    "ending_cash": cash,
+                    "minimum_cash": minimum_cash,
+                    "breach_period": breach_period,
+                    "period_ledger": tuple(period_ledger),
+                }
+            )
+        breached = next(
+            (
+                item
+                for item in path_results
+                if item["breach_period"]
+            ),
+            None,
+        )
+        if breached is not None:
+            raise _MethodBlocked(
+                "BIOPHARMA_RUNWAY_PATH_BREACH: "
+                f"path={breached['path_id']} falls below the minimum buffer in {breached['breach_period']}."
+            )
+        minimum_path = min(
+            path_results,
+            key=lambda item: item["minimum_cash"],
+        )
+        ending_path = min(
+            path_results,
+            key=lambda item: item["ending_cash"],
+        )
+        cumulative_dilution = final_shares / current_shares
+        asset_values_by_rate: list[dict[str, Decimal]] = []
+        total_values: list[Decimal] = []
+        for rate in rate_cases:
+            by_asset = {
+                asset_key: sum(
+                    (
+                        cash_flow
+                        / ((Decimal("1") + rate) ** timing)
+                        for cash_flow, timing in components
+                    ),
+                    Decimal("0"),
+                )
+                for asset_key, components in asset_components.items()
+            }
+            corporate_value = sum(
+                (
+                    cash_flow
+                    / ((Decimal("1") + rate) ** timing)
+                    for cash_flow, timing in corporate_components
+                ),
+                Decimal("0"),
+            )
+            asset_values_by_rate.append(by_asset)
+            total_values.append(
+                sum(by_asset.values(), Decimal("0"))
+                + corporate_value
+            )
+        values = (
+            min(total_values),
+            total_values[1],
+            max(total_values),
+        )
+        return {
+            "scenario_case": scenario_case,
+            "values": values,
+            "asset_values_by_rate": tuple(asset_values_by_rate),
+            "event_probabilities": event_probabilities,
+            "full_probabilities": full_probabilities,
+            "ending_cash": ending_path["ending_cash"],
+            "minimum_cash": minimum_path["minimum_cash"],
+            "dilution": cumulative_dilution,
+            "runway_paths": tuple(path_results),
+            "asset_cash_flow_trace": tuple(asset_cash_flow_trace),
+            "corporate_cash_flow_trace": tuple(
+                corporate_cash_flow_trace
+            ),
+            "discount_rate_cases": rate_cases,
+        }
+
+    def _biopharma_value(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: BiopharmaValuationSpec,
+        scenario_role: ScenarioRole,
+        *,
+        formula_version: str,
+        method_diagnostic: str,
+    ) -> MethodCalculationResult:
+        projection = self._biopharma_projection(
+            graph,
+            plan,
+            base_request,
+            spec,
+            scenario_role,
+        )
+        lineage = _merge_refs(
+            spec.lineage_refs,
+            graph.quantity(
+                f"biopharma.horizon.{self._periods(graph)[0]}"
+            ).lineage_refs,
+            (
+                "Assumption:biopharma_scenario_case:"
+                f"{projection['scenario_case']}",
+                f"Assumption:formula:{formula_version}",
+            ),
+        )
+        dilution = projection["dilution"]
+        value_range = self._bridge_range(
+            graph,
+            plan.present_value_bridge,
+            "enterprise_value",
+            projection["values"],
+            formula_version,
+            basis_period=plan.present_value_bridge.balance_sheet_period,
+            basis_refs=lineage,
+            share_multipliers=(dilution, dilution, dilution),
+            share_multiplier_ref_prefix="biopharma_cumulative_dilution",
+        )
+        if any(
+            point.equity_value.normalized_value <= 0
+            for point in (
+                value_range.low,
+                value_range.base,
+                value_range.high,
+            )
+        ):
+            raise _MethodBlocked(
+                "BIOPHARMA_COMMON_EQUITY_INVALID: enterprise pipeline value less debt, preferred claims, and other bridge adjustments does not support positive common equity."
+            )
+        reporting_currency = base_request.security.reporting_currency
+        ending_cash = ForecastQuantity(
+            value=projection["ending_cash"],
+            unit=reporting_currency,
+            scale=Decimal("1"),
+            currency=reporting_currency,
+            period=self._periods(graph)[-1],
+            as_of=self._as_of(graph),
+            lineage_refs=lineage,
+        )
+        minimum_cash = ForecastQuantity(
+            value=projection["minimum_cash"],
+            unit=reporting_currency,
+            scale=Decimal("1"),
+            currency=reporting_currency,
+            period=self._periods(graph)[-1],
+            as_of=self._as_of(graph),
+            lineage_refs=lineage,
+        )
+        dilution_quantity = self._model_quantity(
+            dilution,
+            unit="x",
+            period=self._periods(graph)[-1],
+            as_of=self._as_of(graph),
+            refs=lineage,
+        )
+        assumptions = (
+            ValuationAssumption(
+                "discount_rate",
+                spec.discount_rate_base,
+            ),
+            ValuationAssumption(
+                "ending_cash_after_committed_financing",
+                ending_cash,
+            ),
+            ValuationAssumption(
+                "minimum_cash_during_runway",
+                minimum_cash,
+            ),
+            ValuationAssumption(
+                "cumulative_dilution_factor",
+                dilution_quantity,
+            ),
+        )
+        sensitivity = (
+            ValuationSensitivity(
+                "discount_rate",
+                spec.discount_rate_low,
+                spec.discount_rate_base,
+                spec.discount_rate_high,
+            ),
+            *(
+                ValuationSensitivity(
+                    f"event_probability:{event.event_id}",
+                    event.probability_low,
+                    event.probability_base,
+                    event.probability_high,
+                )
+                for event in spec.events
+            ),
+            *(
+                ValuationSensitivity(
+                    f"ownership:{asset.asset_id}:{asset.indication_id}",
+                    asset.ownership_low,
+                    asset.ownership_base,
+                    asset.ownership_high,
+                )
+                for asset in spec.assets
+            ),
+            *(
+                ValuationSensitivity(
+                    f"royalty_burden:{asset.asset_id}:{asset.indication_id}",
+                    asset.royalty_burden_low,
+                    asset.royalty_burden_base,
+                    asset.royalty_burden_high,
+                )
+                for asset in spec.assets
+            ),
+            *(
+                ValuationSensitivity(
+                    f"launch_delay:{asset.asset_id}:{asset.indication_id}",
+                    asset.launch_delay_years_low,
+                    asset.launch_delay_years_base,
+                    asset.launch_delay_years_high,
+                )
+                for asset in spec.assets
+            ),
+        )
+        base_asset_values = projection["asset_values_by_rate"][1]
+        diagnostics = (
+            method_diagnostic,
+            (
+                "Scenario event probabilities: "
+                + ", ".join(
+                    f"{event_id}={_decimal_text(value)}"
+                    for event_id, value in sorted(
+                        projection["event_probabilities"].items()
+                    )
+                )
+            ),
+            (
+                "Base-rate unique-right SOTP contributions: "
+                + ", ".join(
+                    f"{asset_key}={_decimal_text(value)}"
+                    for asset_key, value in sorted(
+                        base_asset_values.items()
+                    )
+                )
+            ),
+            (
+                "Asset cumulative success probabilities: "
+                + ", ".join(
+                    f"{asset_key}={_decimal_text(value)}"
+                    for asset_key, value in sorted(
+                        projection["full_probabilities"].items()
+                    )
+                )
+            ),
+            (
+                "Cash runway remains above the declared buffer after committed "
+                f"financing; minimum={_decimal_text(projection['minimum_cash'])}, "
+                f"ending={_decimal_text(projection['ending_cash'])}, cumulative "
+                f"dilution={_decimal_text(dilution)}."
+            ),
+            "Financing proceeds enter post-financing equity value and cash runway together with their declared share dilution; no issuance economics are invented.",
+            "Low/high conditional bounds are the minimum and maximum audited discount-rate cases around the declared base case because early development outflows can make rNPV non-monotonic in the discount rate.",
+            "Only declared asset/indication economic rights are valued; platform know-how or technical reserves receive no automatic mature-revenue or full-probability value.",
+            "Shared parent events are evaluated once per asset dependency closure, preserving correlated failure exposure without duplicate probability multiplication.",
+        )
+        return value_range, assumptions, sensitivity, lineage, diagnostics
+
     def _bridge_range(
         self,
         graph: ForecastGraph,
@@ -5179,6 +7390,7 @@ class ScenarioValuationEngine:
             Decimal("1"),
             Decimal("1"),
         ),
+        share_multiplier_ref_prefix: str = "cumulative_dilution",
     ) -> ConditionalValueRange:
         refs = _merge_refs(
             basis_refs,
@@ -5193,6 +7405,7 @@ class ScenarioValuationEngine:
                 basis_period,
                 refs,
                 share_multiplier,
+                share_multiplier_ref_prefix,
             )
             for value, share_multiplier in zip(
                 values,
@@ -5215,6 +7428,7 @@ class ScenarioValuationEngine:
         basis_period: str,
         refs: tuple[str, ...],
         share_multiplier: Decimal = Decimal("1"),
+        share_multiplier_ref_prefix: str = "cumulative_dilution",
     ) -> ValuationPoint:
         if share_multiplier <= 0:
             raise _MethodBlocked(
@@ -5276,7 +7490,7 @@ class ScenarioValuationEngine:
                 provenance_refs=_merge_refs(
                     diluted_shares.provenance_refs,
                     (
-                        "Assumption:financial_cumulative_dilution:"
+                        f"Assumption:{share_multiplier_ref_prefix}:"
                         f"{_decimal_text(share_multiplier)}",
                     ),
                 ),
@@ -5578,6 +7792,12 @@ class ScenarioValuationEngine:
                 for node in graph.nodes
                 if node.node_id.startswith("financial.horizon.")
             )
+        if not periods and graph.template_id == "biopharma_pipeline_valuation_shell@1":
+            periods = tuple(
+                node.quantity.period
+                for node in graph.nodes
+                if node.node_id.startswith("biopharma.horizon.")
+            )
         if not periods:
             raise ForecastInvariantError(
                 "FORECAST_VALUATION_INPUT_MISSING",
@@ -5591,7 +7811,12 @@ class ScenarioValuationEngine:
             f"financial.horizon.{first_period}"
             if graph.template_id
             == "financial_institution_valuation_shell@1"
-            else f"valuation.fcff.{first_period}"
+            else (
+                f"biopharma.horizon.{first_period}"
+                if graph.template_id
+                == "biopharma_pipeline_valuation_shell@1"
+                else f"valuation.fcff.{first_period}"
+            )
         )
         return graph.quantity(node_id).as_of
 
@@ -5600,6 +7825,12 @@ class ScenarioValuationEngine:
             *(
                 node.lineage_refs
                 for node in graph.nodes
-                if node.node_id.startswith("valuation.fcff.")
+                if node.node_id.startswith(
+                    (
+                        "valuation.fcff.",
+                        "financial.horizon.",
+                        "biopharma.horizon.",
+                    )
+                )
             )
         )

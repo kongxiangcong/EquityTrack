@@ -442,6 +442,40 @@ def test_forecast_router_uses_dedicated_financial_institution_shell() -> None:
     assert all(edge.period_rule == "prior" for edge in graph.edges)
 
 
+def test_forecast_router_uses_dedicated_biopharma_pipeline_shell() -> None:
+    subject = request()
+    biopharma_security = replace(
+        subject.security,
+        archetype=CompanyArchetype.BIOPHARMA,
+    )
+
+    graph = ForecastEngine().build(
+        replace(subject, security=biopharma_security)
+    )
+
+    assert graph.template_id == "biopharma_pipeline_valuation_shell@1"
+    assert "Ordinary FCFF/WACC" in graph.routing_explanation
+    opening_period = (
+        subject.data_snapshot.company_opening_balance_sheet.cash.period
+    )
+    assert {
+        node.node_id
+        for node in graph.nodes
+        if node.node_id.startswith("company.baseline.")
+    } == {
+        f"company.baseline.cash.{opening_period}",
+        f"company.baseline.debt.{opening_period}",
+    }
+    assert all(
+        node.node_id.startswith(
+            ("biopharma.horizon.", "company.baseline.")
+        )
+        for node in graph.nodes
+    )
+    assert len(graph.edges) == len(subject.forecast_periods) - 1
+    assert all(edge.period_rule == "prior" for edge in graph.edges)
+
+
 def test_snapshot_hash_binds_security_and_typed_content() -> None:
     subject = request()
     snapshot = subject.data_snapshot

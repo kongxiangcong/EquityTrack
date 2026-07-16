@@ -1462,6 +1462,8 @@ class ForecastEngine:
             == CompanyArchetype.FINANCIAL_INSTITUTION
         ):
             return self._build_financial_institution_shell(request)
+        if request.security.archetype == CompanyArchetype.BIOPHARMA:
+            return self._build_biopharma_shell(request)
         if request.security.archetype not in {
             CompanyArchetype.GENERAL_MANUFACTURING,
             CompanyArchetype.MULTI_SEGMENT_MANUFACTURING,
@@ -1686,6 +1688,111 @@ class ForecastEngine:
                 "Routed financial-institution economics to a dedicated regulatory-capital, "
                 "clean-surplus, dividend, and residual-income valuation shell. Industrial "
                 "FCFF/WACC and manufacturing operating templates are disabled."
+            ),
+            nodes=nodes,
+            edges=edges,
+        )
+
+    def _build_biopharma_shell(
+        self,
+        request: ForecastRequest,
+    ) -> ForecastGraph:
+        override_payload = [
+            item.to_dict() for item in request.assumption_overrides
+        ]
+        override_hash = hashlib.sha256(
+            json.dumps(
+                override_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        first_period = request.forecast_periods[0]
+        opening = request.data_snapshot.company_opening_balance_sheet
+        opening_nodes = [
+            self._input_node(
+                request,
+                node_id=f"company.baseline.{metric}.{quantity.period}",
+                label=f"company frozen {metric}",
+                quantity=quantity,
+            )
+            for metric, quantity in (
+                ("cash", opening.cash),
+                ("debt", opening.debt),
+            )
+        ]
+        first = self._input_node(
+            request,
+            node_id=f"biopharma.horizon.{first_period}",
+            label=f"biopharma pipeline forecast horizon {first_period}",
+            quantity=self._quantity(
+                Decimal("1"),
+                unit="count",
+                currency="N/A",
+                period=first_period,
+                as_of=request.as_of,
+                lineage_refs=(
+                    f"Assumption:biopharma_horizon:{first_period}",
+                    f"Assumption:biopharma_scenario_overrides:{override_hash}",
+                ),
+            ),
+        )
+        built_nodes = [*opening_nodes, first]
+        built_edges: list[ForecastEdge] = []
+        previous = first
+        for period in request.forecast_periods[1:]:
+            node, node_edges = self._derived_node(
+                request,
+                node_id=f"biopharma.horizon.{period}",
+                kind=ForecastNodeKind.DRIVER,
+                label=f"biopharma pipeline forecast horizon {period}",
+                period=period,
+                unit="count",
+                currency="N/A",
+                formula=FormulaId.PASSTHROUGH,
+                operands=(("value", previous, Decimal("1")),),
+                probability=Decimal("1"),
+            )
+            built_nodes.append(node)
+            built_edges.extend(node_edges)
+            previous = node
+        nodes = tuple(built_nodes)
+        edges = tuple(built_edges)
+        identity_payload = {
+            "template_id": "biopharma_pipeline_valuation_shell@1",
+            "security_id": request.security.security_id,
+            "snapshot_id": request.data_snapshot.snapshot_id,
+            "snapshot_hash": request.data_snapshot.content_hash,
+            "periods": list(request.forecast_periods),
+            "review_date": request.review_date,
+            "assumption_overrides": override_payload,
+            "nodes": [
+                {
+                    "node_id": node.node_id,
+                    "quantity": node.quantity.to_dict(),
+                }
+                for node in nodes
+            ],
+            "edges": [edge.to_dict() for edge in edges],
+        }
+        identity = hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return ForecastGraph(
+            graph_id=f"fg_{identity[:24]}",
+            security_id=request.security.security_id,
+            data_snapshot_id=request.data_snapshot.snapshot_id,
+            template_id="biopharma_pipeline_valuation_shell@1",
+            routing_explanation=(
+                "Routed pre-revenue and pipeline-driven biopharma through an asset/indication "
+                "event tree, finite rNPV/SOTP, licensing economics, and cash-runway gate. "
+                "Ordinary FCFF/WACC and mature-revenue manufacturing templates are disabled."
             ),
             nodes=nodes,
             edges=edges,

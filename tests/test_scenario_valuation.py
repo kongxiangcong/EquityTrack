@@ -2,10 +2,17 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import date
 from decimal import Context, Decimal, localcontext
+import json
 
 import pytest
 
 from equity_research import (
+    BiopharmaAssetSpec,
+    BiopharmaCashFlowPeriodSpec,
+    BiopharmaEventSpec,
+    BiopharmaFinancingSpec,
+    BiopharmaRunwayPeriodSpec,
+    BiopharmaValuationSpec,
     CommodityCurvePoint,
     CompanyArchetype,
     DcfApplicability,
@@ -120,6 +127,24 @@ def shares(
         as_of=AS_OF,
         provenance_refs=provenance_refs,
         kind="shares",
+    )
+
+
+def per_share(
+    value: str,
+    ref: str,
+    *,
+    period: str,
+) -> FinancialQuantity:
+    return FinancialQuantity(
+        value=Decimal(value),
+        unit="CNY/share",
+        scale=Decimal("1"),
+        currency="CNY",
+        period=period,
+        as_of=AS_OF,
+        provenance_refs=(f"Fact:{ref}",),
+        kind="per_share",
     )
 
 
@@ -1172,6 +1197,531 @@ def financial_request(
     )
 
 
+def biopharma_event(
+    event_id: str,
+    event_type: str,
+    period: str,
+    probabilities: tuple[str, str, str],
+    *,
+    parents: tuple[str, ...] = (),
+) -> BiopharmaEventSpec:
+    probability_basis = (
+        "conditional_on_parents" if parents else "standalone"
+    )
+    calibration_version = "biopharma-pos-calibration@2026-07"
+    calibration_method_version = "beta-binomial-stage-benchmark@1"
+    calibration_window_start = "2016-01-01"
+    calibration_window_end = "2025-12-31"
+    calibration_sample_size = 1200
+    calibration_record_id = (
+        "BIOPHARMA_POS_CALIBRATION:"
+        f"{event_id}:"
+        f"{calibration_version}:"
+        f"{calibration_method_version}:"
+        f"{probability_basis}:"
+        f"{calibration_window_start}:"
+        f"{calibration_window_end}:"
+        f"n={calibration_sample_size}"
+    )
+    fact_ref = f"Fact:{calibration_record_id}"
+    return BiopharmaEventSpec(
+        event_id=event_id,
+        event_type=event_type,
+        probability_basis=probability_basis,
+        period=period,
+        parent_event_ids=parents,
+        probability_low=model_quantity(
+            probabilities[0],
+            "decimal",
+            (
+                fact_ref,
+                f"Assumption:biopharma_probability:{event_id}:low",
+            ),
+            period=period,
+        ),
+        probability_base=model_quantity(
+            probabilities[1],
+            "decimal",
+            fact_ref,
+            period=period,
+        ),
+        probability_high=model_quantity(
+            probabilities[2],
+            "decimal",
+            (
+                fact_ref,
+                f"Assumption:biopharma_probability:{event_id}:high",
+            ),
+            period=period,
+        ),
+        calibration_version=calibration_version,
+        calibration_method_version=calibration_method_version,
+        calibration_window_start=calibration_window_start,
+        calibration_window_end=calibration_window_end,
+        calibration_sample_size=calibration_sample_size,
+        calibration_record_id=calibration_record_id,
+    )
+
+
+def biopharma_asset(
+    asset_id: str,
+    indication_id: str,
+    economic_right_id: str,
+    required_event_id: str,
+    sales: tuple[str, ...],
+    development_costs: tuple[str, ...],
+    *,
+    launch_event_period: str,
+    ownership: tuple[str, str, str],
+) -> BiopharmaAssetSpec:
+    periods = []
+    for index, period in enumerate(FORECAST_PERIODS):
+        sales_base = Decimal(sales[index])
+        development_base = Decimal(development_costs[index])
+        if period == "2026E":
+            milestone_values = ("-25", "-20", "-15")
+            milestone_event_id = "shared_phase2"
+        elif period == launch_event_period:
+            milestone_values = ("20", "30", "40")
+            milestone_event_id = required_event_id
+        else:
+            milestone_values = ("0", "0", "0")
+            milestone_event_id = ""
+        periods.append(
+            BiopharmaCashFlowPeriodSpec(
+                period=period,
+                gross_sales_low=money(
+                    str(sales_base * Decimal("0.70")),
+                    f"{asset_id}:gross_sales:low",
+                    period=period,
+                ),
+                gross_sales_base=money(
+                    str(sales_base),
+                    f"{asset_id}:gross_sales:base",
+                    period=period,
+                ),
+                gross_sales_high=money(
+                    str(sales_base * Decimal("1.30")),
+                    f"{asset_id}:gross_sales:high",
+                    period=period,
+                ),
+                development_cost_low=money(
+                    str(development_base * Decimal("0.80")),
+                    f"{asset_id}:development_cost:low",
+                    period=period,
+                ),
+                development_cost_base=money(
+                    str(development_base),
+                    f"{asset_id}:development_cost:base",
+                    period=period,
+                ),
+                development_cost_high=money(
+                    str(development_base * Decimal("1.25")),
+                    f"{asset_id}:development_cost:high",
+                    period=period,
+                ),
+                milestone_cash_low=money(
+                    milestone_values[0],
+                    f"{asset_id}:milestone_cash:low",
+                    period=period,
+                ),
+                milestone_cash_base=money(
+                    milestone_values[1],
+                    f"{asset_id}:milestone_cash:base",
+                    period=period,
+                ),
+                milestone_cash_high=money(
+                    milestone_values[2],
+                    f"{asset_id}:milestone_cash:high",
+                    period=period,
+                ),
+                milestone_event_id=milestone_event_id,
+                commercial_cost_rate_low=model_quantity(
+                    "0.20",
+                    "decimal",
+                    f"Assumption:{asset_id}:commercial_cost_rate:low",
+                    period=period,
+                ),
+                commercial_cost_rate_base=model_quantity(
+                    "0.25",
+                    "decimal",
+                    f"Assumption:{asset_id}:commercial_cost_rate:base",
+                    period=period,
+                ),
+                commercial_cost_rate_high=model_quantity(
+                    "0.30",
+                    "decimal",
+                    f"Assumption:{asset_id}:commercial_cost_rate:high",
+                    period=period,
+                ),
+            )
+        )
+    return BiopharmaAssetSpec(
+        asset_id=asset_id,
+        indication_id=indication_id,
+        economic_right_id=economic_right_id,
+        development_stage="phase2",
+        required_event_ids=(required_event_id,),
+        ownership_low=model_quantity(
+            ownership[0],
+            "decimal",
+            f"Assumption:{asset_id}:ownership:low",
+            period=AS_OF,
+        ),
+        ownership_base=model_quantity(
+            ownership[1],
+            "decimal",
+            f"Assumption:{asset_id}:ownership:base",
+            period=AS_OF,
+        ),
+        ownership_high=model_quantity(
+            ownership[2],
+            "decimal",
+            f"Assumption:{asset_id}:ownership:high",
+            period=AS_OF,
+        ),
+        royalty_burden_low=model_quantity(
+            "0.10",
+            "decimal",
+            f"Assumption:{asset_id}:royalty_burden:low",
+            period=AS_OF,
+        ),
+        royalty_burden_base=model_quantity(
+            "0.15",
+            "decimal",
+            f"Assumption:{asset_id}:royalty_burden:base",
+            period=AS_OF,
+        ),
+        royalty_burden_high=model_quantity(
+            "0.20",
+            "decimal",
+            f"Assumption:{asset_id}:royalty_burden:high",
+            period=AS_OF,
+        ),
+        launch_delay_years_low=model_quantity(
+            "0",
+            "years",
+            f"Assumption:{asset_id}:launch_delay:low",
+            period=AS_OF,
+        ),
+        launch_delay_years_base=model_quantity(
+            "0",
+            "years",
+            f"Assumption:{asset_id}:launch_delay:base",
+            period=AS_OF,
+        ),
+        launch_delay_years_high=model_quantity(
+            "1",
+            "years",
+            f"Assumption:{asset_id}:launch_delay:high",
+            period=AS_OF,
+        ),
+        delay_carry_cost_low=money(
+            "25",
+            f"{asset_id}:delay_carry_cost:low",
+            period=AS_OF,
+        ),
+        delay_carry_cost_base=money(
+            "50",
+            f"{asset_id}:delay_carry_cost:base",
+            period=AS_OF,
+        ),
+        delay_carry_cost_high=money(
+            "75",
+            f"{asset_id}:delay_carry_cost:high",
+            period=AS_OF,
+        ),
+        periods=tuple(periods),
+    )
+
+
+def biopharma_spec(
+    *,
+    opening_cash: str = "1000",
+) -> BiopharmaValuationSpec:
+    events = (
+        biopharma_event(
+            "shared_phase2",
+            "clinical",
+            "2026E",
+            ("0.40", "0.60", "0.80"),
+        ),
+        biopharma_event(
+            "asset_a_regulatory",
+            "regulatory",
+            "2027E",
+            ("0.50", "0.70", "0.85"),
+            parents=("shared_phase2",),
+        ),
+        biopharma_event(
+            "asset_a_launch",
+            "commercial",
+            "2028E",
+            ("0.60", "0.80", "0.90"),
+            parents=("asset_a_regulatory",),
+        ),
+        biopharma_event(
+            "asset_b_regulatory",
+            "regulatory",
+            "2027E",
+            ("0.45", "0.65", "0.80"),
+            parents=("shared_phase2",),
+        ),
+        biopharma_event(
+            "asset_b_launch",
+            "commercial",
+            "2029E",
+            ("0.55", "0.75", "0.90"),
+            parents=("asset_b_regulatory",),
+        ),
+    )
+    assets = (
+        biopharma_asset(
+            "asset_a",
+            "indication_alpha",
+            "right_asset_a_alpha",
+            "asset_a_launch",
+            ("0", "0", "100", "300", "500"),
+            ("60", "45", "25", "10", "0"),
+            launch_event_period="2028E",
+            ownership=("0.50", "0.60", "0.70"),
+        ),
+        biopharma_asset(
+            "asset_b",
+            "indication_beta",
+            "right_asset_b_beta",
+            "asset_b_launch",
+            ("0", "0", "0", "150", "350"),
+            ("50", "40", "30", "15", "0"),
+            launch_event_period="2029E",
+            ownership=("0.40", "0.50", "0.60"),
+        ),
+    )
+    runway_periods = tuple(
+        BiopharmaRunwayPeriodSpec(
+            period=period,
+            corporate_cash_burn_low=money(
+                "20",
+                f"corporate_cash_burn:{period}:low",
+                period=period,
+            ),
+            corporate_cash_burn_base=money(
+                "30",
+                f"corporate_cash_burn:{period}:base",
+                period=period,
+            ),
+            corporate_cash_burn_high=money(
+                "45",
+                f"corporate_cash_burn:{period}:high",
+                period=period,
+            ),
+            financing=(
+                BiopharmaFinancingSpec(
+                    record_id="financing_2028",
+                    period=period,
+                    proceeds=money(
+                        "80",
+                        "financing_2028:proceeds",
+                        period=period,
+                        provenance_refs=(
+                            "Fact:financing_2028:proceeds",
+                        ),
+                    ),
+                    issue_price=per_share(
+                        "8",
+                        "financing_2028:issue_price",
+                        period=period,
+                    ),
+                    new_shares=shares(
+                        period,
+                        "10",
+                        provenance_refs=(
+                            "Fact:financing_2028:new_shares",
+                        ),
+                    ),
+                )
+                if period == "2028E"
+                else None
+            ),
+        )
+        for period in FORECAST_PERIODS
+    )
+    return BiopharmaValuationSpec(
+        events=events,
+        assets=assets,
+        opening_cash=money(
+            opening_cash,
+            "biopharma_opening_cash",
+            period=OPENING_PERIOD,
+            provenance_refs=("Fact:biopharma_opening_cash",),
+        ),
+        minimum_cash_buffer=money(
+            "25",
+            "biopharma_minimum_cash_buffer",
+            period=OPENING_PERIOD,
+        ),
+        discount_rate_low=model_quantity(
+            "0.12",
+            "decimal",
+            "Assumption:biopharma_discount_rate:low",
+            period=AS_OF,
+        ),
+        discount_rate_base=model_quantity(
+            "0.15",
+            "decimal",
+            "Assumption:biopharma_discount_rate:base",
+            period=AS_OF,
+        ),
+        discount_rate_high=model_quantity(
+            "0.18",
+            "decimal",
+            "Assumption:biopharma_discount_rate:high",
+            period=AS_OF,
+        ),
+        runway_periods=runway_periods,
+    )
+
+
+def biopharma_request(
+    *,
+    spec: BiopharmaValuationSpec | None = None,
+) -> DeterministicScenarioRequest:
+    subject = scenario_request()
+    pipeline_spec = spec or biopharma_spec()
+    base = replace(
+        subject.base_forecast_request,
+        security=replace(
+            subject.base_forecast_request.security,
+            archetype=CompanyArchetype.BIOPHARMA,
+        ),
+    )
+    opening = base.data_snapshot.company_opening_balance_sheet
+    cash_delta = (
+        pipeline_spec.opening_cash.normalized_value
+        - opening.cash.normalized_value
+    )
+    opening_cash = replace(
+        opening.cash,
+        value=pipeline_spec.opening_cash.normalized_value,
+        lineage_refs=pipeline_spec.opening_cash.provenance_refs,
+    )
+    opening_equity = replace(
+        opening.equity,
+        value=opening.equity.normalized_value + cash_delta,
+        lineage_refs=("Fact:biopharma_opening_equity",),
+    )
+    opening = replace(
+        opening,
+        cash=opening_cash,
+        equity=opening_equity,
+    )
+    facts = (
+        SnapshotFact(
+            fact_id="biopharma_opening_cash",
+            subject_id=base.security.security_id,
+            scope="company",
+            segment_id="",
+            metric_id="cash",
+            field_name="cash",
+            period=pipeline_spec.opening_cash.period,
+            value=pipeline_spec.opening_cash.normalized_value,
+            unit=pipeline_spec.opening_cash.unit,
+            currency=pipeline_spec.opening_cash.currency,
+            source_id="OFFICIAL_BIOPHARMA_DISCLOSURE",
+            available_at=AS_OF,
+            official=True,
+        ),
+        SnapshotFact(
+            fact_id="biopharma_opening_equity",
+            subject_id=base.security.security_id,
+            scope="company",
+            segment_id="",
+            metric_id="equity",
+            field_name="equity",
+            period=opening_equity.period,
+            value=opening_equity.normalized_value,
+            unit=opening_equity.unit,
+            currency=opening_equity.currency,
+            source_id="OFFICIAL_BIOPHARMA_DISCLOSURE",
+            available_at=AS_OF,
+            official=True,
+        ),
+        *(
+            SnapshotFact(
+                fact_id=event.base_fact_refs[0].removeprefix("Fact:"),
+                subject_id=base.security.security_id,
+                scope="company",
+                segment_id="",
+                metric_id="biopharma_event_probability",
+                field_name=event.event_id,
+                period=event.period,
+                value=event.probability_base.normalized_value,
+                unit="decimal",
+                currency="N/A",
+                source_id=event.calibration_record_id,
+                available_at=AS_OF,
+                official=False,
+            )
+            for event in pipeline_spec.events
+        ),
+        *(
+            SnapshotFact(
+                fact_id=quantity.provenance_refs[0].removeprefix(
+                    "Fact:"
+                ),
+                subject_id=base.security.security_id,
+                scope="company",
+                segment_id="",
+                metric_id=metric_id,
+                field_name=financing.record_id,
+                period=financing.period,
+                value=quantity.normalized_value,
+                unit=quantity.unit,
+                currency=quantity.currency,
+                source_id=(
+                    f"COMMITTED_FINANCING:{financing.record_id}"
+                ),
+                available_at=AS_OF,
+                official=True,
+            )
+            for runway in pipeline_spec.runway_periods
+            if runway.financing is not None
+            for financing in (runway.financing,)
+            for metric_id, quantity in (
+                (
+                    "biopharma_financing_proceeds",
+                    financing.proceeds,
+                ),
+                (
+                    "biopharma_financing_issue_price",
+                    financing.issue_price,
+                ),
+                (
+                    "biopharma_financing_new_shares",
+                    financing.new_shares,
+                ),
+            )
+        ),
+    )
+    base = replace(
+        base,
+        data_snapshot=replace(
+            base.data_snapshot,
+            company_opening_balance_sheet=opening,
+            facts=base.data_snapshot.facts + facts,
+            content_hash="",
+        ),
+    )
+    return replace(
+        subject,
+        base_forecast_request=base,
+        valuation_plan=replace(
+            subject.valuation_plan,
+            biopharma=pipeline_spec,
+        ),
+    )
+
+
 def contains_float(value: object) -> bool:
     if isinstance(value, float):
         return True
@@ -2126,6 +2676,638 @@ def test_insurance_and_broker_require_and_preserve_specialized_drivers(
         assert scenario_result.method("justified_pb").status == "ready"
         assert scenario_result.method("dividend_discount_model").status == "ready"
         assert scenario_result.method("residual_income").status == "ready"
+
+
+def test_biopharma_route_executes_rnpv_sotp_and_runway_gate() -> None:
+    result = ScenarioValuationEngine().run(biopharma_request())
+    per_share = {}
+
+    for scenario_result in result.scenarios:
+        assert scenario_result.forecast_graph.template_id == (
+            "biopharma_pipeline_valuation_shell@1"
+        )
+        assert "asset/indication" in (
+            scenario_result.forecast_graph.routing_explanation
+        )
+        for method_id in (
+            "fcff_dcf",
+            "sotp",
+            "reverse_dcf",
+            "peer_comps",
+            "historical_band",
+        ):
+            assert scenario_result.method(method_id).status == "blocked"
+        rnpv = scenario_result.method("pipeline_rnpv")
+        pipeline_sotp = scenario_result.method("pipeline_sotp")
+        assert rnpv.status == "ready"
+        assert pipeline_sotp.status == "ready"
+        assert (
+            rnpv.conditional_value_range.equity_value_low,
+            rnpv.conditional_value_range.equity_value_base,
+            rnpv.conditional_value_range.equity_value_high,
+        ) == (
+            pipeline_sotp.conditional_value_range.equity_value_low,
+            pipeline_sotp.conditional_value_range.equity_value_base,
+            pipeline_sotp.conditional_value_range.equity_value_high,
+        )
+        assert any(
+            "Cash runway remains above" in diagnostic
+            for diagnostic in rnpv.diagnostics
+        )
+        assert any(
+            "no automatic mature-revenue" in diagnostic
+            for diagnostic in rnpv.diagnostics
+        )
+        per_share[scenario_result.role] = (
+            rnpv.conditional_value_range.per_share_base
+        )
+
+    assert (
+        per_share[ScenarioRole.STRESS]
+        < per_share[ScenarioRole.BASE]
+        < per_share[ScenarioRole.IMPROVEMENT]
+    )
+    assert result.cross_method_composite is None
+
+
+def test_biopharma_shared_event_failure_hits_dependent_assets() -> None:
+    baseline = ScenarioValuationEngine().run(biopharma_request())
+    baseline_base = next(
+        item for item in baseline.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    spec = biopharma_spec()
+    shared = spec.events[0]
+    failed_shared = replace(
+        shared,
+        probability_low=replace(
+            shared.probability_low,
+            value=Decimal("0"),
+        ),
+        probability_base=replace(
+            shared.probability_base,
+            value=Decimal("0"),
+        ),
+        probability_high=replace(
+            shared.probability_high,
+            value=Decimal("0"),
+        ),
+    )
+    failed = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                spec,
+                events=(failed_shared, *spec.events[1:]),
+            )
+        )
+    )
+    failed_base = next(
+        item for item in failed.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+
+    assert failed_base.status == "ready"
+    assert (
+        failed_base.conditional_value_range.per_share_base
+        < baseline_base.conditional_value_range.per_share_base
+    )
+    probability_diagnostic = next(
+        diagnostic
+        for diagnostic in failed_base.diagnostics
+        if diagnostic.startswith("Asset cumulative success probabilities:")
+    )
+    assert "asset_a:indication_alpha=0" in probability_diagnostic
+    assert "asset_b:indication_beta=0" in probability_diagnostic
+
+    redundant_path_asset = replace(
+        spec.assets[0],
+        required_event_ids=("shared_phase2", "asset_a_launch"),
+    )
+    redundant = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                spec,
+                assets=(redundant_path_asset, *spec.assets[1:]),
+            )
+        )
+    )
+    redundant_base = next(
+        item for item in redundant.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    assert (
+        redundant_base.conditional_value_range.equity_value_base
+        == baseline_base.conditional_value_range.equity_value_base
+    )
+
+
+def test_biopharma_delay_license_and_dilution_change_supported_terms() -> None:
+    base_spec = biopharma_spec()
+    baseline = ScenarioValuationEngine().run(
+        biopharma_request(spec=base_spec)
+    )
+    baseline_base = next(
+        item for item in baseline.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+
+    first_asset = base_spec.assets[0]
+    delayed_asset = replace(
+        first_asset,
+        launch_delay_years_low=replace(
+            first_asset.launch_delay_years_low,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_base=replace(
+            first_asset.launch_delay_years_base,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_high=replace(
+            first_asset.launch_delay_years_high,
+            value=Decimal("2"),
+        ),
+    )
+    delayed = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                base_spec,
+                assets=(delayed_asset, *base_spec.assets[1:]),
+            )
+        )
+    )
+    delayed_base = next(
+        item for item in delayed.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    assert (
+        delayed_base.conditional_value_range.equity_value_base
+        < baseline_base.conditional_value_range.equity_value_base
+    )
+
+    lower_rights_asset = replace(
+        first_asset,
+        ownership_low=replace(
+            first_asset.ownership_low,
+            value=Decimal("0.30"),
+        ),
+        ownership_base=replace(
+            first_asset.ownership_base,
+            value=Decimal("0.40"),
+        ),
+        ownership_high=replace(
+            first_asset.ownership_high,
+            value=Decimal("0.50"),
+        ),
+    )
+    lower_rights = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                base_spec,
+                assets=(lower_rights_asset, *base_spec.assets[1:]),
+            )
+        )
+    )
+    lower_rights_base = next(
+        item
+        for item in lower_rights.scenarios
+        if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    assert (
+        lower_rights_base.conditional_value_range.equity_value_base
+        < baseline_base.conditional_value_range.equity_value_base
+    )
+
+    financing = base_spec.runway_periods[2]
+    assert financing.financing is not None
+    more_dilutive = replace(
+        financing,
+        financing=replace(
+            financing.financing,
+            issue_price=per_share(
+                "4",
+                "financing_2028:issue_price",
+                period=financing.period,
+            ),
+            new_shares=shares(
+                financing.period,
+                "20",
+                provenance_refs=(
+                    "Fact:financing_2028:new_shares",
+                ),
+            ),
+        ),
+    )
+    diluted = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                base_spec,
+                runway_periods=(
+                    *base_spec.runway_periods[:2],
+                    more_dilutive,
+                    *base_spec.runway_periods[3:],
+                ),
+            )
+        )
+    )
+    diluted_base = next(
+        item for item in diluted.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    assert (
+        diluted_base.conditional_value_range.equity_value_base
+        == baseline_base.conditional_value_range.equity_value_base
+    )
+    assert (
+        diluted_base.conditional_value_range.per_share_base
+        < baseline_base.conditional_value_range.per_share_base
+    )
+
+
+def test_biopharma_probability_evidence_and_runway_fail_locally() -> None:
+    subject = biopharma_request()
+    missing = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            valuation_plan=replace(
+                subject.valuation_plan,
+                biopharma=None,
+            ),
+        )
+    )
+    for scenario_result in missing.scenarios:
+        for method_id in ("pipeline_rnpv", "pipeline_sotp"):
+            assert scenario_result.method(method_id).status == "blocked"
+        assert scenario_result.method("fcff_dcf").status == "blocked"
+
+    target_fact_id = (
+        subject.valuation_plan.biopharma.events[0]
+        .base_fact_refs[0]
+        .removeprefix("Fact:")
+    )
+    unsupported_facts = tuple(
+        replace(fact, source_id="UNVERIFIED_WEB_ESTIMATE")
+        if fact.fact_id == target_fact_id
+        else fact
+        for fact in subject.base_forecast_request.data_snapshot.facts
+    )
+    unsupported = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            base_forecast_request=replace(
+                subject.base_forecast_request,
+                data_snapshot=replace(
+                    subject.base_forecast_request.data_snapshot,
+                    facts=unsupported_facts,
+                    content_hash="",
+                ),
+            ),
+        )
+    )
+    for scenario_result in unsupported.scenarios:
+        for method_id in ("pipeline_rnpv", "pipeline_sotp"):
+            method = scenario_result.method(method_id)
+            assert method.status == "blocked"
+            assert (
+                "BIOPHARMA_PROBABILITY_EVIDENCE_INVALID"
+                in method.diagnostics[0]
+            )
+
+    runway_breach = ScenarioValuationEngine().run(
+        biopharma_request(spec=biopharma_spec(opening_cash="50"))
+    )
+    for scenario_result in runway_breach.scenarios:
+        for method_id in ("pipeline_rnpv", "pipeline_sotp"):
+            method = scenario_result.method(method_id)
+            assert method.status == "blocked"
+            assert "BIOPHARMA_RUNWAY_PATH_BREACH" in method.diagnostics[0]
+
+
+def test_biopharma_runway_checks_success_failure_paths_not_expected_cash() -> None:
+    spec = biopharma_spec()
+    asset = spec.assets[0]
+    period = asset.periods[1]
+    conditional_spend = replace(
+        period,
+        development_cost_low=replace(
+            period.development_cost_low,
+            value=Decimal("800"),
+        ),
+        development_cost_base=replace(
+            period.development_cost_base,
+            value=Decimal("900"),
+        ),
+        development_cost_high=replace(
+            period.development_cost_high,
+            value=Decimal("1000"),
+        ),
+    )
+    stressed_asset = replace(
+        asset,
+        periods=(
+            asset.periods[0],
+            conditional_spend,
+            *asset.periods[2:],
+        ),
+    )
+    result = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                spec,
+                assets=(stressed_asset, *spec.assets[1:]),
+            )
+        )
+    )
+    base = next(
+        item for item in result.scenarios if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+
+    assert base.status == "blocked"
+    assert "BIOPHARMA_RUNWAY_PATH_BREACH" in base.diagnostics[0]
+    assert "2027E" in base.diagnostics[0]
+
+
+def test_biopharma_financing_requires_exact_committed_terms() -> None:
+    subject = biopharma_request()
+    facts = tuple(
+        replace(fact, source_id="MANAGEMENT_SCENARIO")
+        if fact.metric_id == "biopharma_financing_issue_price"
+        else fact
+        for fact in subject.base_forecast_request.data_snapshot.facts
+    )
+    result = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            base_forecast_request=replace(
+                subject.base_forecast_request,
+                data_snapshot=replace(
+                    subject.base_forecast_request.data_snapshot,
+                    facts=facts,
+                    content_hash="",
+                ),
+            ),
+        )
+    )
+
+    for scenario_result in result.scenarios:
+        method = scenario_result.method("pipeline_rnpv")
+        assert method.status == "blocked"
+        assert (
+            "BIOPHARMA_FINANCING_EVIDENCE_INVALID"
+            in method.diagnostics[0]
+        )
+
+
+def test_biopharma_probability_fact_cannot_predate_calibration_window() -> None:
+    subject = biopharma_request()
+    calibration_id = (
+        subject.valuation_plan.biopharma.events[0]
+        .calibration_record_id
+    )
+    facts = tuple(
+        replace(fact, available_at="2010-01-01")
+        if fact.source_id == calibration_id
+        else fact
+        for fact in subject.base_forecast_request.data_snapshot.facts
+    )
+    result = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            base_forecast_request=replace(
+                subject.base_forecast_request,
+                data_snapshot=replace(
+                    subject.base_forecast_request.data_snapshot,
+                    facts=facts,
+                    content_hash="",
+                ),
+            ),
+        )
+    )
+
+    for scenario_result in result.scenarios:
+        method = scenario_result.method("pipeline_rnpv")
+        assert method.status == "blocked"
+        assert (
+            "BIOPHARMA_PROBABILITY_EVIDENCE_INVALID"
+            in method.diagnostics[0]
+        )
+
+
+def test_biopharma_common_equity_bridge_subtracts_preferred_claims() -> None:
+    subject = biopharma_request()
+    baseline = ScenarioValuationEngine().run(subject)
+    baseline_base = next(
+        item
+        for item in baseline.scenarios
+        if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    bridge = subject.valuation_plan.present_value_bridge
+    preferred = replace(
+        bridge.preferred_stock,
+        value=Decimal("100"),
+    )
+    facts = tuple(
+        replace(fact, value=Decimal("100"))
+        if fact.fact_id
+        == preferred.provenance_refs[0].removeprefix("Fact:")
+        else fact
+        for fact in subject.base_forecast_request.data_snapshot.facts
+    )
+    result = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            base_forecast_request=replace(
+                subject.base_forecast_request,
+                data_snapshot=replace(
+                    subject.base_forecast_request.data_snapshot,
+                    facts=facts,
+                    content_hash="",
+                ),
+            ),
+            valuation_plan=replace(
+                subject.valuation_plan,
+                present_value_bridge=replace(
+                    bridge,
+                    preferred_stock=preferred,
+                ),
+            ),
+        )
+    )
+    result_base = next(
+        item
+        for item in result.scenarios
+        if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+
+    assert result_base.status == "ready"
+    assert (
+        baseline_base.conditional_value_range.equity_value_base
+        - result_base.conditional_value_range.equity_value_base
+        == Decimal("100")
+    )
+
+
+def test_biopharma_delay_trace_retimes_all_cash_flows_with_act365() -> None:
+    spec = biopharma_spec()
+    asset = spec.assets[0]
+    delayed_asset = replace(
+        asset,
+        launch_delay_years_low=replace(
+            asset.launch_delay_years_low,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_base=replace(
+            asset.launch_delay_years_base,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_high=replace(
+            asset.launch_delay_years_high,
+            value=Decimal("1"),
+        ),
+    )
+    result = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                spec,
+                assets=(delayed_asset, *spec.assets[1:]),
+            )
+        )
+    )
+    method = next(
+        item
+        for item in result.scenarios
+        if item.role == ScenarioRole.BASE
+    ).method("pipeline_rnpv")
+    selected = next(
+        json.loads(item)
+        for item in method.component_trace
+        if json.loads(item)["kind"]
+        == "biopharma_selected_projection"
+    )
+    shifted = [
+        item
+        for item in selected["asset_cash_flows"]
+        if item["asset_key"] == "asset_a:indication_alpha"
+        and item["source_period"] == "2027E"
+    ]
+    expected_timing = Decimal(
+        (
+            date(2028, 12, 31) - date.fromisoformat(AS_OF)
+        ).days
+    ) / Decimal("365")
+
+    assert {
+        item["cash_flow_type"] for item in shifted
+    } == {
+        "commercial_cash",
+        "development_cost",
+        "milestone_cash",
+    }
+    assert all(item["shifted_period"] == "2028E" for item in shifted)
+    assert all(
+        abs(
+            Decimal(item["timing_act365"]) - expected_timing
+        )
+        < Decimal("1e-25")
+        for item in shifted
+    )
+
+
+def test_biopharma_delay_obligation_beyond_runway_fails_closed() -> None:
+    spec = biopharma_spec()
+    asset = spec.assets[0]
+    final_period = replace(
+        asset.periods[-1],
+        gross_sales_low=replace(
+            asset.periods[-1].gross_sales_low,
+            value=Decimal("0"),
+        ),
+        gross_sales_base=replace(
+            asset.periods[-1].gross_sales_base,
+            value=Decimal("0"),
+        ),
+        gross_sales_high=replace(
+            asset.periods[-1].gross_sales_high,
+            value=Decimal("0"),
+        ),
+        development_cost_low=replace(
+            asset.periods[-1].development_cost_low,
+            value=Decimal("800"),
+        ),
+        development_cost_base=replace(
+            asset.periods[-1].development_cost_base,
+            value=Decimal("900"),
+        ),
+        development_cost_high=replace(
+            asset.periods[-1].development_cost_high,
+            value=Decimal("1000"),
+        ),
+    )
+    delayed = replace(
+        asset,
+        launch_delay_years_low=replace(
+            asset.launch_delay_years_low,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_base=replace(
+            asset.launch_delay_years_base,
+            value=Decimal("1"),
+        ),
+        launch_delay_years_high=replace(
+            asset.launch_delay_years_high,
+            value=Decimal("1"),
+        ),
+        periods=(*asset.periods[:-1], final_period),
+    )
+    result = ScenarioValuationEngine().run(
+        biopharma_request(
+            spec=replace(
+                spec,
+                assets=(delayed, *spec.assets[1:]),
+            )
+        )
+    )
+
+    for scenario_result in result.scenarios:
+        method = scenario_result.method("pipeline_rnpv")
+        assert method.status == "blocked"
+        assert (
+            "BIOPHARMA_RUNWAY_COVERAGE_INSUFFICIENT"
+            in method.diagnostics[0]
+        )
+        assert "2031E" in method.diagnostics[0]
+
+
+def test_biopharma_financing_tranche_identity_is_unique() -> None:
+    spec = biopharma_spec()
+    original = spec.runway_periods[2].financing
+    assert original is not None
+    duplicate = replace(
+        original,
+        period="2029E",
+        proceeds=replace(original.proceeds, period="2029E"),
+        issue_price=replace(original.issue_price, period="2029E"),
+        new_shares=replace(original.new_shares, period="2029E"),
+    )
+    runway = replace(
+        spec.runway_periods[3],
+        financing=duplicate,
+    )
+
+    with pytest.raises(ScenarioInvariantError) as error:
+        replace(
+            spec,
+            runway_periods=(
+                *spec.runway_periods[:3],
+                runway,
+                *spec.runway_periods[4:],
+            ),
+        )
+    assert error.value.code == "BIOPHARMA_FINANCING_RECORD_DUPLICATE"
+
+
+def test_biopharma_duplicate_economic_right_fails_closed() -> None:
+    spec = biopharma_spec()
+    duplicate = replace(
+        spec.assets[1],
+        economic_right_id=spec.assets[0].economic_right_id,
+    )
+    with pytest.raises(ScenarioInvariantError) as error:
+        replace(spec, assets=(spec.assets[0], duplicate))
+    assert error.value.code == "BIOPHARMA_ECONOMIC_RIGHT_DUPLICATE"
 
 
 def test_formal_ranges_preserve_dimensions_period_as_of_and_method_lineage() -> None:

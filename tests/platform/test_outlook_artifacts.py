@@ -22,6 +22,7 @@ from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash, _expir
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from test_scenario_valuation import (
+    biopharma_request,
     cyclical_request,
     financial_request,
     scenario_request,
@@ -116,6 +117,74 @@ def test_financial_methods_are_preserved_without_industrial_fallback() -> None:
         "financial_ddm_clean_surplus_act365@3",
         "residual_income_clean_surplus_act365@3",
     } <= set(draft.formula_identities)
+
+
+def test_biopharma_event_tree_and_runway_are_preserved_without_fcff() -> None:
+    request = biopharma_request()
+    graph = ForecastEngine().build(request.base_forecast_request)
+    result = ScenarioValuationEngine().run(request)
+
+    draft = ImmutableArtifactDraft.from_scenario_valuation(
+        result,
+        forecast_graph=graph,
+        model_identity="company-outlook-model@1",
+        policy_identity="company-outlook-policy@1",
+    )
+
+    methods = {
+        method["method_id"]: method
+        for scenario in draft.payload["scenarios"]
+        for method in scenario["methods"]
+    }
+    assert methods["fcff_dcf"]["status"] == "blocked"
+    assert methods["pipeline_rnpv"]["status"] == "ready"
+    assert methods["pipeline_sotp"]["status"] == "ready"
+    assert {
+        "pipeline_rnpv_event_tree_act365@1",
+        "pipeline_sotp_unique_rights_act365@1",
+    } <= set(draft.formula_identities)
+    assert any(
+        "cash runway" in diagnostic.lower()
+        for scenario in draft.payload["scenarios"]
+        for method in scenario["methods"]
+        if method["method_id"] == "pipeline_rnpv"
+        for diagnostic in method["diagnostics"]
+    )
+    trace = methods["pipeline_rnpv"]["component_trace"]
+    model = next(
+        item for item in trace if item["kind"] == "biopharma_model_spec"
+    )["model_spec"]
+    selected = next(
+        item
+        for item in trace
+        if item["kind"] == "biopharma_selected_projection"
+    )
+    assert model["events"][1]["parent_event_ids"]
+    assert model["assets"][0]["economic_right_id"]
+    assert model["assets"][0]["periods"][0]["development_cost"]
+    assert model["assets"][0]["periods"][0]["milestone_cash"]
+    assert model["runway_periods"][2]["financing"]["issue_price"]
+    assert selected["asset_cash_flows"]
+    assert any(
+        item["cash_flow_type"] == "corporate_cash_burn"
+        for item in selected["corporate_cash_flows"]
+    )
+    assert any(
+        item["record_id"] == "financing_2028"
+        for item in selected["corporate_cash_flows"]
+        if item["cash_flow_type"] == "committed_financing"
+    )
+    assert selected["runway_paths"]
+    assert selected["runway_paths"][0]["period_ledger"]
+    assert {
+        "opening_cash",
+        "asset_cash_flow",
+        "corporate_cash_burn",
+        "committed_financing",
+        "ending_cash",
+        "minimum_buffer",
+        "above_buffer",
+    } <= set(selected["runway_paths"][0]["period_ledger"][0])
 
 
 def test_workflow_persists_restarts_and_reuses_typed_sibling_artifacts(
