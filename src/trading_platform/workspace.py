@@ -80,6 +80,11 @@ class WorkspaceService:
                 **(snapshot or {}),
             },
             "research_views": self._research_views(security_id),
+            "forecast_registry": self._forecast_registry(
+                security_id,
+                (snapshot or {}).get("effective_session_date"),
+            ),
+            "forecast_reviews": self._forecast_reviews(security_id),
             "changes": self._all(
                 "SELECT p.plan_id,p.lifecycle_status,a.plan_version_id AS active_version_id,a.started_at AS updated_at FROM trade_plan p LEFT JOIN plan_activation a ON a.plan_id=p.plan_id AND a.ended_at IS NULL WHERE p.security_id=? ORDER BY coalesce(a.started_at,p.created_at) DESC",
                 (security_id,),
@@ -189,6 +194,127 @@ class WorkspaceService:
             )
             result.append(view.to_dict())
         return result
+
+    def _forecast_reviews(self, security_id: str) -> list[dict[str, Any]]:
+        if self.research_artifact_reader is None:
+            return []
+        rows = self.connection.execute(
+            "SELECT artifact_record_id FROM research_artifact_record "
+            "WHERE platform_security_id=? AND artifact_kind='ForecastReview' "
+            "ORDER BY created_at,artifact_record_id",
+            (security_id,),
+        ).fetchall()
+        reviews: list[dict[str, Any]] = []
+        for row in rows:
+            artifact = self.research_artifact_reader(row["artifact_record_id"])
+            reviews.append(
+                {
+                    "artifact_record_id": artifact.artifact_record_id,
+                    "forecast_artifact_record_id": (
+                        artifact.payload.get("original_artifacts", {}).get(
+                            "forecast_artifact_record_id"
+                        )
+                    ),
+                    "reviewed_at": artifact.payload.get("reviewed_at"),
+                    "status": artifact.status,
+                    "model_identity": artifact.model_identity,
+                    "reviewer_identity": artifact.payload.get(
+                        "reviewer_identity"
+                    ),
+                    "numeric_interval_coverage": artifact.payload.get(
+                        "numeric_interval_coverage"
+                    ),
+                    "probability_results": artifact.payload.get(
+                        "probability_results",
+                        [],
+                    ),
+                    "numeric_results": artifact.payload.get(
+                        "numeric_results",
+                        [],
+                    ),
+                    "driver_error_decomposition": artifact.payload.get(
+                        "driver_error_decomposition",
+                        [],
+                    ),
+                    "calibration_version": artifact.payload.get(
+                        "calibration_version"
+                    ),
+                    "interpretation": artifact.payload.get("interpretation"),
+                    "diagnostics": artifact.payload.get("diagnostics", []),
+                }
+            )
+        return reviews
+
+    def _forecast_registry(
+        self,
+        security_id: str,
+        effective_session_date: str | None,
+    ) -> list[dict[str, Any]]:
+        if self.research_artifact_reader is None:
+            return []
+        reviewed_targets = {
+            (
+                review.get("forecast_artifact_record_id"),
+                result.get(
+                    "event_id"
+                    if key == "probability_results"
+                    else "target_id"
+                ),
+            )
+            for review in self._forecast_reviews(security_id)
+            for key in ("probability_results", "numeric_results")
+            for result in review.get(key, [])
+            if isinstance(result, Mapping)
+        }
+        rows = self.connection.execute(
+            "SELECT artifact_record_id FROM research_artifact_record "
+            "WHERE platform_security_id=? AND artifact_kind='Forecast' "
+            "ORDER BY created_at,artifact_record_id",
+            (security_id,),
+        ).fetchall()
+        registry: list[dict[str, Any]] = []
+        for row in rows:
+            artifact = self.research_artifact_reader(row["artifact_record_id"])
+            for node in artifact.payload.get("nodes", ()):
+                if not isinstance(node, Mapping):
+                    continue
+                target_id = node.get("node_id")
+                review_date = node.get("review_date")
+                review_status = (
+                    "reviewed"
+                    if (
+                        artifact.artifact_record_id,
+                        target_id,
+                    )
+                    in reviewed_targets
+                    else "due"
+                    if effective_session_date
+                    and isinstance(review_date, str)
+                    and review_date <= effective_session_date
+                    else "registered"
+                )
+                registry.append(
+                    {
+                        "forecast_artifact_record_id": (
+                            artifact.artifact_record_id
+                        ),
+                        "target_id": target_id,
+                        "kind": node.get("kind"),
+                        "label": node.get("label"),
+                        "horizon": node.get("horizon"),
+                        "review_date": review_date,
+                        "review_status": review_status,
+                    }
+                )
+        rank = {"reviewed": 0, "due": 1, "registered": 2}
+        return sorted(
+            registry,
+            key=lambda item: (
+                rank[item["review_status"]],
+                str(item.get("review_date") or ""),
+                str(item.get("target_id") or ""),
+            ),
+        )
 
     def _all(
         self, sql: str, parameters: tuple[object, ...] = ()

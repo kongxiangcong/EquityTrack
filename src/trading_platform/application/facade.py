@@ -22,6 +22,7 @@ from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, 
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
+from equity_research import ForecastReviewRequest
 
 from .ports import AccountPort, ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort, WorkspacePort
 
@@ -116,6 +117,11 @@ class ApplicationFacade:
         if self._research_workflow is None:
             raise RuntimeError("research workflow unavailable")
         return self._research_workflow.get_research_run_payload(research_run_id)
+
+    def review_forecast(self, request: ForecastReviewRequest) -> ResearchArtifactView:
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.review_forecast(request)
 
     def resume_workflow(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")

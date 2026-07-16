@@ -638,6 +638,242 @@ class ImmutableArtifactDraft:
         )
 
     @classmethod
+    def from_forecast_review(
+        cls,
+        result: Any,
+        *,
+        forecast_artifact: ResearchArtifactView,
+        valuation_artifact: ResearchArtifactView,
+        simulation_artifact: ResearchArtifactView,
+    ) -> ImmutableArtifactDraft:
+        from equity_research import ForecastReviewResult
+
+        if not isinstance(result, ForecastReviewResult):
+            raise TypeError(
+                "from_forecast_review requires a typed ForecastReviewResult."
+            )
+        request = result.request
+        parents = (
+            forecast_artifact,
+            valuation_artifact,
+            simulation_artifact,
+        )
+        if (
+            tuple(item.artifact_kind for item in parents)
+            != ("Forecast", "Valuation", "Simulation")
+            or len({item.research_run_id for item in parents}) != 1
+            or len({item.data_snapshot_id for item in parents}) != 1
+            or len({item.subject_id for item in parents}) != 1
+            or request.security_id != forecast_artifact.subject_id
+            or (
+                request.forecast_artifact_record_id,
+                request.valuation_artifact_record_id,
+                request.simulation_artifact_record_id,
+            )
+            != tuple(item.artifact_record_id for item in parents)
+            or (
+                request.forecast_source_identity,
+                request.valuation_source_identity,
+                request.simulation_source_identity,
+            )
+            != tuple(item.source_identity for item in parents)
+            or valuation_artifact.dependency_record_ids
+            != (forecast_artifact.artifact_record_id,)
+            or simulation_artifact.dependency_record_ids
+            != (valuation_artifact.artifact_record_id,)
+        ):
+            raise ValueError("FORECAST_REVIEW_PARENT_LINEAGE_INVALID")
+        cls._validate_forecast_review_targets(
+            result,
+            forecast_artifact=forecast_artifact,
+            valuation_artifact=valuation_artifact,
+            simulation_artifact=simulation_artifact,
+        )
+        payload = result.to_dict()
+        source_identity = "forecast-review:" + hashlib.sha256(
+            _canonical_json(
+                {
+                    "review": payload,
+                    "parent_fingerprints": [
+                        item.content_hash for item in parents
+                    ],
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        reviewed_date = str(request.reviewed_at).split("T", 1)[0]
+        return cls._build(
+            artifact_kind="ForecastReview",
+            schema_version="ForecastReviewArtifact@1",
+            subject_id=request.security_id,
+            as_of=reviewed_date,
+            source_identity=source_identity,
+            model_identity=(
+                request.new_model_identity
+                if request.calibration_changes
+                else simulation_artifact.model_identity
+            ),
+            policy_identity=request.policy_identity,
+            status=result.status,
+            formula_identities=(
+                "absolute_error@1",
+                "brier_score@1",
+                "driver_error_decomposition@1",
+                "interval_coverage@1",
+                "relative_error@1",
+            ),
+            dependency_kinds=("Forecast", "Valuation", "Simulation"),
+            payload=payload,
+            summary={
+                "review_id": request.review_id,
+                "reviewed_at": request.reviewed_at,
+                "reviewer_identity": request.reviewer_identity,
+                "review_data_snapshot_id": request.review_data_snapshot_id,
+                "forecast_artifact_record_id": (
+                    forecast_artifact.artifact_record_id
+                ),
+                "valuation_artifact_record_id": (
+                    valuation_artifact.artifact_record_id
+                ),
+                "simulation_artifact_record_id": (
+                    simulation_artifact.artifact_record_id
+                ),
+                "comparable_probability_count": sum(
+                    item.brier_score is not None
+                    for item in result.probability_results
+                ),
+                "comparable_numeric_count": sum(
+                    item.absolute_error is not None
+                    for item in result.numeric_results
+                ),
+                "calibration_model_identity": (
+                    request.new_model_identity
+                    if request.calibration_changes
+                    else None
+                ),
+            },
+        )
+
+    @staticmethod
+    def _validate_forecast_review_targets(
+        result: Any,
+        *,
+        forecast_artifact: ResearchArtifactView,
+        valuation_artifact: ResearchArtifactView,
+        simulation_artifact: ResearchArtifactView,
+    ) -> None:
+        forecast_nodes = {
+            node.get("node_id"): node
+            for node in forecast_artifact.payload.get("nodes", ())
+            if isinstance(node, Mapping)
+        }
+        scenarios = {
+            scenario.get("role"): scenario
+            for scenario in valuation_artifact.payload.get("scenarios", ())
+            if isinstance(scenario, Mapping)
+        }
+        if not {"stress", "base", "improvement"}.issubset(scenarios):
+            raise ValueError("FORECAST_REVIEW_TARGET_LINEAGE_INVALID")
+
+        def scenario_quantity(role: str, node_id: str) -> Mapping[str, Any] | None:
+            graph = scenarios[role].get("forecast_graph")
+            nodes = graph.get("nodes") if isinstance(graph, Mapping) else None
+            if not isinstance(nodes, list):
+                return None
+            node = next(
+                (
+                    item
+                    for item in nodes
+                    if isinstance(item, Mapping)
+                    and item.get("node_id") == node_id
+                ),
+                None,
+            )
+            quantity = node.get("quantity") if isinstance(node, Mapping) else None
+            return quantity if isinstance(quantity, Mapping) else None
+
+        for target in result.request.probability_targets:
+            node = forecast_nodes.get(target.event_id)
+            if (
+                not isinstance(node, Mapping)
+                or Decimal(str(node.get("conditional_probability")))
+                != target.probability
+            ):
+                raise ValueError("FORECAST_REVIEW_TARGET_LINEAGE_INVALID")
+        for target in result.request.numeric_targets:
+            quantities = tuple(
+                scenario_quantity(role, target.target_id)
+                for role in ("stress", "base", "improvement")
+            )
+            if any(item is None for item in quantities):
+                raise ValueError("FORECAST_REVIEW_TARGET_LINEAGE_INVALID")
+            low, base, high = quantities
+            assert low is not None and base is not None and high is not None
+            if (
+                Decimal(str(low.get("value"))) != target.forecast_low
+                or Decimal(str(base.get("value"))) != target.forecast_base
+                or Decimal(str(high.get("value"))) != target.forecast_high
+                or {
+                    (
+                        item.get("unit"),
+                        Decimal(str(item.get("scale"))),
+                        item.get("currency"),
+                        item.get("period"),
+                    )
+                    for item in quantities
+                }
+                != {
+                    (
+                        target.unit,
+                        target.scale,
+                        target.currency,
+                        target.period,
+                    )
+                }
+                or target.driver_id != target.target_id
+                or not isinstance(forecast_nodes.get(target.target_id), Mapping)
+                or forecast_nodes[target.target_id].get("kind") != "Driver"
+            ):
+                raise ValueError("FORECAST_REVIEW_TARGET_LINEAGE_INVALID")
+        assumptions = {
+            item.get("assumption_id"): item
+            for item in simulation_artifact.payload.get("assumptions", ())
+            if isinstance(item, Mapping)
+        }
+        if result.request.calibration_changes:
+            if (
+                result.request.previous_model_identity
+                != simulation_artifact.model_identity
+            ):
+                raise ValueError("FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID")
+            for change in result.request.calibration_changes:
+                assumption = assumptions.get(change.assumption_id)
+                bounds = (
+                    assumption.get("hard_bounds")
+                    if isinstance(assumption, Mapping)
+                    else None
+                )
+                if (
+                    not isinstance(assumption, Mapping)
+                    or Decimal(str(assumption.get("reference_value")))
+                    != change.previous_value
+                    or assumption.get("unit") != change.unit
+                    or not isinstance(bounds, Mapping)
+                    or not (
+                        Decimal(str(bounds.get("minimum")))
+                        <= change.new_value
+                        <= Decimal(str(bounds.get("maximum")))
+                    )
+                    or change.previous_version_identity
+                    != (
+                        f"{simulation_artifact.source_identity}:assumption:"
+                        f"{change.assumption_id}"
+                    )
+                ):
+                    raise ValueError(
+                        "FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID"
+                    )
+
+    @classmethod
     def from_serialized(cls, value: Mapping[str, Any]) -> ImmutableArtifactDraft:
         required = {
             "artifact_kind",
@@ -697,7 +933,7 @@ class ImmutableArtifactDraft:
             "Simulation": ("Valuation",),
             "MarketDataSnapshot": (),
             "MarketPathSimulation": ("Simulation", "MarketDataSnapshot"),
-            "ForecastReview": ("Forecast",),
+            "ForecastReview": ("Forecast", "Valuation", "Simulation"),
         }
         if (
             not all(

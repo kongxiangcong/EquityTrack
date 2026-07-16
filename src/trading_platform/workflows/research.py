@@ -29,6 +29,7 @@ from trading_platform.research import ProjectionError, ResearchAdapter, Snapshot
 
 from .registry import RESEARCH_WORKFLOW, NodeDefinition
 from .repository import WorkflowRepository
+from equity_research import ForecastReviewEngine, ForecastReviewRequest
 
 
 class WorkflowError(RuntimeError):
@@ -260,6 +261,36 @@ class ResearchWorkflowService:
     def get_manifest(self, manifest_id: str) -> ArtifactManifestView: return self.repository.manifest(manifest_id)
     def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: return self.repository.research_artifact_view(artifact_record_id)
     def get_research_run_payload(self, research_run_id: str) -> Mapping[str, object]: return self.repository.research_run_payload(research_run_id)
+    def review_forecast(
+        self,
+        request: ForecastReviewRequest,
+    ) -> ResearchArtifactView:
+        forecast = self.repository.research_artifact_view(
+            request.forecast_artifact_record_id
+        )
+        valuation = self.repository.research_artifact_view(
+            request.valuation_artifact_record_id
+        )
+        simulation = self.repository.research_artifact_view(
+            request.simulation_artifact_record_id
+        )
+        result = ForecastReviewEngine().run(request)
+        draft = ImmutableArtifactDraft.from_forecast_review(
+            result,
+            forecast_artifact=forecast,
+            valuation_artifact=valuation,
+            simulation_artifact=simulation,
+        )
+        record_id = self.repository.persist_forecast_review(
+            draft=draft,
+            parent_record_ids=(
+                forecast.artifact_record_id,
+                valuation.artifact_record_id,
+                simulation.artifact_record_id,
+            ),
+            code_identity=self.engine_identity,
+        )
+        return self.repository.research_artifact_view(record_id)
     @staticmethod
     def _artifact_member_role(artifact_kind: str) -> str:
         return {

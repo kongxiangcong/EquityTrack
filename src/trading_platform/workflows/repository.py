@@ -254,6 +254,324 @@ class WorkflowRepository:
                 market_data_snapshot_id=market_data_snapshot_id,
             )
 
+    def persist_forecast_review(
+        self,
+        *,
+        draft: ImmutableArtifactDraft,
+        parent_record_ids: tuple[str, str, str],
+        code_identity: str,
+    ) -> str:
+        if (
+            not isinstance(draft, ImmutableArtifactDraft)
+            or draft.artifact_kind != "ForecastReview"
+            or draft.dependency_kinds
+            != ("Forecast", "Valuation", "Simulation")
+        ):
+            raise ValueError("FORECAST_REVIEW_DRAFT_INVALID")
+        parents = tuple(
+            self.research_artifact_view(record_id)
+            for record_id in parent_record_ids
+        )
+        if (
+            tuple(item.artifact_kind for item in parents)
+            != ("Forecast", "Valuation", "Simulation")
+            or len({item.research_run_id for item in parents}) != 1
+            or len({item.data_snapshot_id for item in parents}) != 1
+            or len({item.code_identity for item in parents}) != 1
+            or len({item.platform_security_id for item in parents}) != 1
+            or len({item.subject_id for item in parents}) != 1
+            or draft.subject_id != parents[0].subject_id
+        ):
+            raise ValueError("FORECAST_REVIEW_PARENT_LINEAGE_INVALID")
+        research_run_id = parents[0].research_run_id
+        data_snapshot_id = self._validate_forecast_review_evidence(
+            draft,
+            platform_security_id=parents[0].platform_security_id,
+        )
+        if data_snapshot_id in {item.data_snapshot_id for item in parents}:
+            raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_NOT_SEPARATE")
+        if not code_identity.strip():
+            raise ValueError("FORECAST_REVIEW_CODE_IDENTITY_INVALID")
+        record_id = (
+            "research_artifact_"
+            + canonical_hash(
+                {
+                    "run": research_run_id,
+                    "snapshot": data_snapshot_id,
+                    "draft": draft.content_hash,
+                    "code": code_identity,
+                }
+            )[:24]
+        )
+        envelope = {
+            "envelope_schema": "ResearchArtifactEnvelope@1",
+            "artifact_record_id": record_id,
+            "artifact_kind": draft.artifact_kind,
+            "artifact_schema_version": draft.schema_version,
+            "research_run_id": research_run_id,
+            "data_snapshot_id": data_snapshot_id,
+            "model_data_snapshot_identity": (
+                parents[0].model_data_snapshot_identity
+            ),
+            "platform_security_id": parents[0].platform_security_id,
+            "subject_id": draft.subject_id,
+            "as_of": draft.as_of,
+            "source_identity": draft.source_identity,
+            "model_identity": draft.model_identity,
+            "formula_identities": list(draft.formula_identities),
+            "code_identity": code_identity,
+            "policy_identity": draft.policy_identity,
+            "status": draft.status,
+            "dependency_record_ids": sorted(parent_record_ids),
+            "summary": draft.summary,
+            "payload": draft.payload,
+        }
+        payload = json.dumps(
+            envelope,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        artifact_id = self.publish_artifact(
+            payload,
+            "application/json",
+            draft.schema_version,
+        )
+        object_hash = self.connection.execute(
+            "SELECT object_sha256 FROM artifact WHERE artifact_id=?",
+            (artifact_id,),
+        ).fetchone()[0]
+        with self._research_artifact_lock:
+            with self.writer_lock.acquire(f"forecast-review:{record_id}"):
+                with self.connection:
+                    created_at = _now()
+                    values = (
+                        record_id,
+                        draft.artifact_kind,
+                        draft.schema_version,
+                        artifact_id,
+                        object_hash,
+                        research_run_id,
+                        data_snapshot_id,
+                        parents[0].model_data_snapshot_identity,
+                        parents[0].platform_security_id,
+                        draft.subject_id,
+                        draft.as_of,
+                        draft.source_identity,
+                        draft.content_hash,
+                        draft.model_identity,
+                        json.dumps(
+                            list(draft.formula_identities),
+                            separators=(",", ":"),
+                        ),
+                        code_identity,
+                        draft.policy_identity,
+                        draft.status,
+                        draft.summary_json,
+                        created_at,
+                    )
+                    self.connection.execute(
+                        "INSERT OR IGNORE INTO research_artifact_record "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        values,
+                    )
+                    existing = self.connection.execute(
+                        "SELECT artifact_kind,schema_version,artifact_id,"
+                        "content_hash,research_run_id,data_snapshot_id,"
+                        "model_data_snapshot_identity,platform_security_id,"
+                        "subject_id,as_of_date,source_identity,input_fingerprint,"
+                        "model_identity,formula_identities_json,code_identity,"
+                        "policy_identity,status,summary_json "
+                        "FROM research_artifact_record "
+                        "WHERE artifact_record_id=?",
+                        (record_id,),
+                    ).fetchone()
+                    if existing is None or tuple(existing) != values[1:-1]:
+                        raise ValueError("RESEARCH_ARTIFACT_IDENTITY_COLLISION")
+                    for parent_id in parent_record_ids:
+                        self.connection.execute(
+                            "INSERT OR IGNORE INTO research_artifact_relation "
+                            "VALUES(?,?,?)",
+                            (parent_id, record_id, "depends_on"),
+                        )
+                    workflow_ids = tuple(
+                        row[0]
+                        for row in self.connection.execute(
+                            "SELECT workflow_run_id "
+                            "FROM workflow_run_artifact_use "
+                            "WHERE artifact_record_id=?",
+                            (parents[-1].artifact_record_id,),
+                        )
+                    )
+                    for workflow_run_id in workflow_ids:
+                        self.connection.execute(
+                            "INSERT OR IGNORE INTO workflow_run_artifact_use "
+                            "VALUES(?,?,?)",
+                            (workflow_run_id, record_id, "created"),
+                        )
+                        parent_artifacts = tuple(
+                            self.connection.execute(
+                                "SELECT artifact_id FROM "
+                                "research_artifact_record "
+                                "WHERE artifact_record_id=?",
+                                (parent_id,),
+                            ).fetchone()[0]
+                            for parent_id in parent_record_ids
+                        )
+                        manifest_members = (
+                            (parent_artifacts[0], "forecast", "input"),
+                            (parent_artifacts[1], "valuation", "input"),
+                            (parent_artifacts[2], "simulation", "input"),
+                            (artifact_id, "forecast_review", "output"),
+                        )
+                        identity = [
+                            {
+                                "artifact_id": item[0],
+                                "role": item[1],
+                                "direction": item[2],
+                            }
+                            for item in manifest_members
+                        ]
+                        manifest_id = (
+                            "manifest_"
+                            + canonical_hash(
+                                {
+                                    "role": "forecast_review_append",
+                                    "producer_type": "WorkflowRun",
+                                    "producer_id": workflow_run_id,
+                                    "members": identity,
+                                }
+                            )[:24]
+                        )
+                        self.connection.execute(
+                            "INSERT OR IGNORE INTO artifact_manifest("
+                            "artifact_manifest_id,manifest_role,producer_type,"
+                            "producer_id,membership_hash,created_at,member_count"
+                            ") VALUES(?,?,?,?,?,?,?)",
+                            (
+                                manifest_id,
+                                "forecast_review_append",
+                                "WorkflowRun",
+                                workflow_run_id,
+                                canonical_hash(identity),
+                                created_at,
+                                len(manifest_members),
+                            ),
+                        )
+                        for index, member in enumerate(manifest_members):
+                            self.connection.execute(
+                                "INSERT OR IGNORE INTO "
+                                "artifact_manifest_member VALUES(?,?,?,?,?)",
+                                (manifest_id, index, *member),
+                            )
+                        self.connection.execute(
+                            "INSERT OR IGNORE INTO workflow_run_ref "
+                            "VALUES(?,?,?,?,?)",
+                            (
+                                workflow_run_id,
+                                "forecast_review_manifest",
+                                "ArtifactManifest",
+                                manifest_id,
+                                "created",
+                            ),
+                        )
+                        self.connection.execute(
+                            "INSERT OR IGNORE INTO workflow_run_ref "
+                            "VALUES(?,?,?,?,?)",
+                            (
+                                workflow_run_id,
+                                "forecast_review_snapshot",
+                                "DataSnapshot",
+                                data_snapshot_id,
+                                "input",
+                            ),
+                        )
+        return record_id
+
+    def _validate_forecast_review_evidence(
+        self,
+        draft: ImmutableArtifactDraft,
+        *,
+        platform_security_id: str,
+    ) -> str:
+        payload = draft.payload
+        snapshot_id = payload.get("review_data_snapshot_id")
+        snapshot = self.connection.execute(
+            "SELECT * FROM data_snapshot WHERE data_snapshot_id=?",
+            (snapshot_id,),
+        ).fetchone()
+        if snapshot is None:
+            raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_INVALID")
+        try:
+            reviewed_at = datetime.fromisoformat(
+                str(payload.get("reviewed_at")).replace("Z", "+00:00")
+            )
+            snapshot_cutoff = datetime.fromisoformat(
+                str(snapshot["as_of_at"]).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_INVALID")
+        if (
+            snapshot["scope_id"] != platform_security_id
+            or snapshot["snapshot_purpose"] not in {"research", "workflow"}
+            or snapshot["freshness_status"] != "valid"
+            or snapshot["quality_status"] == "blocking"
+            or snapshot_cutoff > reviewed_at
+        ):
+            raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_INVALID")
+        actual_evidence = payload.get("actual_evidence")
+        if not isinstance(actual_evidence, list) or not actual_evidence:
+            raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_INVALID")
+        for evidence in actual_evidence:
+            if not isinstance(evidence, Mapping):
+                raise ValueError("FORECAST_REVIEW_EVIDENCE_SNAPSHOT_INVALID")
+            row = self.connection.execute(
+                "SELECT nv.*,pa.source_identity,pa.source_authority,"
+                "pa.status AS attempt_status,"
+                "pa.retrieved_at AS attempt_retrieved_at "
+                "FROM data_snapshot_member sm "
+                "JOIN normalized_version nv USING(normalized_version_id) "
+                "JOIN provider_attempt pa "
+                "ON pa.attempt_id=nv.source_attempt_id "
+                "WHERE sm.data_snapshot_id=? "
+                "AND sm.normalized_version_id=?",
+                (snapshot_id, evidence.get("normalized_version_id")),
+            ).fetchone()
+            absent = evidence.get("comparability_status") in {
+                "missing",
+                "delayed_disclosure",
+            }
+            if row is None:
+                raise ValueError("FORECAST_REVIEW_EVIDENCE_LINEAGE_INVALID")
+            try:
+                available_at = datetime.fromisoformat(
+                    str(row["available_at"]).replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError):
+                raise ValueError("FORECAST_REVIEW_EVIDENCE_LINEAGE_INVALID")
+            if (
+                row["content_hash"]
+                != evidence.get("semantic_content_hash")
+                or row["source_identity"] != evidence.get("source_id")
+                or row["source_authority"] != "official"
+                or row["attempt_status"] != "complete"
+                or row["quality_status"] in {"quarantine", "blocking"}
+                or row["retrieved_at"] != evidence.get("retrieved_at")
+                or row["attempt_retrieved_at"] != evidence.get("retrieved_at")
+                or (
+                    not absent
+                    and row["published_at"] != evidence.get("published_at")
+                )
+                or (
+                    not absent
+                    and row["available_at"] != evidence.get("available_at")
+                )
+                or available_at > snapshot_cutoff
+            ):
+                raise ValueError("FORECAST_REVIEW_EVIDENCE_LINEAGE_INVALID")
+        return str(snapshot_id)
+
     def _persist_research_artifact_bundle(
         self,
         *,
