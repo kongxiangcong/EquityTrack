@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import date
 from decimal import Decimal
 from enum import Enum
@@ -1387,6 +1387,426 @@ class CyclicalResourceValuationSpec:
         )
 
 
+@dataclass(frozen=True)
+class FinancialMetricRange:
+    metric_id: str
+    low: ForecastQuantity
+    base: ForecastQuantity
+    high: ForecastQuantity
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[a-z0-9_]+", self.metric_id or ""):
+            raise ScenarioInvariantError(
+                "FINANCIAL_METRIC_ID_INVALID",
+                "Financial metric identifiers must be stable lowercase tokens.",
+            )
+        _validate_range(
+            self.low,
+            self.base,
+            self.high,
+            self.metric_id,
+            unit="decimal",
+        )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.low.lineage_refs,
+            self.base.lineage_refs,
+            self.high.lineage_refs,
+        )
+
+
+@dataclass(frozen=True)
+class FinancialInstitutionPeriodSpec:
+    period: str
+    roe_low: ForecastQuantity
+    roe_base: ForecastQuantity
+    roe_high: ForecastQuantity
+    payout_low: ForecastQuantity
+    payout_base: ForecastQuantity
+    payout_high: ForecastQuantity
+    rwa_growth_low: ForecastQuantity
+    rwa_growth_base: ForecastQuantity
+    rwa_growth_high: ForecastQuantity
+    clean_surplus_adjustment_low: FinancialQuantity
+    clean_surplus_adjustment_base: FinancialQuantity
+    clean_surplus_adjustment_high: FinancialQuantity
+    regulatory_capital_adjustment_low: FinancialQuantity
+    regulatory_capital_adjustment_base: FinancialQuantity
+    regulatory_capital_adjustment_high: FinancialQuantity
+    dilution_factor_low: ForecastQuantity
+    dilution_factor_base: ForecastQuantity
+    dilution_factor_high: ForecastQuantity
+    operating_exposure_to_equity_low: ForecastQuantity
+    operating_exposure_to_equity_base: ForecastQuantity
+    operating_exposure_to_equity_high: ForecastQuantity
+    operating_metrics: tuple[FinancialMetricRange, ...]
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"\d{4}(?:E|FY)", self.period or ""):
+            raise ScenarioInvariantError(
+                "FINANCIAL_PERIOD_INVALID",
+                "Financial institution schedules require annual E or FY periods.",
+            )
+        for name, quantities in (
+            (
+                "roe",
+                (self.roe_low, self.roe_base, self.roe_high),
+            ),
+            (
+                "payout",
+                (self.payout_low, self.payout_base, self.payout_high),
+            ),
+            (
+                "rwa_growth",
+                (
+                    self.rwa_growth_low,
+                    self.rwa_growth_base,
+                    self.rwa_growth_high,
+                ),
+            ),
+        ):
+            _validate_range(
+                *quantities,
+                name,
+                unit="decimal",
+            )
+            if any(item.period != self.period for item in quantities):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_PERIOD_BINDING_INVALID",
+                    f"{name} must bind the financial schedule period.",
+                )
+        if (
+            self.payout_low.normalized_value < 0
+            or self.payout_high.normalized_value > 1
+            or self.rwa_growth_low.normalized_value <= -1
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_RATE_RANGE_INVALID",
+                "Payout must remain within [0,1] and RWA growth above -1.",
+            )
+        _validate_range(
+            self.dilution_factor_low,
+            self.dilution_factor_base,
+            self.dilution_factor_high,
+            "dilution_factor",
+            unit="x",
+            positive=True,
+        )
+        if any(
+            item.period != self.period
+            for item in (
+                self.dilution_factor_low,
+                self.dilution_factor_base,
+                self.dilution_factor_high,
+            )
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_PERIOD_BINDING_INVALID",
+                "Dilution factors must bind the financial schedule period.",
+            )
+        _validate_range(
+            self.operating_exposure_to_equity_low,
+            self.operating_exposure_to_equity_base,
+            self.operating_exposure_to_equity_high,
+            "operating_exposure_to_equity",
+            unit="x",
+            positive=True,
+        )
+        if any(
+            item.period != self.period
+            for item in (
+                self.operating_exposure_to_equity_low,
+                self.operating_exposure_to_equity_base,
+                self.operating_exposure_to_equity_high,
+            )
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_PERIOD_BINDING_INVALID",
+                "Operating exposure-to-equity factors must bind the financial schedule period.",
+            )
+        money_ranges = (
+            (
+                self.clean_surplus_adjustment_low,
+                self.clean_surplus_adjustment_base,
+                self.clean_surplus_adjustment_high,
+            ),
+            (
+                self.regulatory_capital_adjustment_low,
+                self.regulatory_capital_adjustment_base,
+                self.regulatory_capital_adjustment_high,
+            ),
+        )
+        for quantities in money_ranges:
+            if (
+                any(not isinstance(item, FinancialQuantity) for item in quantities)
+                or any(item.kind != "money" for item in quantities)
+                or len(
+                    {
+                        (
+                            item.unit,
+                            item.scale,
+                            item.currency,
+                            item.period,
+                            item.as_of,
+                        )
+                        for item in quantities
+                    }
+                )
+                != 1
+                or quantities[0].period != self.period
+                or quantities[0].normalized_value
+                > quantities[1].normalized_value
+                or quantities[1].normalized_value
+                > quantities[2].normalized_value
+            ):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_MONEY_RANGE_INVALID",
+                    "Clean-surplus and regulatory-capital adjustments require ordered money ranges.",
+                )
+        if (
+            not isinstance(self.operating_metrics, tuple)
+            or not self.operating_metrics
+            or any(
+                not isinstance(item, FinancialMetricRange)
+                for item in self.operating_metrics
+            )
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_OPERATING_METRICS_INVALID",
+                "Financial periods require typed operating metrics.",
+            )
+        metric_ids = tuple(item.metric_id for item in self.operating_metrics)
+        if len(metric_ids) != len(set(metric_ids)) or any(
+            quantity.period != self.period
+            for metric in self.operating_metrics
+            for quantity in (metric.low, metric.base, metric.high)
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_OPERATING_METRICS_INVALID",
+                "Operating metric identifiers must be unique and period-bound.",
+            )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.roe_low.lineage_refs,
+            self.roe_base.lineage_refs,
+            self.roe_high.lineage_refs,
+            self.payout_low.lineage_refs,
+            self.payout_base.lineage_refs,
+            self.payout_high.lineage_refs,
+            self.rwa_growth_low.lineage_refs,
+            self.rwa_growth_base.lineage_refs,
+            self.rwa_growth_high.lineage_refs,
+            self.clean_surplus_adjustment_low.provenance_refs,
+            self.clean_surplus_adjustment_base.provenance_refs,
+            self.clean_surplus_adjustment_high.provenance_refs,
+            self.regulatory_capital_adjustment_low.provenance_refs,
+            self.regulatory_capital_adjustment_base.provenance_refs,
+            self.regulatory_capital_adjustment_high.provenance_refs,
+            self.dilution_factor_low.lineage_refs,
+            self.dilution_factor_base.lineage_refs,
+            self.dilution_factor_high.lineage_refs,
+            self.operating_exposure_to_equity_low.lineage_refs,
+            self.operating_exposure_to_equity_base.lineage_refs,
+            self.operating_exposure_to_equity_high.lineage_refs,
+            *(item.lineage_refs for item in self.operating_metrics),
+        )
+
+
+@dataclass(frozen=True)
+class FinancialInstitutionValuationSpec:
+    institution_type: Literal["bank", "insurance", "broker"]
+    opening_book_value: FinancialQuantity
+    opening_regulatory_capital: FinancialQuantity
+    opening_risk_weighted_assets: FinancialQuantity
+    minimum_regulatory_capital_ratio: ForecastQuantity
+    specialized_risk_limit: ForecastQuantity
+    cost_of_equity_low: ForecastQuantity
+    cost_of_equity_base: ForecastQuantity
+    cost_of_equity_high: ForecastQuantity
+    terminal_growth_low: ForecastQuantity
+    terminal_growth_base: ForecastQuantity
+    terminal_growth_high: ForecastQuantity
+    periods: tuple[FinancialInstitutionPeriodSpec, ...]
+
+    def __post_init__(self) -> None:
+        required_metrics = {
+            "bank": {"nim", "credit_cost", "npl_ratio"},
+            "insurance": {"combined_ratio", "solvency_ratio"},
+            "broker": {"net_capital_ratio", "fee_income_yield"},
+        }
+        if self.institution_type not in required_metrics:
+            raise ScenarioInvariantError(
+                "FINANCIAL_INSTITUTION_TYPE_INVALID",
+                "Financial institution type must be bank, insurance, or broker.",
+            )
+        opening = (
+            self.opening_book_value,
+            self.opening_regulatory_capital,
+            self.opening_risk_weighted_assets,
+        )
+        if (
+            any(not isinstance(item, FinancialQuantity) for item in opening)
+            or any(item.kind != "money" for item in opening)
+            or any(item.normalized_value <= 0 for item in opening)
+            or len(
+                {
+                    (
+                        item.unit,
+                        item.scale,
+                        item.currency,
+                        item.period,
+                        item.as_of,
+                    )
+                    for item in opening
+                }
+            )
+            != 1
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_OPENING_BALANCE_INVALID",
+                "Opening book value, regulatory capital, and RWA require positive money quantities on one basis.",
+            )
+        for item in opening:
+            _require_refs(
+                item.provenance_refs,
+                "FinancialInstitutionValuationSpec.opening_balance",
+                facts_only=True,
+            )
+        _validate_model_quantity(
+            self.minimum_regulatory_capital_ratio,
+            unit="decimal",
+            field_name="minimum_regulatory_capital_ratio",
+        )
+        if not Decimal("0") < self.minimum_regulatory_capital_ratio.normalized_value < 1:
+            raise ScenarioInvariantError(
+                "FINANCIAL_REGULATORY_MINIMUM_INVALID",
+                "Minimum regulatory capital ratio must be within (0,1).",
+            )
+        _validate_model_quantity(
+            self.specialized_risk_limit,
+            unit="decimal",
+            field_name="specialized_risk_limit",
+        )
+        if self.specialized_risk_limit.normalized_value <= 0:
+            raise ScenarioInvariantError(
+                "FINANCIAL_SPECIALIZED_RISK_LIMIT_INVALID",
+                "The institution-specific risk limit must be positive.",
+            )
+        _validate_range(
+            self.cost_of_equity_low,
+            self.cost_of_equity_base,
+            self.cost_of_equity_high,
+            "cost_of_equity",
+            unit="decimal",
+            positive=True,
+        )
+        _validate_range(
+            self.terminal_growth_low,
+            self.terminal_growth_base,
+            self.terminal_growth_high,
+            "financial_terminal_growth",
+            unit="decimal",
+        )
+        if (
+            self.cost_of_equity_low.normalized_value
+            <= self.terminal_growth_high.normalized_value
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_TERMINAL_SPREAD_INVALID",
+                "Every cost-of-equity case must exceed terminal growth.",
+            )
+        if (
+            not isinstance(self.periods, tuple)
+            or not self.periods
+            or any(
+                not isinstance(item, FinancialInstitutionPeriodSpec)
+                for item in self.periods
+            )
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_PERIODS_INVALID",
+                "Financial valuation requires a typed finite forecast schedule.",
+            )
+        years = [int(item.period[:4]) for item in self.periods]
+        if any(
+            current != previous + 1
+            for previous, current in zip(years, years[1:])
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_PERIODS_INVALID",
+                "Financial forecast periods must be strictly increasing and contiguous.",
+            )
+        for item in self.periods:
+            metrics = {
+                metric.metric_id: metric
+                for metric in item.operating_metrics
+            }
+            if not required_metrics[self.institution_type].issubset(metrics):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_SPECIALIZED_INPUT_MISSING",
+                    f"{self.institution_type} requires {sorted(required_metrics[self.institution_type])}.",
+                )
+            values = {
+                metric_id: tuple(
+                    getattr(metric, case_name).normalized_value
+                    for case_name in ("low", "base", "high")
+                )
+                for metric_id, metric in metrics.items()
+            }
+            if self.institution_type == "bank" and (
+                self.specialized_risk_limit.normalized_value > 1
+                or any(
+                    value < 0 or value > 1
+                    for metric_id in ("nim", "credit_cost", "npl_ratio")
+                    for value in values[metric_id]
+                )
+            ):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_SPECIALIZED_METRIC_DOMAIN_INVALID",
+                    "Bank NIM, credit cost, NPL ratio, and the NPL risk limit must remain within [0,1].",
+                )
+            if self.institution_type == "insurance" and (
+                any(value < 0 for value in values["combined_ratio"])
+                or any(value <= 0 for value in values["solvency_ratio"])
+            ):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_SPECIALIZED_METRIC_DOMAIN_INVALID",
+                    "Insurance combined ratios must be nonnegative and solvency ratios positive.",
+                )
+            if self.institution_type == "broker" and (
+                any(value <= 0 for value in values["net_capital_ratio"])
+                or any(
+                    value < 0 or value > 1
+                    for value in values["fee_income_yield"]
+                )
+            ):
+                raise ScenarioInvariantError(
+                    "FINANCIAL_SPECIALIZED_METRIC_DOMAIN_INVALID",
+                    "Broker net-capital ratios must be positive and fee-income yields within [0,1].",
+                )
+
+    @property
+    def lineage_refs(self) -> tuple[str, ...]:
+        return _merge_refs(
+            self.opening_book_value.provenance_refs,
+            self.opening_regulatory_capital.provenance_refs,
+            self.opening_risk_weighted_assets.provenance_refs,
+            self.minimum_regulatory_capital_ratio.lineage_refs,
+            self.specialized_risk_limit.lineage_refs,
+            self.cost_of_equity_low.lineage_refs,
+            self.cost_of_equity_base.lineage_refs,
+            self.cost_of_equity_high.lineage_refs,
+            self.terminal_growth_low.lineage_refs,
+            self.terminal_growth_base.lineage_refs,
+            self.terminal_growth_high.lineage_refs,
+            *(item.lineage_refs for item in self.periods),
+        )
+
+
 @dataclass(frozen=True, init=False)
 class RelativeMultipleSpec:
     """A copied, exact multiple range from the existing evidence-gated seam."""
@@ -1644,6 +2064,7 @@ class ValuationPlan:
     reverse_dcf: ReverseDcfSpec
     relative_methods: tuple[RelativeMultipleSpec, ...] = ()
     cyclical_resource: CyclicalResourceValuationSpec | None = None
+    financial_institution: FinancialInstitutionValuationSpec | None = None
 
     def __post_init__(self) -> None:
         if self.present_value_bridge.timing != EquityBridgeTiming.OPENING:
@@ -1676,6 +2097,14 @@ class ValuationPlan:
             raise ScenarioInvariantError(
                 "CYCLICAL_RESOURCE_SPEC_INVALID",
                 "cyclical_resource must be a CyclicalResourceValuationSpec.",
+            )
+        if self.financial_institution is not None and not isinstance(
+            self.financial_institution,
+            FinancialInstitutionValuationSpec,
+        ):
+            raise ScenarioInvariantError(
+                "FINANCIAL_INSTITUTION_SPEC_INVALID",
+                "financial_institution must be a FinancialInstitutionValuationSpec.",
             )
 
 
@@ -1954,6 +2383,9 @@ class ScenarioValuationEngine:
     MID_CYCLE_FORMULA_VERSION = "cycle_normalized_ev_ebitda@1"
     RESOURCE_NAV_FORMULA_VERSION = "finite_resource_nav_after_tax@1"
     CYCLICAL_HISTORY_FORMULA_VERSION = "pit_cycle_band_derived_peak@2"
+    FINANCIAL_PB_FORMULA_VERSION = "justified_pb_roe_coe_act365@3"
+    FINANCIAL_DDM_FORMULA_VERSION = "financial_ddm_clean_surplus_act365@3"
+    FINANCIAL_RI_FORMULA_VERSION = "residual_income_clean_surplus_act365@3"
 
     def run(self, request: DeterministicScenarioRequest) -> DeterministicScenarioResult:
         with valuation_decimal_context():
@@ -1971,6 +2403,7 @@ class ScenarioValuationEngine:
                     graph,
                     request.valuation_plan,
                     request.base_forecast_request,
+                    scenario.role,
                 )
                 results.append(
                     ScenarioValuationResult(
@@ -2254,6 +2687,7 @@ class ScenarioValuationEngine:
         graph: ForecastGraph,
         plan: ValuationPlan,
         base_request: ForecastRequest,
+        scenario_role: ScenarioRole,
     ) -> tuple[ScenarioMethodResult, ...]:
         periods = self._periods(graph)
         dcf_horizon = (
@@ -2329,6 +2763,18 @@ class ScenarioValuationEngine:
                     plan,
                     base_request,
                     terminal_horizon,
+                )
+            )
+        if (
+            base_request.security.archetype
+            == CompanyArchetype.FINANCIAL_INSTITUTION
+        ):
+            methods.extend(
+                self._financial_institution_methods(
+                    graph,
+                    plan,
+                    base_request,
+                    scenario_role,
                 )
             )
         return tuple(methods)
@@ -2464,10 +2910,18 @@ class ScenarioValuationEngine:
         spec = plan.dcf
         if (
             base_request.security.archetype
-            == CompanyArchetype.CYCLICAL_RESOURCE
+            in {
+                CompanyArchetype.CYCLICAL_RESOURCE,
+                CompanyArchetype.FINANCIAL_INSTITUTION,
+            }
         ):
+            archetype = base_request.security.archetype.value
             raise _MethodBlocked(
-                "CYCLICAL_STABLE_GROWTH_DISABLED: ordinary FCFF/WACC DCF is disabled because a current commodity price or peak margin must not be capitalized in perpetuity; use finite-life NAV and mid-cycle methods."
+                (
+                    "CYCLICAL_STABLE_GROWTH_DISABLED: ordinary FCFF/WACC DCF is disabled because a current commodity price or peak margin must not be capitalized in perpetuity; use finite-life NAV and mid-cycle methods."
+                    if archetype == CompanyArchetype.CYCLICAL_RESOURCE.value
+                    else "FINANCIAL_FCFF_DISABLED: deposits, policyholder liabilities, and regulatory capital are operating inputs rather than industrial financing debt; use P/B-ROE/COE, DDM, or residual income."
+                )
             )
         self._validate_method_bridge(
             graph,
@@ -2601,6 +3055,13 @@ class ScenarioValuationEngine:
         tuple[str, ...],
         tuple[str, ...],
     ]:
+        if (
+            base_request.security.archetype
+            == CompanyArchetype.FINANCIAL_INSTITUTION
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_INDUSTRIAL_METHOD_DISABLED: industrial segment EV multiples are disabled for financial institutions."
+            )
         self._validate_method_bridge(
             graph,
             plan.terminal_value_bridge,
@@ -2683,6 +3144,13 @@ class ScenarioValuationEngine:
         tuple[str, ...],
         tuple[str, ...],
     ]:
+        if (
+            base_request.security.archetype
+            == CompanyArchetype.FINANCIAL_INSTITUTION
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_FCFF_DISABLED: reverse FCFF DCF is not meaningful for financial institutions."
+            )
         spec = plan.reverse_dcf
         self._validate_method_bridge(
             graph,
@@ -2793,6 +3261,13 @@ class ScenarioValuationEngine:
             tuple[str, ...],
             tuple[str, ...],
         ]:
+            if (
+                base_request.security.archetype
+                == CompanyArchetype.FINANCIAL_INSTITUTION
+            ):
+                raise _MethodBlocked(
+                    "FINANCIAL_GENERIC_RELATIVE_DISABLED: use the specialized P/B-ROE/COE method instead of industrial revenue multiples."
+                )
             self._validate_method_bridge(
                 graph,
                 plan.terminal_value_bridge,
@@ -3908,6 +4383,787 @@ class ScenarioValuationEngine:
             ValuationSensitivity("maintenance_capex", *capex),
         )
 
+    def _financial_institution_methods(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        scenario_role: ScenarioRole,
+    ) -> tuple[ScenarioMethodResult, ...]:
+        spec = plan.financial_institution
+        method_definitions = (
+            (
+                "justified_pb",
+                self.FINANCIAL_PB_FORMULA_VERSION,
+                self._financial_pb,
+            ),
+            (
+                "dividend_discount_model",
+                self.FINANCIAL_DDM_FORMULA_VERSION,
+                self._financial_ddm,
+            ),
+            (
+                "residual_income",
+                self.FINANCIAL_RI_FORMULA_VERSION,
+                self._financial_residual_income,
+            ),
+        )
+        horizon = (
+            f"valuation_as_of={self._as_of(graph)};"
+            f"financial_periods={self._periods(graph)[0]}..{self._periods(graph)[-1]}"
+        )
+        if spec is None:
+            return tuple(
+                ScenarioMethodResult(
+                    method_id=method_id,
+                    status="blocked",
+                    applicability=(
+                        "Financial-institution valuation requires typed book value, "
+                        "regulatory capital, clean-surplus, ROE/COE, payout, dilution, "
+                        "and institution-specific operating metrics."
+                    ),
+                    value_basis="equity_value",
+                    horizon=horizon,
+                    assumptions=(),
+                    formula_version=formula_version,
+                    conditional_value_range=None,
+                    sensitivity=(),
+                    diagnostics=(
+                        "FINANCIAL_SPECIALIZED_INPUT_MISSING: no financial-institution valuation specification was supplied.",
+                    ),
+                    lineage_refs=(
+                        "Assumption:financial_institution_spec_missing",
+                    ),
+                )
+                for method_id, formula_version, _ in method_definitions
+            )
+        common_refs = _merge_refs(
+            spec.lineage_refs,
+            plan.present_value_bridge.provenance_refs,
+        )
+        return tuple(
+            self._isolate_method(
+                method_id,
+                (
+                    f"Applicable to {spec.institution_type}; uses regulatory-capital "
+                    "and clean-surplus economics rather than industrial enterprise debt."
+                ),
+                "equity_value",
+                horizon,
+                graph,
+                formula_version,
+                lambda calculation=calculation: calculation(
+                    graph,
+                    plan,
+                    base_request,
+                    spec,
+                    scenario_role,
+                ),
+                common_refs,
+            )
+            for method_id, formula_version, calculation in method_definitions
+        )
+
+    def _validate_financial_runtime(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+    ) -> None:
+        self._validate_method_bridge(
+            graph,
+            plan.present_value_bridge,
+            base_request,
+        )
+        periods = self._periods(graph)
+        if tuple(item.period for item in spec.periods) != periods:
+            raise _MethodBlocked(
+                "FINANCIAL_PERIOD_COVERAGE_INVALID: specialized financial schedule must exactly cover the routed forecast periods."
+            )
+        if any(
+            quantity.as_of != self._as_of(graph)
+            for quantity in (
+                spec.minimum_regulatory_capital_ratio,
+                spec.specialized_risk_limit,
+                spec.cost_of_equity_low,
+                spec.cost_of_equity_base,
+                spec.cost_of_equity_high,
+                spec.terminal_growth_low,
+                spec.terminal_growth_base,
+                spec.terminal_growth_high,
+            )
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_AS_OF_INVALID: financial valuation assumptions must bind the frozen valuation as-of."
+            )
+        period_quantities = tuple(
+            quantity
+            for period in spec.periods
+            for quantity in (
+                *(
+                    value
+                    for field in fields(period)
+                    for value in (getattr(period, field.name),)
+                    if isinstance(
+                        value,
+                        (ForecastQuantity, FinancialQuantity),
+                    )
+                ),
+                *(
+                    quantity
+                    for metric in period.operating_metrics
+                    for quantity in (
+                        metric.low,
+                        metric.base,
+                        metric.high,
+                    )
+                ),
+            )
+        )
+        if any(
+            quantity.as_of != self._as_of(graph)
+            for quantity in period_quantities
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_AS_OF_INVALID: every period-level driver and adjustment must bind the frozen valuation as-of."
+            )
+        opening_balances = (
+            spec.opening_book_value,
+            spec.opening_regulatory_capital,
+            spec.opening_risk_weighted_assets,
+        )
+        if any(
+            quantity.period
+            != plan.present_value_bridge.balance_sheet_period
+            or quantity.as_of != self._as_of(graph)
+            for quantity in opening_balances
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_OPENING_PERIOD_INVALID: opening balances must bind the present-value bridge balance-sheet period and frozen as-of."
+            )
+        if (
+            spec.opening_regulatory_capital.normalized_value
+            / spec.opening_risk_weighted_assets.normalized_value
+            < spec.minimum_regulatory_capital_ratio.normalized_value
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_OPENING_CAPITAL_BREACH: opening regulatory capital is already below the declared minimum."
+            )
+        reporting_currency = base_request.security.reporting_currency
+        if any(
+            item.currency != reporting_currency
+            for item in (
+                spec.opening_book_value,
+                spec.opening_regulatory_capital,
+                spec.opening_risk_weighted_assets,
+            )
+        ) or any(
+            quantity.currency != reporting_currency
+            for period in spec.periods
+            for quantity in (
+                period.clean_surplus_adjustment_low,
+                period.clean_surplus_adjustment_base,
+                period.clean_surplus_adjustment_high,
+                period.regulatory_capital_adjustment_low,
+                period.regulatory_capital_adjustment_base,
+                period.regulatory_capital_adjustment_high,
+            )
+        ):
+            raise _MethodBlocked(
+                "FINANCIAL_CURRENCY_MISMATCH: all book, capital, RWA, and adjustment quantities must use the reporting currency."
+            )
+        facts = {
+            fact.fact_id: fact for fact in base_request.data_snapshot.facts
+        }
+        for metric_id, quantity in (
+            ("opening_book_value", spec.opening_book_value),
+            (
+                "opening_regulatory_capital",
+                spec.opening_regulatory_capital,
+            ),
+            (
+                "opening_risk_weighted_assets",
+                spec.opening_risk_weighted_assets,
+            ),
+        ):
+            resolved = tuple(
+                facts.get(ref.removeprefix("Fact:"))
+                for ref in quantity.provenance_refs
+            )
+            if (
+                any(fact is None for fact in resolved)
+                or not any(
+                    fact.subject_id == graph.security_id
+                    and fact.scope == "company"
+                    and fact.metric_id == metric_id
+                    and fact.value == quantity.normalized_value
+                    and fact.unit == quantity.unit
+                    and fact.currency == quantity.currency
+                    and fact.period == quantity.period
+                    and fact.official
+                    and date.fromisoformat(fact.available_at)
+                    <= date.fromisoformat(self._as_of(graph))
+                    for fact in resolved
+                    if fact is not None
+                )
+            ):
+                raise _MethodBlocked(
+                    "FINANCIAL_EVIDENCE_INVALID: opening book value, regulatory capital, and RWA must resolve exactly through official frozen facts."
+                )
+
+    def _financial_projections(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+        scenario_role: ScenarioRole,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        self._validate_financial_runtime(
+            graph,
+            plan,
+            base_request,
+            spec,
+        )
+        scenario_case = {
+            ScenarioRole.STRESS: "low",
+            ScenarioRole.BASE: "base",
+            ScenarioRole.IMPROVEMENT: "high",
+        }[scenario_role]
+        adverse_case = {
+            "low": "high",
+            "base": "base",
+            "high": "low",
+        }[scenario_case]
+        selected_growth = getattr(
+            spec,
+            f"terminal_growth_{scenario_case}",
+        ).normalized_value
+        terminal_clean_adjustment = getattr(
+            spec.periods[-1],
+            f"clean_surplus_adjustment_{scenario_case}",
+        ).normalized_value
+        if terminal_clean_adjustment != 0:
+            raise _MethodBlocked(
+                "FINANCIAL_TERMINAL_CLEAN_SURPLUS_UNSUPPORTED: a continuing terminal clean-surplus adjustment requires an explicit separate terminal model."
+            )
+        discount_times = self._discount_times(
+            tuple(item.period for item in spec.periods),
+            self._as_of(graph),
+        )
+        projections: list[dict[str, Any]] = []
+        case_fields = (
+            ("low", spec.cost_of_equity_high),
+            ("base", spec.cost_of_equity_base),
+            ("high", spec.cost_of_equity_low),
+        )
+        for case_name, coe_quantity in case_fields:
+            book = spec.opening_book_value.normalized_value
+            regulatory_capital = (
+                spec.opening_regulatory_capital.normalized_value
+            )
+            rwa = spec.opening_risk_weighted_assets.normalized_value
+            dividends: list[Decimal] = []
+            residual_incomes: list[Decimal] = []
+            opening_books: list[Decimal] = []
+            capital_ratios: list[Decimal] = []
+            last_roe = Decimal("0")
+            last_payout = Decimal("0")
+            dilution = Decimal("1")
+            sustainable_growth = Decimal("0")
+            selected_metrics: dict[str, Decimal] = {}
+            previous_time = Decimal("0")
+            for period, timing in zip(
+                spec.periods,
+                discount_times,
+                strict=True,
+            ):
+                opening_books.append(book)
+                metrics = {
+                    item.metric_id: item
+                    for item in period.operating_metrics
+                }
+                roe = getattr(
+                    period,
+                    f"roe_{scenario_case}",
+                ).normalized_value
+                operating_exposure = getattr(
+                    period,
+                    f"operating_exposure_to_equity_{scenario_case}",
+                ).normalized_value
+                if spec.institution_type == "bank":
+                    nim = getattr(
+                        metrics["nim"],
+                        scenario_case,
+                    ).normalized_value
+                    credit_cost = getattr(
+                        metrics["credit_cost"],
+                        adverse_case,
+                    ).normalized_value
+                    npl_ratio = getattr(
+                        metrics["npl_ratio"],
+                        adverse_case,
+                    ).normalized_value
+                    roe = roe + (nim - credit_cost) * operating_exposure
+                    selected_metrics = {
+                        "nim": nim,
+                        "credit_cost": credit_cost,
+                        "npl_ratio": npl_ratio,
+                        "operating_exposure_to_equity": operating_exposure,
+                    }
+                    if (
+                        npl_ratio
+                        > spec.specialized_risk_limit.normalized_value
+                    ):
+                        raise _MethodBlocked(
+                            "FINANCIAL_SPECIALIZED_RISK_BREACH: projected bank NPL ratio exceeds the declared asset-quality limit."
+                        )
+                elif spec.institution_type == "insurance":
+                    combined_ratio = getattr(
+                        metrics["combined_ratio"],
+                        adverse_case,
+                    ).normalized_value
+                    solvency_ratio = getattr(
+                        metrics["solvency_ratio"],
+                        scenario_case,
+                    ).normalized_value
+                    roe = (
+                        roe
+                        + (Decimal("1") - combined_ratio)
+                        * operating_exposure
+                    )
+                    selected_metrics = {
+                        "combined_ratio": combined_ratio,
+                        "solvency_ratio": solvency_ratio,
+                        "operating_exposure_to_equity": operating_exposure,
+                    }
+                    if (
+                        solvency_ratio
+                        < spec.specialized_risk_limit.normalized_value
+                    ):
+                        raise _MethodBlocked(
+                            "FINANCIAL_SPECIALIZED_CAPITAL_BREACH: projected insurance solvency ratio falls below the declared regulatory minimum."
+                        )
+                else:
+                    net_capital_ratio = getattr(
+                        metrics["net_capital_ratio"],
+                        scenario_case,
+                    ).normalized_value
+                    fee_income_yield = getattr(
+                        metrics["fee_income_yield"],
+                        scenario_case,
+                    ).normalized_value
+                    roe = (
+                        roe
+                        + fee_income_yield
+                        * operating_exposure
+                    )
+                    selected_metrics = {
+                        "net_capital_ratio": net_capital_ratio,
+                        "fee_income_yield": fee_income_yield,
+                        "operating_exposure_to_equity": operating_exposure,
+                    }
+                    if (
+                        net_capital_ratio
+                        < spec.specialized_risk_limit.normalized_value
+                    ):
+                        raise _MethodBlocked(
+                            "FINANCIAL_SPECIALIZED_CAPITAL_BREACH: projected broker net-capital ratio falls below the declared regulatory minimum."
+                        )
+                payout = getattr(
+                    period,
+                    f"payout_{scenario_case}",
+                ).normalized_value
+                rwa_growth = getattr(
+                    period,
+                    f"rwa_growth_{adverse_case}",
+                ).normalized_value
+                clean_adjustment = getattr(
+                    period,
+                    f"clean_surplus_adjustment_{scenario_case}",
+                ).normalized_value
+                capital_adjustment = getattr(
+                    period,
+                    f"regulatory_capital_adjustment_{scenario_case}",
+                ).normalized_value
+                period_dilution = getattr(
+                    period,
+                    f"dilution_factor_{adverse_case}",
+                ).normalized_value
+                dilution *= period_dilution
+                net_income = book * roe
+                dividend = net_income * payout
+                interval_required_return = (
+                    (Decimal("1") + coe_quantity.normalized_value)
+                    ** (timing - previous_time)
+                    - Decimal("1")
+                )
+                residual_income = (
+                    net_income
+                    + clean_adjustment
+                    - interval_required_return * book
+                )
+                sustainable_growth = (
+                    net_income - dividend + clean_adjustment
+                ) / book
+                book = book + net_income - dividend + clean_adjustment
+                regulatory_capital = (
+                    regulatory_capital
+                    + net_income
+                    - dividend
+                    + capital_adjustment
+                )
+                rwa = rwa * (Decimal("1") + rwa_growth)
+                if book <= 0 or rwa <= 0 or dilution <= 0:
+                    raise _MethodBlocked(
+                        "FINANCIAL_BALANCE_INVALID: book value, RWA, and dilution must remain positive."
+                    )
+                capital_ratio = regulatory_capital / rwa
+                if (
+                    capital_ratio
+                    < spec.minimum_regulatory_capital_ratio.normalized_value
+                ):
+                    raise _MethodBlocked(
+                        "FINANCIAL_REGULATORY_CAPITAL_BREACH: projected capital falls below the declared regulatory minimum."
+                    )
+                dividends.append(dividend)
+                residual_incomes.append(residual_income)
+                capital_ratios.append(capital_ratio)
+                last_roe = roe
+                last_payout = payout
+                previous_time = timing
+            if (
+                abs(sustainable_growth - selected_growth)
+                > Decimal("0.02")
+            ):
+                raise _MethodBlocked(
+                    "FINANCIAL_TERMINAL_GROWTH_INCONSISTENT: declared terminal growth must reconcile within two percentage points of ROE retention plus the clean-surplus adjustment."
+                )
+            if coe_quantity.normalized_value <= sustainable_growth:
+                raise _MethodBlocked(
+                    "FINANCIAL_TERMINAL_SPREAD_INVALID: cost of equity must exceed sustainable clean-surplus growth."
+                )
+            projections.append(
+                {
+                    "case": case_name,
+                    "scenario_case": scenario_case,
+                    "book": book,
+                    "dividends": tuple(dividends),
+                    "residual_incomes": tuple(residual_incomes),
+                    "opening_books": tuple(opening_books),
+                    "capital_ratios": tuple(capital_ratios),
+                    "roe": last_roe,
+                    "payout": last_payout,
+                    "dilution": dilution,
+                    "coe": coe_quantity.normalized_value,
+                    "growth": sustainable_growth,
+                    "declared_growth": selected_growth,
+                    "operating_metrics": selected_metrics,
+                }
+            )
+        return cast(
+            tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+            tuple(projections),
+        )
+
+    def _financial_common_output(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+        values: tuple[Decimal, Decimal, Decimal],
+        projections: tuple[dict[str, Any], dict[str, Any], dict[str, Any]],
+        *,
+        formula_version: str,
+        method_diagnostic: str,
+    ) -> MethodCalculationResult:
+        if not values[0] <= values[1] <= values[2]:
+            raise _MethodBlocked(
+                "FINANCIAL_VALUE_RANGE_INVALID: stress/base/improvement assumptions did not produce an ordered conditional value range."
+            )
+        lineage = _merge_refs(
+            spec.lineage_refs,
+            graph.quantity(
+                f"financial.horizon.{self._periods(graph)[0]}"
+            ).lineage_refs,
+            (
+                "Assumption:financial_scenario_case:"
+                f"{projections[0]['scenario_case']}",
+            ),
+            (f"Assumption:formula:{formula_version}",),
+        )
+        value_range = self._bridge_range(
+            graph,
+            plan.present_value_bridge,
+            "equity_value",
+            values,
+            formula_version,
+            basis_period=plan.present_value_bridge.balance_sheet_period,
+            basis_refs=lineage,
+            share_multipliers=cast(
+                tuple[Decimal, Decimal, Decimal],
+                tuple(item["dilution"] for item in projections),
+            ),
+        )
+        terminal = spec.periods[-1]
+        sensitivities = (
+            ValuationSensitivity(
+                "terminal_roe",
+                terminal.roe_low,
+                terminal.roe_base,
+                terminal.roe_high,
+            ),
+            ValuationSensitivity(
+                "cost_of_equity",
+                spec.cost_of_equity_low,
+                spec.cost_of_equity_base,
+                spec.cost_of_equity_high,
+            ),
+            ValuationSensitivity(
+                "payout_ratio",
+                terminal.payout_low,
+                terminal.payout_base,
+                terminal.payout_high,
+            ),
+            ValuationSensitivity(
+                "dilution_factor",
+                terminal.dilution_factor_low,
+                terminal.dilution_factor_base,
+                terminal.dilution_factor_high,
+            ),
+            ValuationSensitivity(
+                "operating_exposure_to_equity",
+                terminal.operating_exposure_to_equity_low,
+                terminal.operating_exposure_to_equity_base,
+                terminal.operating_exposure_to_equity_high,
+            ),
+            *(
+                ValuationSensitivity(
+                    metric.metric_id,
+                    metric.low,
+                    metric.base,
+                    metric.high,
+                )
+                for metric in terminal.operating_metrics
+            ),
+        )
+        assumptions = (
+            ValuationAssumption(
+                "minimum_regulatory_capital_ratio",
+                spec.minimum_regulatory_capital_ratio,
+            ),
+            ValuationAssumption(
+                "specialized_risk_limit",
+                spec.specialized_risk_limit,
+            ),
+            ValuationAssumption(
+                "cost_of_equity",
+                spec.cost_of_equity_base,
+            ),
+            ValuationAssumption(
+                "declared_terminal_growth_guardrail",
+                spec.terminal_growth_base,
+            ),
+        )
+        diagnostics = (
+            method_diagnostic,
+            (
+                "Scenario-specific financial drivers were selected as "
+                f"{projections[0]['scenario_case']}; terminal clean-surplus "
+                f"growth={_decimal_text(projections[1]['growth'])}, declared "
+                f"growth={_decimal_text(projections[1]['declared_growth'])}, "
+                f"cumulative share factor={_decimal_text(projections[1]['dilution'])}."
+            ),
+            "Explicit financial cash flows and terminal value are discounted from the frozen valuation date to exact period ends using ACT/365.",
+            "Values are conditional on clean-surplus reconciliation and regulatory-capital compliance; no cross-method averaging is performed.",
+        )
+        return value_range, assumptions, sensitivities, lineage, diagnostics
+
+    def _financial_pb(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+        scenario_role: ScenarioRole,
+    ) -> MethodCalculationResult:
+        projections = self._financial_projections(
+            graph,
+            plan,
+            base_request,
+            spec,
+            scenario_role,
+        )
+        discount_times = self._discount_times(
+            tuple(item.period for item in spec.periods),
+            self._as_of(graph),
+        )
+        values: list[Decimal] = []
+        for projection in projections:
+            coe = projection["coe"]
+            growth = projection["growth"]
+            explicit_dividends = sum(
+                (
+                    dividend
+                    / ((Decimal("1") + coe) ** timing)
+                    for timing, dividend in zip(
+                        discount_times,
+                        projection["dividends"],
+                        strict=True,
+                    )
+                ),
+                Decimal("0"),
+            )
+            terminal_equity = (
+                projection["book"]
+                * (projection["roe"] - growth)
+                / (coe - growth)
+            )
+            values.append(
+                explicit_dividends
+                + terminal_equity
+                / ((Decimal("1") + coe) ** discount_times[-1])
+            )
+        return self._financial_common_output(
+            graph,
+            plan,
+            base_request,
+            spec,
+            cast(tuple[Decimal, Decimal, Decimal], tuple(values)),
+            projections,
+            formula_version=self.FINANCIAL_PB_FORMULA_VERSION,
+            method_diagnostic=(
+                "Justified P/B adds explicit distributable dividends to the discounted terminal ROE/COE franchise value; dilution changes only the per-share denominator."
+            ),
+        )
+
+    def _financial_ddm(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+        scenario_role: ScenarioRole,
+    ) -> MethodCalculationResult:
+        projections = self._financial_projections(
+            graph,
+            plan,
+            base_request,
+            spec,
+            scenario_role,
+        )
+        discount_times = self._discount_times(
+            tuple(item.period for item in spec.periods),
+            self._as_of(graph),
+        )
+        values: list[Decimal] = []
+        for projection in projections:
+            coe = projection["coe"]
+            growth = projection["growth"]
+            dividends = projection["dividends"]
+            explicit = sum(
+                (
+                    dividend
+                    / ((Decimal("1") + coe) ** timing)
+                    for timing, dividend in zip(
+                        discount_times,
+                        dividends,
+                        strict=True,
+                    )
+                ),
+                Decimal("0"),
+            )
+            terminal_dividend = (
+                projection["book"]
+                * projection["roe"]
+                * projection["payout"]
+            )
+            terminal = terminal_dividend / (coe - growth)
+            values.append(
+                explicit
+                + terminal
+                / (
+                    (Decimal("1") + coe)
+                    ** discount_times[-1]
+                )
+            )
+        return self._financial_common_output(
+            graph,
+            plan,
+            base_request,
+            spec,
+            cast(tuple[Decimal, Decimal, Decimal], tuple(values)),
+            projections,
+            formula_version=self.FINANCIAL_DDM_FORMULA_VERSION,
+            method_diagnostic=(
+                "DDM discounts distributable cash only after the projected regulatory-capital minimum remains satisfied."
+            ),
+        )
+
+    def _financial_residual_income(
+        self,
+        graph: ForecastGraph,
+        plan: ValuationPlan,
+        base_request: ForecastRequest,
+        spec: FinancialInstitutionValuationSpec,
+        scenario_role: ScenarioRole,
+    ) -> MethodCalculationResult:
+        projections = self._financial_projections(
+            graph,
+            plan,
+            base_request,
+            spec,
+            scenario_role,
+        )
+        discount_times = self._discount_times(
+            tuple(item.period for item in spec.periods),
+            self._as_of(graph),
+        )
+        values: list[Decimal] = []
+        for projection in projections:
+            coe = projection["coe"]
+            growth = projection["growth"]
+            explicit = sum(
+                (
+                    residual_income
+                    / ((Decimal("1") + coe) ** timing)
+                    for timing, residual_income in zip(
+                        discount_times,
+                        projection["residual_incomes"],
+                        strict=True,
+                    )
+                ),
+                Decimal("0"),
+            )
+            terminal_residual_income = (
+                projection["book"]
+                * (projection["roe"] - coe)
+                / (coe - growth)
+            )
+            values.append(
+                spec.opening_book_value.normalized_value
+                + explicit
+                + terminal_residual_income
+                / (
+                    (Decimal("1") + coe)
+                    ** discount_times[-1]
+                )
+            )
+        return self._financial_common_output(
+            graph,
+            plan,
+            base_request,
+            spec,
+            cast(tuple[Decimal, Decimal, Decimal], tuple(values)),
+            projections,
+            formula_version=self.FINANCIAL_RI_FORMULA_VERSION,
+            method_diagnostic=(
+                "Residual income values only returns above COE and reconciles through the clean-surplus book-value roll-forward."
+            ),
+        )
+
     def _bridge_range(
         self,
         graph: ForecastGraph,
@@ -3918,6 +5174,11 @@ class ScenarioValuationEngine:
         *,
         basis_period: str,
         basis_refs: tuple[str, ...],
+        share_multipliers: tuple[Decimal, Decimal, Decimal] = (
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("1"),
+        ),
     ) -> ConditionalValueRange:
         refs = _merge_refs(
             basis_refs,
@@ -3931,8 +5192,13 @@ class ScenarioValuationEngine:
                 value,
                 basis_period,
                 refs,
+                share_multiplier,
             )
-            for value in values
+            for value, share_multiplier in zip(
+                values,
+                share_multipliers,
+                strict=True,
+            )
         )
         return ConditionalValueRange(
             low=points[0],
@@ -3948,10 +5214,24 @@ class ScenarioValuationEngine:
         value: Decimal,
         basis_period: str,
         refs: tuple[str, ...],
+        share_multiplier: Decimal = Decimal("1"),
     ) -> ValuationPoint:
-        cash, debt = self._bridge_cash_debt(graph, spec)
-        currency = cash.currency
-        as_of = cash.as_of
+        if share_multiplier <= 0:
+            raise _MethodBlocked(
+                "FINANCIAL_DILUTION_INVALID: cumulative share multiplier must remain positive."
+            )
+        if value_basis == "enterprise_value":
+            cash, debt = self._bridge_cash_debt(graph, spec)
+            currency = cash.currency
+            as_of = cash.as_of
+        else:
+            cash = None
+            debt = None
+            currency = (
+                spec.output_currency
+                or spec.lease_debt.currency
+            )
+            as_of = spec.diluted_shares.as_of
         basis = FinancialQuantity(
             value=value,
             unit=currency,
@@ -3984,13 +5264,31 @@ class ScenarioValuationEngine:
                 "associates_jv_value": None,
                 "non_operating_assets": None,
             }
+        diluted_shares = self._normalized_financial(spec.diluted_shares)
+        if share_multiplier != Decimal("1"):
+            diluted_shares = FinancialQuantity(
+                value=diluted_shares.normalized_value * share_multiplier,
+                unit=diluted_shares.unit,
+                scale=Decimal("1"),
+                currency=diluted_shares.currency,
+                period=diluted_shares.period,
+                as_of=diluted_shares.as_of,
+                provenance_refs=_merge_refs(
+                    diluted_shares.provenance_refs,
+                    (
+                        "Assumption:financial_cumulative_dilution:"
+                        f"{_decimal_text(share_multiplier)}",
+                    ),
+                ),
+                kind=diluted_shares.kind,
+            )
         result = EquityBridge(
             basis_value=basis,
             value_basis=value_basis,
             balance_sheet_period=spec.balance_sheet_period,
             valuation_as_of=as_of,
             output_currency=spec.output_currency or currency,
-            diluted_shares=self._normalized_financial(spec.diluted_shares),
+            diluted_shares=diluted_shares,
             **adjustments,
         ).evaluate()
         return self._valuation_point(basis, result)
@@ -4274,6 +5572,12 @@ class ScenarioValuationEngine:
             for node in graph.nodes
             if node.node_id.startswith("valuation.fcff.")
         )
+        if not periods and graph.template_id == "financial_institution_valuation_shell@1":
+            periods = tuple(
+                node.quantity.period
+                for node in graph.nodes
+                if node.node_id.startswith("financial.horizon.")
+            )
         if not periods:
             raise ForecastInvariantError(
                 "FORECAST_VALUATION_INPUT_MISSING",
@@ -4282,7 +5586,14 @@ class ScenarioValuationEngine:
         return periods
 
     def _as_of(self, graph: ForecastGraph) -> str:
-        return graph.quantity(f"valuation.fcff.{self._periods(graph)[0]}").as_of
+        first_period = self._periods(graph)[0]
+        node_id = (
+            f"financial.horizon.{first_period}"
+            if graph.template_id
+            == "financial_institution_valuation_shell@1"
+            else f"valuation.fcff.{first_period}"
+        )
+        return graph.quantity(node_id).as_of
 
     def _forecast_lineage(self, graph: ForecastGraph) -> tuple[str, ...]:
         return _merge_refs(

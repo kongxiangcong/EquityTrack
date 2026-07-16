@@ -14,6 +14,9 @@ from equity_research import (
     EquityBridgeSpec,
     EquityBridgeTiming,
     FinancialQuantity,
+    FinancialInstitutionPeriodSpec,
+    FinancialInstitutionValuationSpec,
+    FinancialMetricRange,
     ForecastQuantity,
     HistoricalCycleObservation,
     MethodResult,
@@ -875,6 +878,300 @@ def cyclical_request(
     )
 
 
+def financial_metric(
+    metric_id: str,
+    period: str,
+    values: tuple[str, str, str],
+) -> FinancialMetricRange:
+    return FinancialMetricRange(
+        metric_id=metric_id,
+        low=model_quantity(
+            values[0],
+            "decimal",
+            f"Assumption:{metric_id}:low",
+            period=period,
+        ),
+        base=model_quantity(
+            values[1],
+            "decimal",
+            f"Assumption:{metric_id}:base",
+            period=period,
+        ),
+        high=model_quantity(
+            values[2],
+            "decimal",
+            f"Assumption:{metric_id}:high",
+            period=period,
+        ),
+    )
+
+
+def financial_institution_spec(
+    *,
+    minimum_capital_ratio: str = "0.10",
+) -> FinancialInstitutionValuationSpec:
+    periods = tuple(
+        FinancialInstitutionPeriodSpec(
+            period=period,
+            operating_metrics=(
+                nim := financial_metric(
+                    "nim", period, ("0.025", "0.030", "0.035")
+                ),
+                credit_cost := financial_metric(
+                    "credit_cost", period, ("0.007", "0.010", "0.015")
+                ),
+                npl := financial_metric(
+                    "npl_ratio", period, ("0.010", "0.015", "0.020")
+                ),
+            ),
+            roe_low=model_quantity(
+                "0.08",
+                "decimal",
+                (
+                    *nim.low.lineage_refs,
+                    *credit_cost.low.lineage_refs,
+                    *npl.low.lineage_refs,
+                    f"Assumption:roe:{period}:low",
+                ),
+                period=period,
+            ),
+            roe_base=model_quantity(
+                "0.11",
+                "decimal",
+                (
+                    *nim.base.lineage_refs,
+                    *credit_cost.base.lineage_refs,
+                    *npl.base.lineage_refs,
+                    f"Assumption:roe:{period}:base",
+                ),
+                period=period,
+            ),
+            roe_high=model_quantity(
+                "0.14",
+                "decimal",
+                (
+                    *nim.high.lineage_refs,
+                    *credit_cost.high.lineage_refs,
+                    *npl.high.lineage_refs,
+                    f"Assumption:roe:{period}:high",
+                ),
+                period=period,
+            ),
+            payout_low=model_quantity(
+                "0.65",
+                "decimal",
+                f"Assumption:payout:{period}:low",
+                period=period,
+            ),
+            payout_base=model_quantity(
+                "0.75",
+                "decimal",
+                f"Assumption:payout:{period}:base",
+                period=period,
+            ),
+            payout_high=model_quantity(
+                "0.80",
+                "decimal",
+                f"Assumption:payout:{period}:high",
+                period=period,
+            ),
+            rwa_growth_low=model_quantity(
+                "0.02",
+                "decimal",
+                f"Assumption:rwa_growth:{period}:low",
+                period=period,
+            ),
+            rwa_growth_base=model_quantity(
+                "0.04",
+                "decimal",
+                f"Assumption:rwa_growth:{period}:base",
+                period=period,
+            ),
+            rwa_growth_high=model_quantity(
+                "0.06",
+                "decimal",
+                f"Assumption:rwa_growth:{period}:high",
+                period=period,
+            ),
+            clean_surplus_adjustment_low=money(
+                "0", f"clean_surplus:{period}:low", period=period
+            ),
+            clean_surplus_adjustment_base=money(
+                "0", f"clean_surplus:{period}:base", period=period
+            ),
+            clean_surplus_adjustment_high=money(
+                "0", f"clean_surplus:{period}:high", period=period
+            ),
+            regulatory_capital_adjustment_low=money(
+                "0", f"regulatory_capital:{period}:low", period=period
+            ),
+            regulatory_capital_adjustment_base=money(
+                "0", f"regulatory_capital:{period}:base", period=period
+            ),
+            regulatory_capital_adjustment_high=money(
+                "0", f"regulatory_capital:{period}:high", period=period
+            ),
+            dilution_factor_low=model_quantity(
+                "1",
+                "x",
+                f"Assumption:dilution:{period}:low",
+                period=period,
+            ),
+            dilution_factor_base=model_quantity(
+                "1.02",
+                "x",
+                f"Assumption:dilution:{period}:base",
+                period=period,
+            ),
+            dilution_factor_high=model_quantity(
+                "1.04",
+                "x",
+                f"Assumption:dilution:{period}:high",
+                period=period,
+            ),
+            operating_exposure_to_equity_low=model_quantity(
+                "3",
+                "x",
+                f"Assumption:operating_exposure_to_equity:{period}:low",
+                period=period,
+            ),
+            operating_exposure_to_equity_base=model_quantity(
+                "4",
+                "x",
+                f"Assumption:operating_exposure_to_equity:{period}:base",
+                period=period,
+            ),
+            operating_exposure_to_equity_high=model_quantity(
+                "5",
+                "x",
+                f"Assumption:operating_exposure_to_equity:{period}:high",
+                period=period,
+            ),
+        )
+        for period in FORECAST_PERIODS
+    )
+    return FinancialInstitutionValuationSpec(
+        institution_type="bank",
+        opening_book_value=money(
+            "1000",
+            "opening_book_value",
+            period=OPENING_PERIOD,
+            provenance_refs=("Fact:opening_book_value",),
+        ),
+        opening_regulatory_capital=money(
+            "150",
+            "opening_regulatory_capital",
+            period=OPENING_PERIOD,
+            provenance_refs=("Fact:opening_regulatory_capital",),
+        ),
+        opening_risk_weighted_assets=money(
+            "1000",
+            "opening_risk_weighted_assets",
+            period=OPENING_PERIOD,
+            provenance_refs=("Fact:opening_risk_weighted_assets",),
+        ),
+        minimum_regulatory_capital_ratio=model_quantity(
+            minimum_capital_ratio,
+            "decimal",
+            "Assumption:minimum_regulatory_capital_ratio",
+            period=AS_OF,
+        ),
+        specialized_risk_limit=model_quantity(
+            "0.025",
+            "decimal",
+            "Assumption:specialized_risk_limit",
+            period=AS_OF,
+        ),
+        cost_of_equity_low=model_quantity(
+            "0.09", "decimal", "Assumption:financial_coe", period=AS_OF
+        ),
+        cost_of_equity_base=model_quantity(
+            "0.10", "decimal", "Assumption:financial_coe", period=AS_OF
+        ),
+        cost_of_equity_high=model_quantity(
+            "0.11", "decimal", "Assumption:financial_coe", period=AS_OF
+        ),
+        terminal_growth_low=model_quantity(
+            "0.0385",
+            "decimal",
+            "Assumption:financial_terminal_growth",
+            period=AS_OF,
+        ),
+        terminal_growth_base=model_quantity(
+            "0.0475",
+            "decimal",
+            "Assumption:financial_terminal_growth",
+            period=AS_OF,
+        ),
+        terminal_growth_high=model_quantity(
+            "0.056",
+            "decimal",
+            "Assumption:financial_terminal_growth",
+            period=AS_OF,
+        ),
+        periods=periods,
+    )
+
+
+def financial_request(
+    *,
+    spec: FinancialInstitutionValuationSpec | None = None,
+) -> DeterministicScenarioRequest:
+    subject = scenario_request()
+    financial_spec = spec or financial_institution_spec()
+    base = replace(
+        subject.base_forecast_request,
+        security=replace(
+            subject.base_forecast_request.security,
+            archetype=CompanyArchetype.FINANCIAL_INSTITUTION,
+        ),
+    )
+    facts = tuple(
+        SnapshotFact(
+            fact_id=quantity.provenance_refs[0].removeprefix("Fact:"),
+            subject_id=base.security.security_id,
+            scope="company",
+            segment_id="",
+            metric_id=metric_id,
+            field_name=metric_id,
+            period=quantity.period,
+            value=quantity.normalized_value,
+            unit=quantity.unit,
+            currency=quantity.currency,
+            source_id="OFFICIAL_FINANCIAL_INSTITUTION_DISCLOSURE",
+            available_at=AS_OF,
+            official=True,
+        )
+        for metric_id, quantity in (
+            ("opening_book_value", financial_spec.opening_book_value),
+            (
+                "opening_regulatory_capital",
+                financial_spec.opening_regulatory_capital,
+            ),
+            (
+                "opening_risk_weighted_assets",
+                financial_spec.opening_risk_weighted_assets,
+            ),
+        )
+    )
+    base = replace(
+        base,
+        data_snapshot=replace(
+            base.data_snapshot,
+            facts=base.data_snapshot.facts + facts,
+            content_hash="",
+        ),
+    )
+    return replace(
+        subject,
+        base_forecast_request=base,
+        valuation_plan=replace(
+            subject.valuation_plan,
+            financial_institution=financial_spec,
+        ),
+    )
+
+
 def contains_float(value: object) -> bool:
     if isinstance(value, float):
         return True
@@ -1205,6 +1502,630 @@ def test_resource_schedule_chronology_and_cross_asset_currency_fail_closed() -> 
             method = scenario_result.method(method_id)
             assert method.status == "blocked"
             assert "RESOURCE_REPORTING_CURRENCY_MISMATCH" in method.diagnostics[0]
+
+
+def test_financial_institution_route_disables_fcff_and_executes_specialized_methods() -> None:
+    result = ScenarioValuationEngine().run(financial_request())
+
+    for scenario_result in result.scenarios:
+        assert scenario_result.forecast_graph.template_id == (
+            "financial_institution_valuation_shell@1"
+        )
+        assert "Industrial FCFF/WACC" in (
+            scenario_result.forecast_graph.routing_explanation
+        )
+        assert scenario_result.method("fcff_dcf").status == "blocked"
+        assert "FINANCIAL_FCFF_DISABLED" in scenario_result.method(
+            "fcff_dcf"
+        ).diagnostics[0]
+        assert scenario_result.method("sotp").status == "blocked"
+        assert scenario_result.method("reverse_dcf").status == "blocked"
+        for method_id in (
+            "justified_pb",
+            "dividend_discount_model",
+            "residual_income",
+        ):
+            method = scenario_result.method(method_id)
+            assert method.status == "ready"
+            assert method.value_basis == "equity_value"
+            assert method.conditional_value_range is not None
+            assert any(
+                "no cross-method averaging" in diagnostic
+                for diagnostic in method.diagnostics
+            )
+
+
+def test_financial_ddm_and_residual_income_cross_explain_without_composite() -> None:
+    result = ScenarioValuationEngine().run(financial_request())
+    base_scenario = next(
+        item for item in result.scenarios if item.role == ScenarioRole.BASE
+    )
+    ddm = base_scenario.method(
+        "dividend_discount_model"
+    ).conditional_value_range.per_share_base
+    residual_income = base_scenario.method(
+        "residual_income"
+    ).conditional_value_range.per_share_base
+    justified_pb = base_scenario.method(
+        "justified_pb"
+    ).conditional_value_range.per_share_base
+
+    assert ddm > 0
+    assert residual_income > 0
+    assert abs(ddm - residual_income) < Decimal("1E-40")
+    assert abs(ddm - justified_pb) < Decimal("1E-40")
+    assert result.cross_method_composite is None
+
+
+def test_financial_scenarios_and_specialized_metrics_change_values() -> None:
+    baseline = ScenarioValuationEngine().run(financial_request())
+    pb_by_role = {
+        item.role: item.method(
+            "justified_pb"
+        ).conditional_value_range.per_share_base
+        for item in baseline.scenarios
+    }
+    assert (
+        pb_by_role[ScenarioRole.STRESS]
+        < pb_by_role[ScenarioRole.BASE]
+        < pb_by_role[ScenarioRole.IMPROVEMENT]
+    )
+    assert len(
+        {item.forecast_graph.graph_id for item in baseline.scenarios}
+    ) == 3
+
+    base_spec = financial_institution_spec()
+    weaker_periods = tuple(
+        replace(
+            period,
+            operating_metrics=tuple(
+                financial_metric(
+                    metric.metric_id,
+                    period.period,
+                    (
+                        ("0.010", "0.015", "0.020")
+                        if metric.metric_id == "nim"
+                        else (
+                            "0.015",
+                            "0.020",
+                            "0.030",
+                        )
+                    ),
+                )
+                for metric in period.operating_metrics
+            ),
+        )
+        for period in base_spec.periods
+    )
+    weaker = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(
+                base_spec,
+                periods=weaker_periods,
+                terminal_growth_low=replace(
+                    base_spec.terminal_growth_low,
+                    value=Decimal("0.007"),
+                ),
+                terminal_growth_base=replace(
+                    base_spec.terminal_growth_base,
+                    value=Decimal("0.0225"),
+                ),
+                terminal_growth_high=replace(
+                    base_spec.terminal_growth_high,
+                    value=Decimal("0.033"),
+                ),
+            )
+        )
+    )
+    weaker_base = next(
+        item for item in weaker.scenarios if item.role == ScenarioRole.BASE
+    )
+    assert (
+        weaker_base.method(
+            "justified_pb"
+        ).conditional_value_range.per_share_base
+        < pb_by_role[ScenarioRole.BASE]
+    )
+
+
+def test_financial_dilution_changes_per_share_not_total_equity_value() -> None:
+    diluted_spec = financial_institution_spec()
+    undiluted_periods = tuple(
+        replace(
+            period,
+            dilution_factor_low=replace(
+                period.dilution_factor_low,
+                value=Decimal("1"),
+            ),
+            dilution_factor_base=replace(
+                period.dilution_factor_base,
+                value=Decimal("1"),
+            ),
+            dilution_factor_high=replace(
+                period.dilution_factor_high,
+                value=Decimal("1"),
+            ),
+        )
+        for period in diluted_spec.periods
+    )
+    diluted = ScenarioValuationEngine().run(
+        financial_request(spec=diluted_spec)
+    )
+    undiluted = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(
+                diluted_spec,
+                periods=undiluted_periods,
+            )
+        )
+    )
+    diluted_method = next(
+        item for item in diluted.scenarios if item.role == ScenarioRole.BASE
+    ).method("dividend_discount_model")
+    undiluted_method = next(
+        item for item in undiluted.scenarios if item.role == ScenarioRole.BASE
+    ).method("dividend_discount_model")
+
+    assert (
+        diluted_method.conditional_value_range.equity_value_base
+        == undiluted_method.conditional_value_range.equity_value_base
+    )
+    assert (
+        diluted_method.conditional_value_range.per_share_base
+        < undiluted_method.conditional_value_range.per_share_base
+    )
+
+
+def test_financial_terminal_clean_surplus_requires_explicit_terminal_model() -> None:
+    base_spec = financial_institution_spec()
+    terminal = base_spec.periods[-1]
+    unsupported_terminal = replace(
+        terminal,
+        clean_surplus_adjustment_low=replace(
+            terminal.clean_surplus_adjustment_low,
+            value=Decimal("5"),
+        ),
+        clean_surplus_adjustment_base=replace(
+            terminal.clean_surplus_adjustment_base,
+            value=Decimal("10"),
+        ),
+        clean_surplus_adjustment_high=replace(
+            terminal.clean_surplus_adjustment_high,
+            value=Decimal("15"),
+        ),
+    )
+    result = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(
+                base_spec,
+                periods=(
+                    *base_spec.periods[:-1],
+                    unsupported_terminal,
+                ),
+            )
+        )
+    )
+
+    for scenario_result in result.scenarios:
+        for method_id in (
+            "justified_pb",
+            "dividend_discount_model",
+            "residual_income",
+        ):
+            method = scenario_result.method(method_id)
+            assert method.status == "blocked"
+            assert (
+                "FINANCIAL_TERMINAL_CLEAN_SURPLUS_UNSUPPORTED"
+                in method.diagnostics[0]
+            )
+
+
+def test_financial_finite_clean_surplus_adjustments_reconcile_methods() -> None:
+    base_spec = financial_institution_spec()
+    adjusted_periods = tuple(
+        period
+        if index == len(base_spec.periods) - 1
+        else replace(
+            period,
+            clean_surplus_adjustment_low=replace(
+                period.clean_surplus_adjustment_low,
+                value=Decimal("5"),
+            ),
+            clean_surplus_adjustment_base=replace(
+                period.clean_surplus_adjustment_base,
+                value=Decimal("10"),
+            ),
+            clean_surplus_adjustment_high=replace(
+                period.clean_surplus_adjustment_high,
+                value=Decimal("15"),
+            ),
+        )
+        for index, period in enumerate(base_spec.periods)
+    )
+    result = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(base_spec, periods=adjusted_periods)
+        )
+    )
+
+    for scenario_result in result.scenarios:
+        values = tuple(
+            scenario_result.method(
+                method_id
+            ).conditional_value_range.equity_value_base
+            for method_id in (
+                "justified_pb",
+                "dividend_discount_model",
+                "residual_income",
+            )
+        )
+        assert max(values) - min(values) < Decimal("1E-40")
+
+
+def test_financial_missing_inputs_and_regulatory_breach_fail_locally() -> None:
+    subject = financial_request()
+    missing = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            valuation_plan=replace(
+                subject.valuation_plan,
+                financial_institution=None,
+            ),
+        )
+    )
+    for scenario_result in missing.scenarios:
+        for method_id in (
+            "justified_pb",
+            "dividend_discount_model",
+            "residual_income",
+        ):
+            assert scenario_result.method(method_id).status == "blocked"
+        assert scenario_result.method("fcff_dcf").status == "blocked"
+
+    base_spec = financial_institution_spec()
+    capital_stressed_periods = tuple(
+        replace(
+            period,
+            regulatory_capital_adjustment_low=replace(
+                period.regulatory_capital_adjustment_low,
+                value=Decimal("-100"),
+            ),
+            regulatory_capital_adjustment_base=replace(
+                period.regulatory_capital_adjustment_base,
+                value=Decimal("-100"),
+            ),
+            regulatory_capital_adjustment_high=replace(
+                period.regulatory_capital_adjustment_high,
+                value=Decimal("-100"),
+            ),
+        )
+        for period in base_spec.periods
+    )
+    breached = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(
+                base_spec,
+                periods=capital_stressed_periods,
+            )
+        )
+    )
+    for scenario_result in breached.scenarios:
+        for method_id in (
+            "justified_pb",
+            "dividend_discount_model",
+            "residual_income",
+        ):
+            method = scenario_result.method(method_id)
+            assert method.status == "blocked"
+            assert "FINANCIAL_REGULATORY_CAPITAL_BREACH" in method.diagnostics[0]
+
+
+def test_financial_opening_capital_period_and_as_of_fail_closed() -> None:
+    base_spec = financial_institution_spec()
+    opening_breach = replace(
+        base_spec,
+        opening_regulatory_capital=replace(
+            base_spec.opening_regulatory_capital,
+            value=Decimal("99"),
+        ),
+    )
+    breached = ScenarioValuationEngine().run(
+        financial_request(spec=opening_breach)
+    )
+    for scenario_result in breached.scenarios:
+        assert (
+            "FINANCIAL_OPENING_CAPITAL_BREACH"
+            in scenario_result.method("justified_pb").diagnostics[0]
+        )
+
+    wrong_period = replace(
+        base_spec,
+        opening_book_value=replace(
+            base_spec.opening_book_value,
+            period="2020FY",
+        ),
+        opening_regulatory_capital=replace(
+            base_spec.opening_regulatory_capital,
+            period="2020FY",
+        ),
+        opening_risk_weighted_assets=replace(
+            base_spec.opening_risk_weighted_assets,
+            period="2020FY",
+        ),
+    )
+    period_result = ScenarioValuationEngine().run(
+        financial_request(spec=wrong_period)
+    )
+    for scenario_result in period_result.scenarios:
+        assert (
+            "FINANCIAL_OPENING_PERIOD_INVALID"
+            in scenario_result.method("justified_pb").diagnostics[0]
+        )
+
+    first = base_spec.periods[0]
+    wrong_as_of = replace(
+        first,
+        payout_low=replace(first.payout_low, as_of="2030-01-01"),
+        payout_base=replace(first.payout_base, as_of="2030-01-01"),
+        payout_high=replace(first.payout_high, as_of="2030-01-01"),
+    )
+    as_of_result = ScenarioValuationEngine().run(
+        financial_request(
+            spec=replace(
+                base_spec,
+                periods=(wrong_as_of, *base_spec.periods[1:]),
+            )
+        )
+    )
+    for scenario_result in as_of_result.scenarios:
+        assert (
+            "FINANCIAL_AS_OF_INVALID"
+            in scenario_result.method("justified_pb").diagnostics[0]
+        )
+
+
+def test_financial_specialized_metric_domains_are_validated() -> None:
+    base_spec = financial_institution_spec()
+    first = base_spec.periods[0]
+    npl = next(
+        metric
+        for metric in first.operating_metrics
+        if metric.metric_id == "npl_ratio"
+    )
+    invalid_npl = replace(
+        npl,
+        low=replace(npl.low, value=Decimal("-0.01")),
+    )
+    invalid_period = replace(
+        first,
+        operating_metrics=tuple(
+            invalid_npl if metric.metric_id == "npl_ratio" else metric
+            for metric in first.operating_metrics
+        ),
+    )
+    with pytest.raises(ScenarioInvariantError) as metric_error:
+        replace(
+            base_spec,
+            periods=(invalid_period, *base_spec.periods[1:]),
+        )
+    assert (
+        metric_error.value.code
+        == "FINANCIAL_SPECIALIZED_METRIC_DOMAIN_INVALID"
+    )
+
+    with pytest.raises(ScenarioInvariantError) as limit_error:
+        replace(
+            base_spec,
+            specialized_risk_limit=replace(
+                base_spec.specialized_risk_limit,
+                value=Decimal("2"),
+            ),
+        )
+    assert (
+        limit_error.value.code
+        == "FINANCIAL_SPECIALIZED_METRIC_DOMAIN_INVALID"
+    )
+
+
+def test_financial_lineage_distinguishes_each_scenario_case() -> None:
+    result = ScenarioValuationEngine().run(financial_request())
+    lineages = {
+        item.role: item.method("dividend_discount_model").lineage_refs
+        for item in result.scenarios
+    }
+
+    assert len(set(lineages.values())) == 3
+    for role, refs in lineages.items():
+        expected_case = {
+            ScenarioRole.STRESS: "low",
+            ScenarioRole.BASE: "base",
+            ScenarioRole.IMPROVEMENT: "high",
+        }[role]
+        assert (
+            f"Assumption:financial_scenario_case:{expected_case}"
+            in refs
+        )
+        assert any(
+            ref.startswith("Assumption:financial_scenario_overrides:")
+            for ref in refs
+        )
+
+
+def test_financial_methods_discount_with_actual_act365_dates() -> None:
+    request = financial_request()
+    engine = ScenarioValuationEngine()
+    result = engine.run(request)
+    base_result = next(
+        item for item in result.scenarios if item.role == ScenarioRole.BASE
+    )
+    spec = request.valuation_plan.financial_institution
+    projections = engine._financial_projections(
+        base_result.forecast_graph,
+        request.valuation_plan,
+        request.base_forecast_request,
+        spec,
+        ScenarioRole.BASE,
+    )
+    projection = projections[1]
+    times = engine._discount_times(FORECAST_PERIODS, AS_OF)
+    coe = projection["coe"]
+    explicit = sum(
+        (
+            dividend / ((Decimal("1") + coe) ** timing)
+            for timing, dividend in zip(
+                times,
+                projection["dividends"],
+                strict=True,
+            )
+        ),
+        Decimal("0"),
+    )
+    terminal = (
+        projection["book"]
+        * projection["roe"]
+        * projection["payout"]
+        / (coe - projection["growth"])
+    )
+    expected = explicit + terminal / (
+        (Decimal("1") + coe) ** times[-1]
+    )
+    integer_year_value = sum(
+        (
+            dividend / ((Decimal("1") + coe) ** year_index)
+            for year_index, dividend in enumerate(
+                projection["dividends"],
+                start=1,
+            )
+        ),
+        Decimal("0"),
+    ) + terminal / (
+        (Decimal("1") + coe) ** len(FORECAST_PERIODS)
+    )
+    actual = base_result.method(
+        "dividend_discount_model"
+    ).conditional_value_range.equity_value_base
+
+    assert abs(actual - expected) < Decimal("1E-20")
+    assert actual != integer_year_value
+
+
+@pytest.mark.parametrize(
+    (
+        "institution_type",
+        "metric_values",
+        "exposure_values",
+        "risk_limit",
+    ),
+    (
+        (
+            "insurance",
+            {
+                "combined_ratio": ("0.92", "0.96", "1.02"),
+                "solvency_ratio": ("0.12", "0.15", "0.18"),
+            },
+            ("0.50", "0.75", "1.00"),
+            "0.11",
+        ),
+        (
+            "broker",
+            {
+                "net_capital_ratio": ("0.12", "0.15", "0.18"),
+                "fee_income_yield": ("0.03", "0.05", "0.07"),
+            },
+            ("0.50", "0.75", "1.00"),
+            "0.11",
+        ),
+    ),
+)
+def test_insurance_and_broker_require_and_preserve_specialized_drivers(
+    institution_type: str,
+    metric_values: dict[str, tuple[str, str, str]],
+    exposure_values: tuple[str, str, str],
+    risk_limit: str,
+) -> None:
+    base_spec = financial_institution_spec()
+    periods = []
+    for period in base_spec.periods:
+        metrics = tuple(
+            financial_metric(
+                metric_id,
+                period.period,
+                values,
+            )
+            for metric_id, values in metric_values.items()
+        )
+        periods.append(
+            replace(
+                period,
+                operating_metrics=metrics,
+                roe_low=replace(
+                    period.roe_low,
+                    lineage_refs=(
+                        *(ref for metric in metrics for ref in metric.low.lineage_refs),
+                        f"Assumption:roe:{period.period}:low",
+                    ),
+                ),
+                roe_base=replace(
+                    period.roe_base,
+                    lineage_refs=(
+                        *(ref for metric in metrics for ref in metric.base.lineage_refs),
+                        f"Assumption:roe:{period.period}:base",
+                    ),
+                ),
+                roe_high=replace(
+                    period.roe_high,
+                    lineage_refs=(
+                        *(ref for metric in metrics for ref in metric.high.lineage_refs),
+                        f"Assumption:roe:{period.period}:high",
+                    ),
+                ),
+                operating_exposure_to_equity_low=model_quantity(
+                    exposure_values[0],
+                    "x",
+                    (
+                        "Assumption:operating_exposure_to_equity:"
+                        f"{period.period}:low"
+                    ),
+                    period=period.period,
+                ),
+                operating_exposure_to_equity_base=model_quantity(
+                    exposure_values[1],
+                    "x",
+                    (
+                        "Assumption:operating_exposure_to_equity:"
+                        f"{period.period}:base"
+                    ),
+                    period=period.period,
+                ),
+                operating_exposure_to_equity_high=model_quantity(
+                    exposure_values[2],
+                    "x",
+                    (
+                        "Assumption:operating_exposure_to_equity:"
+                        f"{period.period}:high"
+                    ),
+                    period=period.period,
+                ),
+            )
+        )
+    spec = replace(
+        base_spec,
+        institution_type=institution_type,
+        periods=tuple(periods),
+        specialized_risk_limit=model_quantity(
+            risk_limit,
+            "decimal",
+            "Assumption:specialized_risk_limit",
+            period=AS_OF,
+        ),
+    )
+
+    result = ScenarioValuationEngine().run(financial_request(spec=spec))
+
+    for scenario_result in result.scenarios:
+        assert scenario_result.method("justified_pb").status == "ready"
+        assert scenario_result.method("dividend_discount_model").status == "ready"
+        assert scenario_result.method("residual_income").status == "ready"
 
 
 def test_formal_ranges_preserve_dimensions_period_as_of_and_method_lineage() -> None:

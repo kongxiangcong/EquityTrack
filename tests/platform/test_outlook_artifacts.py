@@ -21,7 +21,11 @@ from tests.platform.test_research_workflow import (
 from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash, _expire
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from test_scenario_valuation import cyclical_request, scenario_request
+from test_scenario_valuation import (
+    cyclical_request,
+    financial_request,
+    scenario_request,
+)
 
 
 def _drafts(
@@ -83,6 +87,34 @@ def test_cyclical_methods_are_preserved_in_immutable_valuation_artifact() -> Non
         "cycle_normalized_ev_ebitda@1",
         "finite_resource_nav_after_tax@1",
         "pit_cycle_band_derived_peak@2",
+    } <= set(draft.formula_identities)
+
+
+def test_financial_methods_are_preserved_without_industrial_fallback() -> None:
+    request = financial_request()
+    graph = ForecastEngine().build(request.base_forecast_request)
+    result = ScenarioValuationEngine().run(request)
+
+    draft = ImmutableArtifactDraft.from_scenario_valuation(
+        result,
+        forecast_graph=graph,
+        model_identity="company-outlook-model@1",
+        policy_identity="company-outlook-policy@1",
+    )
+
+    methods = {
+        method["method_id"]: method
+        for scenario in draft.payload["scenarios"]
+        for method in scenario["methods"]
+    }
+    assert methods["fcff_dcf"]["status"] == "blocked"
+    assert methods["justified_pb"]["status"] == "ready"
+    assert methods["dividend_discount_model"]["status"] == "ready"
+    assert methods["residual_income"]["status"] == "ready"
+    assert {
+        "justified_pb_roe_coe_act365@3",
+        "financial_ddm_clean_surplus_act365@3",
+        "residual_income_clean_surplus_act365@3",
     } <= set(draft.formula_identities)
 
 

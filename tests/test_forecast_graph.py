@@ -421,17 +421,25 @@ def test_forecast_graph_validates_edge_dimensions() -> None:
     assert currency_error.value.code == "FORECAST_EDGE_CURRENCY_MISMATCH"
 
 
-def test_forecast_router_fails_closed_for_unsupported_archetype() -> None:
+def test_forecast_router_uses_dedicated_financial_institution_shell() -> None:
     subject = request()
     financial_security = replace(
         subject.security,
         archetype=CompanyArchetype.FINANCIAL_INSTITUTION,
     )
 
-    with pytest.raises(ForecastInvariantError) as error:
-        ForecastEngine().build(replace(subject, security=financial_security))
+    graph = ForecastEngine().build(
+        replace(subject, security=financial_security)
+    )
 
-    assert error.value.code == "FORECAST_TEMPLATE_UNSUPPORTED"
+    assert graph.template_id == "financial_institution_valuation_shell@1"
+    assert "Industrial FCFF/WACC" in graph.routing_explanation
+    assert all(
+        node.node_id.startswith("financial.horizon.")
+        for node in graph.nodes
+    )
+    assert len(graph.edges) == len(subject.forecast_periods) - 1
+    assert all(edge.period_rule == "prior" for edge in graph.edges)
 
 
 def test_snapshot_hash_binds_security_and_typed_content() -> None:

@@ -1457,6 +1457,11 @@ class ForecastEngine:
     TEMPLATE_ID = "manufacturing_driver_graph@2"
 
     def build(self, request: ForecastRequest) -> ForecastGraph:
+        if (
+            request.security.archetype
+            == CompanyArchetype.FINANCIAL_INSTITUTION
+        ):
+            return self._build_financial_institution_shell(request)
         if request.security.archetype not in {
             CompanyArchetype.GENERAL_MANUFACTURING,
             CompanyArchetype.MULTI_SEGMENT_MANUFACTURING,
@@ -1592,6 +1597,98 @@ class ForecastEngine:
             routing_explanation=routing_explanation,
             nodes=tuple(nodes),
             edges=tuple(edges),
+        )
+
+    def _build_financial_institution_shell(
+        self,
+        request: ForecastRequest,
+    ) -> ForecastGraph:
+        override_payload = [
+            item.to_dict() for item in request.assumption_overrides
+        ]
+        override_hash = hashlib.sha256(
+            json.dumps(
+                override_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        first_period = request.forecast_periods[0]
+        first = self._input_node(
+            request,
+            node_id=f"financial.horizon.{first_period}",
+            label=f"financial institution forecast horizon {first_period}",
+            quantity=self._quantity(
+                Decimal("1"),
+                unit="count",
+                currency="N/A",
+                period=first_period,
+                as_of=request.as_of,
+                lineage_refs=(
+                    f"Assumption:financial_institution_horizon:{first_period}",
+                    f"Assumption:financial_scenario_overrides:{override_hash}",
+                ),
+            ),
+        )
+        built_nodes = [first]
+        built_edges: list[ForecastEdge] = []
+        previous = first
+        for period in request.forecast_periods[1:]:
+            node, node_edges = self._derived_node(
+                request,
+                node_id=f"financial.horizon.{period}",
+                kind=ForecastNodeKind.DRIVER,
+                label=f"financial institution forecast horizon {period}",
+                period=period,
+                unit="count",
+                currency="N/A",
+                formula=FormulaId.PASSTHROUGH,
+                operands=(("value", previous, Decimal("1")),),
+                probability=Decimal("1"),
+            )
+            built_nodes.append(node)
+            built_edges.extend(node_edges)
+            previous = node
+        nodes = tuple(built_nodes)
+        edges = tuple(built_edges)
+        identity_payload = {
+            "template_id": "financial_institution_valuation_shell@1",
+            "security_id": request.security.security_id,
+            "snapshot_id": request.data_snapshot.snapshot_id,
+            "snapshot_hash": request.data_snapshot.content_hash,
+            "periods": list(request.forecast_periods),
+            "review_date": request.review_date,
+            "assumption_overrides": override_payload,
+            "nodes": [
+                {
+                    "node_id": node.node_id,
+                    "quantity": node.quantity.to_dict(),
+                }
+                for node in nodes
+            ],
+            "edges": [edge.to_dict() for edge in edges],
+        }
+        identity = hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return ForecastGraph(
+            graph_id=f"fg_{identity[:24]}",
+            security_id=request.security.security_id,
+            data_snapshot_id=request.data_snapshot.snapshot_id,
+            template_id="financial_institution_valuation_shell@1",
+            routing_explanation=(
+                "Routed financial-institution economics to a dedicated regulatory-capital, "
+                "clean-surplus, dividend, and residual-income valuation shell. Industrial "
+                "FCFF/WACC and manufacturing operating templates are disabled."
+            ),
+            nodes=nodes,
+            edges=edges,
         )
 
     @staticmethod
