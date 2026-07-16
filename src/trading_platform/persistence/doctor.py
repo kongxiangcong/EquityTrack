@@ -66,7 +66,7 @@ class DoctorService:
             bad_attempts = self.connection.execute("SELECT workflow_node_run_id FROM workflow_node_attempt GROUP BY workflow_node_run_id HAVING min(attempt_no)!=1 OR max(attempt_no)!=count(*) LIMIT 1").fetchone()
             if bad_checkpoint: errors.append("WORKFLOW_CHECKPOINT_MISSING")
             if bad_attempts: errors.append("WORKFLOW_ATTEMPT_NON_MONOTONIC")
-            ref_targets = {"Artifact": ("artifact", "artifact_id"), "ResearchRun": ("research_run_record", "research_run_id"), "DataSnapshot": ("data_snapshot", "data_snapshot_id"), "ResearchProjection": ("research_input_projection", "research_projection_id"), "ArtifactManifest": ("artifact_manifest", "artifact_manifest_id")}
+            ref_targets = {"Artifact": ("artifact", "artifact_id"), "ResearchArtifact": ("research_artifact_record", "artifact_record_id"), "ResearchRun": ("research_run_record", "research_run_id"), "DataSnapshot": ("data_snapshot", "data_snapshot_id"), "ResearchProjection": ("research_input_projection", "research_projection_id"), "ArtifactManifest": ("artifact_manifest", "artifact_manifest_id")}
             for ref in self.connection.execute("SELECT ref_type,ref_id FROM workflow_run_ref"):
                 target = ref_targets.get(ref["ref_type"])
                 if target is None or self.connection.execute(f"SELECT 1 FROM {target[0]} WHERE {target[1]}=?", (ref["ref_id"],)).fetchone() is None: errors.append("WORKFLOW_REFERENCE_MISSING")

@@ -17,7 +17,7 @@ from .contracts import (
     WatchlistView,
 )
 from trading_platform.domain.data import ProviderAttemptEvidence, SnapshotMemberView, SyncRequest, SyncResult
-from trading_platform.domain.workflow import ArtifactManifestView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
+from trading_platform.domain.workflow import ArtifactManifestView, ResearchArtifactView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
@@ -106,6 +106,11 @@ class ApplicationFacade:
         if self._research_workflow is None:
             raise RuntimeError("research workflow unavailable")
         return self._research_workflow.get_manifest(manifest_id)
+
+    def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView:
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.get_research_artifact(artifact_record_id)
 
     def resume_workflow(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")

@@ -45,8 +45,10 @@ class ProductionCompositionRoot:
                 self._data_sync_repository = repository
                 data_sync = DataSyncService(repository, providers, fixture_rights)
             workflow_repository = WorkflowRepository(self._store.connection, self._store.objects, self._store.writer_lock)
+            workflow_repository.fault_injector = workflow_fault_injector
             self._workflow_repository = workflow_repository
             research_workflow = ResearchWorkflowService(workflow_repository, ResearchAdapter(research_engine or ResearchEngine()), SnapshotToResearchRequestAssembler(), root, workflow_fault_injector)
+            self._research_workflow = research_workflow
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))
             market = MarketEvaluationService(SQLiteMarketRepository(self._store.connection, self._store.writer_lock), plans)

@@ -13,7 +13,17 @@ from pathlib import Path
 from typing import Callable
 
 from trading_platform.application.contracts import CancelWorkflowCommand, ResumeWorkflowCommand
-from trading_platform.domain.workflow import ArtifactManifestView, FieldSemantics, ReferenceDisposition, ResearchProjection, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
+from trading_platform.domain.workflow import (
+    ArtifactManifestView,
+    FieldSemantics,
+    ImmutableArtifactDraft,
+    ReferenceDisposition,
+    ResearchArtifactView,
+    ResearchProjection,
+    ResearchWorkflowRequest,
+    ResearchWorkflowResult,
+    WorkflowHistory,
+)
 from trading_platform.identity.code import build_code_identity
 from trading_platform.research import ProjectionError, ResearchAdapter, SnapshotToResearchRequestAssembler
 
@@ -88,11 +98,11 @@ class ResearchWorkflowService:
             projection_id, research_snapshot_id, projection_artifact, research_fingerprint = self._freeze(run_id, request, owner)
             self.repository.stop_if_cancelled(run_id)
             self.repository.heartbeat(run_id, owner, lease_seconds)
-            record, disposition, json_artifact, html_artifact, run_node, run_attempt = self._research(run_id, request, owner, projection_id, research_snapshot_id, projection_artifact, research_fingerprint, lease_seconds)
+            record, disposition, run_members, run_node, run_attempt = self._research(run_id, request, owner, projection_id, research_snapshot_id, projection_artifact, research_fingerprint, lease_seconds)
             self.repository.stop_if_cancelled(run_id)
             self.repository.heartbeat(run_id, owner, lease_seconds)
             final_contract = self._node("publish_run_manifest")
-            final_fp = self._hash({"node": asdict(final_contract), "run": record["research_run_id"], "json": json_artifact, "html": html_artifact})
+            final_fp = self._hash({"node": asdict(final_contract), "run": record["research_run_id"], "members": run_members})
             completed = self.repository.validate_checkpoint(run_id, final_contract, final_fp)
             if completed is not None:
                 return self.repository.result(run_id)
@@ -102,7 +112,7 @@ class ResearchWorkflowService:
             reason = "ROUTINE_MARKET_ONLY_INPUTS" if disposition is ReferenceDisposition.REUSED and request.market_only_member_ids else ("IDENTICAL_RESEARCH_INPUT" if disposition is ReferenceDisposition.REUSED else "RESEARCH_INPUT_CHANGED_OR_NEW")
             terminal = "succeeded" if record["status"] == "completed" else "succeeded_with_limits"
             self._fault("workflow.before_final_manifest_commit")
-            self.repository.finalize_research_success(run_id, run_node, run_attempt, final_node, final_attempt, disposition, None, record, projection_artifact, projection_id, json_artifact, html_artifact, request.workflow_snapshot_id, reason, stale, request.candidate_member_ids, request.market_only_member_ids, terminal)
+            self.repository.finalize_research_success(run_id, run_node, run_attempt, final_node, final_attempt, disposition, None, record, run_members, projection_id, request.workflow_snapshot_id, reason, stale, request.candidate_member_ids, request.market_only_member_ids, terminal)
             self._fault("workflow.final_manifest_committed")
             return self.repository.result(run_id)
         except WorkflowError:
@@ -143,14 +153,19 @@ class ResearchWorkflowService:
 
     def _research(self, run_id: str, request: ResearchWorkflowRequest, owner: str, projection_id: str, snapshot_id: str, projection_artifact: str, research_fp: str, lease_seconds: int):
         contract = self._node("run_or_link_research")
-        fp = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "node": "run_or_link_research@1", "research": research_fp, "policy": self.assembler.POLICY_VERSION, "code_identity": self.engine_identity})
+        fp = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "node": f"{contract.node_id}@{contract.version}", "research": research_fp, "policy": self.assembler.POLICY_VERSION, "code_identity": self.engine_identity, "analysis_artifacts": [item.content_hash for item in request.analysis_artifacts]})
         completed = self.repository.validate_checkpoint(run_id, contract, fp)
         if completed is not None:
-            members = {r["member_role"]: r["artifact_id"] for r in self.repository.checkpoint_members(completed["workflow_node_run_id"])}
+            member_rows = self.repository.checkpoint_members(completed["workflow_node_run_id"])
+            members = {r["member_role"]: r["artifact_id"] for r in member_rows}
             record = self.repository.connection.execute("SELECT * FROM research_run_record WHERE canonical_json_artifact_id=?", (members["research_run_json"],)).fetchone()
             attempt = self.repository.connection.execute("SELECT workflow_node_attempt_id FROM workflow_node_attempt WHERE workflow_node_run_id=? ORDER BY attempt_no DESC LIMIT 1", (completed["workflow_node_run_id"],)).fetchone()[0]
             decision = ReferenceDisposition.REUSED if self.repository.connection.execute("SELECT disposition FROM workflow_node_attempt WHERE workflow_node_attempt_id=?", (attempt,)).fetchone()[0] == "reused" else ReferenceDisposition.CREATED
-            return record, decision, members["research_run_json"], members["research_report_html"], completed["workflow_node_run_id"], attempt
+            run_members = tuple(
+                (row["artifact_id"], row["member_role"], row["direction"])
+                for row in member_rows
+            )
+            return record, decision, run_members, completed["workflow_node_run_id"], attempt
         node, attempt = self.repository.begin_or_retry_node(run_id, contract, fp, owner)
         self._fault("workflow.node_attempt_started:run_or_link_research")
         record = self.repository.connection.execute("SELECT r.* FROM research_run_record r WHERE r.research_input_fingerprint=? AND r.engine_code_identity=?", (research_fp, self.engine_identity)).fetchone()
@@ -170,7 +185,10 @@ class ResearchWorkflowService:
                 request_fp = self._hash({"manifest": assembled.manifest, "estimates": assembled.estimates, "context": assembled.context, "as_of_date": assembled.as_of_date, "profile": assembled.profile})
                 values = (produced.run_id, research_fp, projection_id, snapshot_id, request_fp, produced.schema_version, self.engine_identity, assembled.as_of_date, produced.status, json_artifact, html_artifact)
                 self.repository.persist_research_record(values)
-                record = {"research_run_id": produced.run_id, "original_cutoff_date": assembled.as_of_date, "status": produced.status}
+                record = self.repository.connection.execute(
+                    "SELECT * FROM research_run_record WHERE research_run_id=?",
+                    (produced.run_id,),
+                ).fetchone()
                 disposition = ReferenceDisposition.CREATED
                 values = None
                 break
@@ -186,10 +204,46 @@ class ResearchWorkflowService:
         else:
             disposition = ReferenceDisposition.REUSED
             json_artifact, html_artifact = record["canonical_json_artifact_id"], record["html_artifact_id"]
+        try:
+            artifact_record_ids = self.repository.persist_research_artifact_bundle(
+                research_run_id=record["research_run_id"],
+                data_snapshot_id=snapshot_id,
+                code_identity=self.engine_identity,
+                drafts=request.analysis_artifacts,
+                workflow_run_id=run_id,
+            )
+        except Exception:
+            self._fail_node(
+                run_id,
+                node,
+                attempt,
+                "RESEARCH_ARTIFACT_PERSISTENCE_FAILED",
+            )
+        typed_members = tuple(
+            (
+                row["artifact_id"],
+                self._artifact_member_role(row["artifact_kind"]),
+                "output",
+            )
+            for record_id in artifact_record_ids
+            for row in (
+                self.repository.connection.execute(
+                    "SELECT artifact_id,artifact_kind FROM research_artifact_record WHERE artifact_record_id=?",
+                    (record_id,),
+                ).fetchone(),
+            )
+        )
+        run_members = (
+            (projection_artifact, "research_projection", "input"),
+            (json_artifact, "research_run_json", "output"),
+            (html_artifact, "research_report_html", "output"),
+            *typed_members,
+        )
+        self._fault("workflow.research_artifacts_persisted")
         self._fault("workflow.before_node_success:run_or_link_research")
-        self.repository.commit_research_checkpoint(node, attempt, disposition, values, ((projection_artifact, "research_projection", "input"), (json_artifact, "research_run_json", "output"), (html_artifact, "research_report_html", "output")))
+        self.repository.commit_research_checkpoint(node, attempt, disposition, values, run_members)
         self._fault("workflow.research_checkpoint_committed")
-        return record, disposition, json_artifact, html_artifact, node, attempt
+        return record, disposition, run_members, node, attempt
 
     def _fail_node(self, run_id: str, node: str, attempt: str, code: str) -> None:
         node_name = self.repository.connection.execute("SELECT node_id FROM workflow_node_run WHERE workflow_node_run_id=?", (node,)).fetchone()[0]
@@ -203,6 +257,16 @@ class ResearchWorkflowService:
 
     def get_history(self, workflow_run_id: str) -> WorkflowHistory: return self.repository.history(workflow_run_id)
     def get_manifest(self, manifest_id: str) -> ArtifactManifestView: return self.repository.manifest(manifest_id)
+    def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: return self.repository.research_artifact_view(artifact_record_id)
+    @staticmethod
+    def _artifact_member_role(artifact_kind: str) -> str:
+        return {
+            "DataSnapshot": "data_snapshot",
+            "Forecast": "forecast",
+            "Valuation": "valuation",
+            "Simulation": "simulation",
+            "ForecastReview": "forecast_review",
+        }[artifact_kind]
     def _validate_workflow_snapshot(self, workflow_snapshot_id: str, research_snapshot_id: str) -> None:
         if workflow_snapshot_id == research_snapshot_id: raise ProjectionError("SNAPSHOT_PURPOSE_COLLISION", "snapshots differ")
         row = self.repository.connection.execute("SELECT snapshot_purpose FROM data_snapshot WHERE data_snapshot_id=?", (workflow_snapshot_id,)).fetchone()
@@ -291,4 +355,8 @@ def decode_research_workflow_request(payload: bytes) -> ResearchWorkflowRequest:
     raw["projection"] = ResearchProjection(**projection)
     raw["candidate_member_ids"] = tuple(raw.get("candidate_member_ids", ()))
     raw["market_only_member_ids"] = tuple(raw.get("market_only_member_ids", ()))
+    raw["analysis_artifacts"] = tuple(
+        ImmutableArtifactDraft.from_serialized(item)
+        for item in raw.get("analysis_artifacts", ())
+    )
     return ResearchWorkflowRequest(**raw)
