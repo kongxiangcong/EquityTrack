@@ -678,6 +678,45 @@ class WorkflowRepository:
             payload=envelope["payload"],
         )
 
+    def research_run_payload(self, research_run_id: str) -> Mapping[str, object]:
+        row = self.connection.execute(
+            "SELECT r.engine_schema_version,a.object_sha256,o.size_bytes,o.relative_path "
+            "FROM research_run_record r "
+            "JOIN artifact a ON a.artifact_id=r.canonical_json_artifact_id "
+            "JOIN object_blob o ON o.sha256=a.object_sha256 "
+            "WHERE r.research_run_id=?",
+            (research_run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(research_run_id)
+        path = self.objects.data_root / row["relative_path"]
+        payload = path.read_bytes() if path.is_file() else b""
+        if (
+            len(payload) != row["size_bytes"]
+            or hashlib.sha256(payload).hexdigest() != row["object_sha256"]
+        ):
+            raise PersistenceError(
+                "OBJECT_INTEGRITY_FAILED",
+                "Canonical research JSON is missing or corrupt.",
+            )
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise PersistenceError(
+                "RESEARCH_RUN_JSON_INVALID",
+                "Canonical research JSON is not valid JSON.",
+            ) from error
+        if (
+            not isinstance(decoded, Mapping)
+            or decoded.get("run_id") != research_run_id
+            or decoded.get("schema_version") != row["engine_schema_version"]
+        ):
+            raise PersistenceError(
+                "RESEARCH_RUN_JSON_IDENTITY_MISMATCH",
+                "Canonical research JSON identity does not match its database record.",
+            )
+        return decoded
+
     def publish_manifest(self, role: str, producer_type: str, producer_id: str, members: Iterable[tuple[str, str, str]]) -> str:
         members_tuple = tuple(members)
         identity = [{"artifact_id": artifact_id, "role": member_role, "direction": direction} for artifact_id, member_role, direction in members_tuple]

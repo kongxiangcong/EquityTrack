@@ -52,7 +52,12 @@ class ProductionCompositionRoot:
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))
             market = MarketEvaluationService(SQLiteMarketRepository(self._store.connection, self._store.writer_lock), plans)
-            workspace = WorkspaceService(self._store.connection, self._store.writer_lock)
+            workspace = WorkspaceService(
+                self._store.connection,
+                self._store.writer_lock,
+                research_workflow.get_research_artifact,
+                research_workflow.get_research_run_payload,
+            )
             accounts = AccountOpeningService(Path(data_root), root, migrations_root or root / "migrations")
         self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans, market, workspace, accounts)
 

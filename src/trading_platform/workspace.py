@@ -3,19 +3,28 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, Mapping
 
+from trading_platform.domain.workflow import ResearchArtifactView
 from trading_platform.persistence.locking import DataRootWriterLock
+from trading_platform.research_view import ResearchDecisionViewBuilder
 
 
 class WorkspaceService:
     """Facade-facing workspace queries and replay-safe local authorization commands."""
 
     def __init__(
-        self, connection, writer_lock: DataRootWriterLock | None = None
+        self,
+        connection,
+        writer_lock: DataRootWriterLock | None = None,
+        research_artifact_reader: Callable[[str], ResearchArtifactView] | None = None,
+        research_run_reader: Callable[[str], Mapping[str, object]] | None = None,
     ) -> None:
         self.connection = connection
         self.writer_lock = writer_lock
+        self.research_artifact_reader = research_artifact_reader
+        self.research_run_reader = research_run_reader
+        self.research_view_builder = ResearchDecisionViewBuilder()
 
     def build(self, security_id: str, snapshot_id: str) -> dict[str, Any]:
         snapshot = self._one(
@@ -70,6 +79,7 @@ class WorkspaceService:
                 "snapshot_id": snapshot_id,
                 **(snapshot or {}),
             },
+            "research_views": self._research_views(security_id),
             "changes": self._all(
                 "SELECT p.plan_id,p.lifecycle_status,a.plan_version_id AS active_version_id,a.started_at AS updated_at FROM trade_plan p LEFT JOIN plan_activation a ON a.plan_id=p.plan_id AND a.ended_at IS NULL WHERE p.security_id=? ORDER BY coalesce(a.started_at,p.created_at) DESC",
                 (security_id,),
@@ -116,6 +126,50 @@ class WorkspaceService:
             },
             "boundary": "研究与规则结果用于用户判断，不构成个性化投资建议。",
         }
+
+    def _research_views(self, security_id: str) -> list[dict[str, Any]]:
+        if self.research_artifact_reader is None or self.research_run_reader is None:
+            return []
+        rows = self.connection.execute(
+            "SELECT u.workflow_run_id,w.created_at,d.research_run_id,"
+            "r.artifact_kind,r.artifact_record_id "
+            "FROM workflow_run_artifact_use u "
+            "JOIN workflow_run w USING(workflow_run_id) "
+            "JOIN research_reuse_decision d USING(workflow_run_id) "
+            "JOIN research_artifact_record r USING(artifact_record_id) "
+            "WHERE r.platform_security_id=? "
+            "ORDER BY w.created_at,r.rowid",
+            (security_id,),
+        ).fetchall()
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            group = grouped.setdefault(
+                row["workflow_run_id"],
+                {
+                    "research_run_id": row["research_run_id"],
+                    "artifacts": {},
+                },
+            )
+            group["artifacts"][row["artifact_kind"]] = row["artifact_record_id"]
+        result: list[dict[str, Any]] = []
+        for workflow_run_id, group in grouped.items():
+            artifact_ids = group["artifacts"]
+            required = {"DataSnapshot", "Forecast", "Valuation"}
+            if not required.issubset(artifact_ids):
+                continue
+            view = self.research_view_builder.build(
+                workflow_run_id=workflow_run_id,
+                data_snapshot=self.research_artifact_reader(
+                    artifact_ids["DataSnapshot"]
+                ),
+                forecast=self.research_artifact_reader(artifact_ids["Forecast"]),
+                valuation=self.research_artifact_reader(artifact_ids["Valuation"]),
+                research_run_payload=self.research_run_reader(
+                    group["research_run_id"]
+                ),
+            )
+            result.append(view.to_dict())
+        return result
 
     def _all(
         self, sql: str, parameters: tuple[object, ...] = ()

@@ -1,7 +1,9 @@
 import {init, dispose} from "klinecharts"
 import {toKLineData, toOverlay} from "./chart-adapter.js"
 import {createMutationRunner} from "./mutation-runner.js"
+import {formatPercent, formatQuantity, methodSummary, renderSandboxReport, researchViewLabel, selectResearchView} from "./research-view.js"
 import "./motion.css"
+import "./research-view.css"
 const csrfToken=document.querySelector('meta[name="csrf-token"]')?.content ?? ""
 
 const gateway = globalThis.chartGateway ?? {
@@ -18,6 +20,7 @@ let series
 let history = []
 let drawing = []
 let workspaceModel
+let researchViews = []
 
 function text(value){return value == null || value === "" ? "—" : String(value)}
 function identity(kind,item){const keys={WorkflowRun:"workflow_run_id",DataSnapshot:"data_snapshot_id",ResearchRun:"research_run_id",ChartAnnotationVersion:"annotation_version_id",TradePlanVersion:"plan_version_id",MarketSnapshot:"market_snapshot_id",PlanEvaluation:"plan_evaluation_id",ArtifactManifest:"artifact_manifest_id",FrozenRef:"ref_id"};return text(item[keys[kind]])}
@@ -30,8 +33,39 @@ function historyExplanation(kind,item){
   if(kind==="FrozenRef")return `${text(item.ref_type)} ${text(item.ref_id)} · ${text(item.disposition)}`
   return JSON.stringify(item)
 }
+function appendTextList(target,items){target.replaceChildren(...(items?.length?items.map(value=>{const li=document.createElement("li");li.textContent=text(value);return li}):[Object.assign(document.createElement("li"),{textContent:"当前版本未提供该项。"})]))}
+function researchMetric(item){return `${text(item.label??item.metric_id)} · ${formatQuantity(item)} · ${text(item.period)}`}
+function renderResearchView(view){
+  const empty=document.querySelector("#research-empty")
+  const content=document.querySelector("#research-content")
+  if(!view){empty.hidden=false;content.hidden=true;document.querySelector("#report-viewer").srcdoc="<p>当前没有可加载的类型化 Forecast/Valuation 研究视图。</p>";return}
+  empty.hidden=true;content.hidden=false
+  document.querySelector("#research-meta").textContent=`截至 ${text(view.as_of)} · ${text(view.model_identity)} · ${text(view.status)}`
+  document.querySelector("#story-what").textContent=text(view.story?.what_happens)
+  document.querySelector("#story-why").textContent=text(view.story?.why_it_matters)
+  appendTextList(document.querySelector("#story-transmission"),view.story?.transmission)
+  appendTextList(document.querySelector("#story-counter"),view.story?.counterevidence)
+  appendTextList(document.querySelector("#story-change"),view.story?.what_would_change_the_view)
+  document.querySelector("#driver-list").replaceChildren(...(view.key_drivers??[]).map(driver=>{const article=document.createElement("article");const kind=document.createElement("p");kind.className="eyebrow";kind.textContent="Forecast · 推演值";const label=document.createElement("h3");label.textContent=text(driver.label??driver.metric_id);const value=document.createElement("p");value.textContent=`${formatQuantity(driver)} · ${text(driver.period)}`;article.append(kind,label,value);return article}))
+  document.querySelector("#scenario-list").replaceChildren(...(view.scenarios??[]).map(scenario=>{const article=document.createElement("article");article.className=`scenario-card scenario-${scenario.role}`;const eyebrow=document.createElement("p");eyebrow.className="eyebrow";eyebrow.textContent=`Forecast 情景 · ${text(scenario.role)}`;const heading=document.createElement("h3");heading.textContent=`${text(scenario.label)}情景 · ${text(scenario.terminal_period)}`;const financialHeading=document.createElement("h4");financialHeading.textContent="Forecast · 关键财务推演";const financials=document.createElement("ul");appendTextList(financials,(scenario.financials??[]).map(researchMetric));const methodHeading=document.createElement("h4");methodHeading.textContent="Valuation · 方法级条件每股价值区间";const methods=document.createElement("ul");appendTextList(methods,(scenario.methods??[]).map(methodSummary));article.append(eyebrow,heading,financialHeading,financials,methodHeading,methods);return article}))
+  document.querySelector("#implied-list").replaceChildren(...(view.market_implied_expectations??[]).map(item=>{const article=document.createElement("article");const heading=document.createElement("h3");heading.textContent=`${text(item.scenario_label)}情景 · 市场隐含终值增长`;const value=document.createElement("p");value.textContent=`低/基准/高：${formatPercent(item.low)} / ${formatPercent(item.base)} / ${formatPercent(item.high)}`;const explanation=document.createElement("p");explanation.textContent=text(item.explanation);article.append(heading,value,explanation);return article}))
+  document.querySelector("#research-audit").textContent=JSON.stringify(view.audit,null,2)
+  document.querySelector("#research-boundary").textContent=text(view.boundary)
+  document.querySelector("#report-viewer").srcdoc=renderSandboxReport(view)
+}
+function renderResearchViews(views){
+  researchViews=views
+  const selector=document.querySelector("#research-version")
+  const previous=selector.value
+  selector.replaceChildren(...views.map((view,index)=>{const option=document.createElement("option");option.value=view.view_id;option.textContent=researchViewLabel(view,index);return option}))
+  selector.disabled=!views.length
+  const selected=selectResearchView(views,previous)??views.at(-1)??null
+  if(selected)selector.value=selected.view_id
+  renderResearchView(selected)
+}
 function renderWorkspace(model){
   workspaceModel=model
+  renderResearchViews(model.research_views??[])
   const task=model.task??{}
   document.querySelector("#task-summary").textContent=task.freshness_status==="valid"?"冻结数据可用于继续检查规则；请确认变化与不确定性。":"本次数据受限；仍可查看已冻结历史，但新的规则结论已阻断。"
   const facts=[["请求日期",task.requested_date],["有效交易日",task.effective_session_date],["数据质量",task.quality_status],["冻结快照",task.snapshot_id]]
@@ -99,6 +133,7 @@ document.querySelector("#restore").addEventListener("click",async event=>{event.
 document.querySelector("#fullscreen").addEventListener("click", () => document.querySelector(".workspace").classList.toggle("fullscreen"))
 document.querySelector("#motion-toggle").addEventListener("click",event=>{const reduced=document.documentElement.classList.toggle("reduce-motion");event.currentTarget.setAttribute("aria-pressed",String(reduced));event.currentTarget.textContent=reduced?"已减少动态效果":"减少动态效果"})
 document.querySelector("#authorize-update").addEventListener("click",async event=>{const button=event.currentTarget;button.disabled=true;const payload={requested_date:workspaceModel.task.requested_date,effective_session_date:workspaceModel.task.effective_session_date};try{const saved=await gateway.authorize(payload,`workspace:update:${crypto.randomUUID()}`);document.querySelector("#authorization-status").textContent=`已授权 · ${saved.requested_date} → ${saved.effective_session_date}`}catch{document.querySelector("#authorization-status").textContent="授权未完成；仍可查看现有冻结历史。";button.disabled=false}})
+document.querySelector("#research-version").addEventListener("change",event=>renderResearchView(selectResearchView(researchViews,event.currentTarget.value)))
 document.querySelectorAll("[data-target]").forEach(button=>button.addEventListener("click",()=>{const target=document.querySelector(`#${button.dataset.target}`);target.scrollIntoView({block:"start"});target.focus?.()}))
 window.addEventListener("beforeunload", () => chart && dispose("chart"))
 boot().catch(error => { document.querySelector("#banner").textContent=`图表不可用：${error.message}` })

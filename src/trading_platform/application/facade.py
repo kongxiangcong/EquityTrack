@@ -112,6 +112,11 @@ class ApplicationFacade:
             raise RuntimeError("research workflow unavailable")
         return self._research_workflow.get_research_artifact(artifact_record_id)
 
+    def get_research_run_payload(self, research_run_id: str):
+        if self._research_workflow is None:
+            raise RuntimeError("research workflow unavailable")
+        return self._research_workflow.get_research_run_payload(research_run_id)
+
     def resume_workflow(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
         return self._research_workflow.resume(command)

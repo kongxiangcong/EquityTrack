@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from trading_platform.application.contracts import CancelWorkflowCommand, ResumeWorkflowCommand
 from trading_platform.domain.workflow import (
@@ -258,6 +258,7 @@ class ResearchWorkflowService:
     def get_history(self, workflow_run_id: str) -> WorkflowHistory: return self.repository.history(workflow_run_id)
     def get_manifest(self, manifest_id: str) -> ArtifactManifestView: return self.repository.manifest(manifest_id)
     def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: return self.repository.research_artifact_view(artifact_record_id)
+    def get_research_run_payload(self, research_run_id: str) -> Mapping[str, object]: return self.repository.research_run_payload(research_run_id)
     @staticmethod
     def _artifact_member_role(artifact_kind: str) -> str:
         return {
