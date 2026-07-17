@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 from equity_research import LegacyResearchContextAdapter, ResearchRequest
 
-from trading_platform.domain.workflow import FieldSemantics, ResearchProjection
+from trading_platform.domain.workflow import ResearchProjection
 
 
 class ProjectionError(ValueError):
@@ -100,10 +100,54 @@ class SnapshotToResearchRequestAssembler:
                 field_names.add(key[1])
         if observed != set(declared):
             raise ProjectionError("RESEARCH_SEMANTICS_EXTRA", "Projection contains semantics not present in the frozen manifest.")
-        if "diluted_shares" not in field_names or not self._identity_resolves(projection.diluted_share_identity, observed, ("diluted_shares",)):
-            raise ProjectionError("DILUTED_SHARE_IDENTITY_MISSING", "Diluted share identity is required.")
-        if not {"cash", "debt"}.issubset(field_names) or not self._identity_resolves(projection.net_debt_bridge_identity, observed, ("cash", "debt")):
-            raise ProjectionError("NET_DEBT_BRIDGE_IDENTITY_MISSING", "Net-debt bridge identity is required.")
+        if "diluted_shares" in field_names:
+            if not self._identity_resolves(
+                projection.diluted_share_identity,
+                observed,
+                ("diluted_shares",),
+            ):
+                raise ProjectionError(
+                    "DILUTED_SHARE_IDENTITY_MISSING",
+                    "A present diluted-share field requires an exact frozen identity.",
+                )
+        elif projection.diluted_share_identity:
+            raise ProjectionError(
+                "DILUTED_SHARE_IDENTITY_MISSING",
+                "Diluted-share identity cannot resolve when the frozen field is absent.",
+            )
+        elif not self._declares_missing(manifest, "diluted_shares"):
+            raise ProjectionError(
+                "DILUTED_SHARE_GAP_UNDECLARED",
+                "An absent diluted-share field must be declared in missing_critical_data.",
+            )
+        net_debt_fields = {"cash", "debt"}
+        if net_debt_fields.issubset(field_names):
+            if not self._identity_resolves(
+                projection.net_debt_bridge_identity,
+                observed,
+                ("cash", "debt"),
+            ):
+                raise ProjectionError(
+                    "NET_DEBT_BRIDGE_IDENTITY_MISSING",
+                    "Present cash and debt fields require an exact frozen identity.",
+                )
+        elif projection.net_debt_bridge_identity:
+            raise ProjectionError(
+                "NET_DEBT_BRIDGE_IDENTITY_MISSING",
+                "Net-debt identity cannot resolve when a frozen bridge field is absent.",
+            )
+        else:
+            undeclared = tuple(
+                field_name
+                for field_name in sorted(net_debt_fields - field_names)
+                if not self._declares_missing(manifest, field_name)
+            )
+            if undeclared:
+                raise ProjectionError(
+                    "NET_DEBT_GAP_UNDECLARED",
+                    "Absent net-debt fields must be declared in missing_critical_data: "
+                    + ", ".join(undeclared),
+                )
 
     @staticmethod
     def _instant(value: str) -> datetime:
@@ -117,3 +161,12 @@ class SnapshotToResearchRequestAssembler:
             return False
         source_id, joined_fields, period = parts
         return tuple(joined_fields.split("+")) == fields and all((source_id, field, period) in observed for field in fields)
+
+    @staticmethod
+    def _declares_missing(manifest: Mapping[str, Any], field_name: str) -> bool:
+        missing = manifest.get("missing_critical_data", [])
+        return isinstance(missing, list) and any(
+            isinstance(item, Mapping)
+            and str(item.get("field_name", "")) == field_name
+            for item in missing
+        )

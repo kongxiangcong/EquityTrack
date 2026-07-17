@@ -62,7 +62,7 @@ def _projection(context=None) -> ResearchProjection:
         estimates=_load("estimate_overlay.json"),
         context=_load("research_context.json") if context is None else context,
         as_of_date="2026-07-07",
-        profile="L2",
+        profile="standard",
         field_semantics=tuple(semantics),
         diluted_share_identity="SRC_CNINFO_2026Q1:diluted_shares:2026Q1",
         net_debt_bridge_identity="SRC_CNINFO_2026Q1:cash+debt:2026Q1",
@@ -243,6 +243,98 @@ def test_projection_semantics_and_cutoff_fail_closed(tmp_path: Path, mutation: s
     diagnostic = root._store.connection.execute("SELECT diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()
     assert history[0] == "failed" and diagnostic[0]
     assert root._store.connection.execute("SELECT count(*) FROM research_run_record").fetchone()[0] == 0
+    root.close()
+
+
+def test_missing_diluted_shares_reaches_capability_degradation(tmp_path: Path) -> None:
+    projection = _projection()
+    manifest = json.loads(json.dumps(projection.manifest))
+    for source in manifest["sources"]:
+        source["extracted_fields"] = [
+            field
+            for field in source["extracted_fields"]
+            if field["field_name"] != "diluted_shares"
+        ]
+    manifest.setdefault("missing_critical_data", []).append(
+        {
+            "field_name": "diluted_shares",
+            "period": "2026Q1",
+            "reason": "The official filing does not disclose a precise diluted-share bridge.",
+            "required_for": "formal per-share valuation",
+            "next_source_required": "An official diluted weighted-average share count or full dilution bridge.",
+        }
+    )
+    semantics = tuple(
+        item
+        for item in projection.field_semantics
+        if item.field_name != "diluted_shares"
+    )
+    missing = replace(
+        projection,
+        manifest=manifest,
+        field_semantics=semantics,
+        diluted_share_identity="",
+        profile="standard",
+    )
+    engine = CountingEngine()
+    root = _root(tmp_path, engine)
+
+    result = root.facade.run_research_workflow(
+        _request("research:missing-diluted-shares", missing)
+    )
+
+    assert engine.calls == 1
+    run = json.loads(_artifact_bytes(root, result.json_artifact_id))
+    assert run["permissions"]["formal_per_share_valuation"] is False
+    assert any(
+        item["field_name"] == "diluted_shares"
+        for item in run["declared_missing"]
+    )
+    html = _artifact_bytes(root, result.html_artifact_id).decode("utf-8")
+    assert "diluted_shares" in html
+    assert "DCF 敏感性" not in html
+    root.close()
+
+
+def test_missing_net_debt_component_reaches_capability_degradation(
+    tmp_path: Path,
+) -> None:
+    projection = _projection()
+    manifest = json.loads(json.dumps(projection.manifest))
+    for source in manifest["sources"]:
+        source["extracted_fields"] = [
+            field
+            for field in source["extracted_fields"]
+            if field["field_name"] != "debt"
+        ]
+    manifest.setdefault("missing_critical_data", []).append(
+        {
+            "field_name": "debt",
+            "period": "2026Q1",
+            "reason": "The official filing does not provide a complete debt bridge.",
+            "required_for": "enterprise-to-equity value reconciliation",
+            "next_source_required": "An official current and non-current debt schedule.",
+        }
+    )
+    missing = replace(
+        projection,
+        manifest=manifest,
+        field_semantics=tuple(
+            item for item in projection.field_semantics if item.field_name != "debt"
+        ),
+        net_debt_bridge_identity="",
+    )
+    engine = CountingEngine()
+    root = _root(tmp_path, engine)
+
+    result = root.facade.run_research_workflow(
+        _request("research:missing-debt", missing)
+    )
+
+    assert engine.calls == 1
+    run = json.loads(_artifact_bytes(root, result.json_artifact_id))
+    assert run["permissions"]["formal_per_share_valuation"] is False
+    assert any(item["field_name"] == "debt" for item in run["declared_missing"])
     root.close()
 
 

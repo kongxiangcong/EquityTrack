@@ -440,7 +440,7 @@ def test_market_path_is_an_independent_simulation_child_and_workspace_view(
         "not_comparable_horizon"
     )
     assert "期限不同" in view["value_market_divergence"]["explanation"]
-    assert "目标价或交易动作" in view["value_market_divergence"]["explanation"]
+    assert "确定性价格结论或交易动作" in view["value_market_divergence"]["explanation"]
     assert view["market_price_paths"]["terminal_price_quantiles"]["p50"][
         "period"
     ] == "T+21 trading sessions"
