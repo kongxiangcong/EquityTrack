@@ -13,6 +13,7 @@ from tests.platform.test_research_workflow import (
     _artifact_bytes,
     _root,
 )
+from trading_platform.research_presentation import render_research_decision_html
 
 
 def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
@@ -109,9 +110,83 @@ def test_formal_json_and_html_share_the_exact_decision_view(
     assert json.loads(embedded.group(1)) == payload
     assert "未来故事" in html
     assert payload["story"]["what_happens"] in html
+    assert html.index("未来会发生什么") < html.index(
+        "补充公司叙事与估值上下文"
+    )
+    assert '<details class="story-details">' in html
+    assert '<details class="story-details" open>' not in html
+    assert "当前价格隐含预期" in html
+    assert payload["market_implied_expectations"][0]["explanation"] in html
+    assert "情景 Driver" in html
+    assert "关键财务结果" in html
+    assert payload["scenarios"][0]["drivers"][0]["metric_id"] in html
+    assert payload["scenarios"][0]["financials"][0]["metric_id"] in html
+    assert "条件低值" in html and "条件高值" in html
     assert "审计附录" in html
+    assert '<details class="audit-appendix">' in html
+    assert '<details class="audit-appendix" open>' not in html
+    assert "<summary><span>审计附录</span>" in html
+    assert "事实与证据" in html
+    assert "公式身份" in html
+    assert "模型参数" in html
+    assert "来源注册" in html
+    assert "版本与权限" in html
+    assert "诊断与缺口" in html
+    assert payload["audit"]["fact_evidence"][0]["fact_id"] in html
+    assert payload["audit"]["formula_identities"][0] in html
+    assert ".audit-appendix summary:focus-visible" in html
+    assert "@media(prefers-reduced-motion:reduce)" in html
     assert "ResearchReportHtml@1" not in html
     root.close()
+
+
+def test_formal_html_renders_optional_value_and_market_distributions() -> None:
+    html = render_research_decision_html(
+        {
+            "schema_version": "ResearchDecisionView@2",
+            "subject_id": "002407.SZ",
+            "as_of": "2026-07-17",
+            "story": {},
+            "key_drivers": (),
+            "scenarios": (),
+            "market_implied_expectations": (),
+            "valuation_simulation": {
+                "output_level": "basis_value",
+                "converged": True,
+                "quantiles": {
+                    "p50": {"value": "12500000000", "unit": "CNY"},
+                },
+                "contributions": (
+                    {"assumption_id": "mid_cycle_margin", "share": "0.61"},
+                ),
+                "diagnostics": ("enterprise bridge remains limited",),
+            },
+            "market_price_paths": {
+                "interpretation": "状态条件下的市场交易价格路径。",
+                "terminal_price_quantiles": {
+                    "p50": {"value": "11.8", "unit": "CNY/share"},
+                },
+                "horizon_return_quantiles": {
+                    "p50": {"value": "-0.02", "unit": "decimal"},
+                },
+                "maximum_drawdown_quantiles": {
+                    "p50": {"value": "-0.15", "unit": "decimal"},
+                },
+                "diagnostics": (),
+            },
+            "value_market_divergence": {
+                "explanation": "两类分布来自不同机制，不形成交易动作。",
+            },
+            "audit": {"artifact_records": ()},
+            "boundary": "条件研究结果，不构成个性化投资建议。",
+        }
+    )
+
+    assert "校准后的企业价值分布" in html
+    assert "关键变量贡献" in html
+    assert "状态条件下的市场价格与回撤分布" in html
+    assert "两类分布来自不同机制，不形成交易动作。" in html
+    assert "目标价" not in html
 
 
 def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> None:

@@ -85,6 +85,14 @@ journey and value/market-path comparison remain unchecked.
 
 ## Current executable evidence
 
+- Decision-first formal report acceptance: the five-question story is the
+  initial visible hierarchy; scenario Drivers, financials and low/base/high
+  ranges are present; secondary narrative and the complete audit ledger are
+  progressively disclosed.
+- Final real-browser report verification passed at 390 x 844 and at a 240 px
+  equivalent double-zoom layout without document-level horizontal overflow.
+  All native summary controls were focusable; disclosure interactions retained
+  focus and exposed the expected typed audit groups.
 - Full Python suite: 368 passed in 542.45 seconds.
 - Focused valuation, forecast, simulation, source-gate, decision-view and
   journey suite: 130 passed in 95.03 seconds.
