@@ -1,7 +1,6 @@
 # Company outlook journey acceptance ledger
 
-Status: in progress. The valuation foundation is materially stronger, but
-Ticket 13 is not complete.
+Status: complete.
 
 This record verifies research-system behavior. It is not an investment
 recommendation or a price conclusion.
@@ -18,9 +17,9 @@ recommendation or a price conclusion.
 - Missing diluted shares or dilution instruments blocks per-share conversion.
 - The Duofuduo model candidate therefore stops at a mid-cycle enterprise-value
   range; equity value and per-share value remain null.
-- The public workflow rejects this candidate while its hash-bound source
-  manifest validation is invalid. It also rejects any injected per-share
-  artifact when the frozen diluted-share identity is absent.
+- The public workflow now publishes the unaffected enterprise-value methods
+  under `valid_with_limits`. It still rejects any injected per-share artifact
+  when the frozen diluted-share identity is absent.
 
 ### Cyclical manufacturing route
 
@@ -65,23 +64,46 @@ recommendation or a price conclusion.
   earnings path, valuation interpretation, risk/reward, uncertainties,
   double-counting guardrails and conditions that would change the view.
 
-## Deliberate degradation and open blockers
+### Public six-artifact journey and PIT market path
 
-The source-manifest validator remains invalid. This is expected and must not be
-presented as formal valuation readiness:
+- Both Yihua and Duofuduo now publish `DataSnapshot`, `Forecast`, `Valuation`,
+  `Simulation`, `MarketDataSnapshot` and `MarketPathSimulation` through the
+  public facade.
+- Duofuduo uses a hash-bound 73-row daily/adjustment-factor raw asset. The
+  simulation window begins after the last adjustment-factor change and ends on
+  2026-07-16; the frozen starting close is the 2026-07-17 session.
+- Research `as_of=2026-07-18` is distinct from
+  `effective_session=2026-07-17`. Availability and retrieval timestamps remain
+  separate, so no later retrieval is relabeled as an earlier PIT snapshot.
+- Tick-rounded A-share limit prices are validated with a half-tick tolerance;
+  nominal 10% limits are not rejected solely because the legal close is rounded
+  to CNY 0.01. Tick size is an explicit typed policy input, not inferred from a
+  policy-name string.
+- A prior effective session is validated against the frozen market-data
+  snapshot's `effective_session_date`; no weekday/weekend heuristic substitutes
+  for the trading calendar.
+- Enterprise-value simulation (`CNY`) and market-price paths (`CNY/share`) may
+  coexist. The decision view marks them `not_comparable` and does not compute a
+  false numerical divergence.
+- Restart/replay reuses the same six core artifact record IDs and content
+  hashes.
 
-- seven declared raw files are absent from the repository;
+## Deliberate degradation
+
+The source-manifest validator now returns `valid_with_limits`, with 11 raw
+assets hash-checked and no integrity errors. Formal per-share readiness remains
+disabled because:
+
 - `diluted_shares`, `pension_deficit` and
   `sbc_options_dilution` are explicitly missing critical fields;
 - the official pension and dilution bridges are therefore incomplete.
 
-Duofuduo also lacks a formal independent MarketPathSimulation. The gateway did
-not yet expose a 2026-07-17 starting close during this run, and data newly
-retrieved on 2026-07-17 cannot be relabeled as a snapshot frozen on an earlier
-date. A future completion must bind both calibration series and starting close
-to a platform market snapshot whose retrieval and availability timestamps
-satisfy one research as-of boundary. Until then, the complete six-artifact
-journey and value/market-path comparison remain unchecked.
+The previously declared Eastmoney IR PDF was removed after verification showed
+that it belonged to another listed company. The same 65,000-ton LiPF6 capacity
+fact is now bound to the official 2025 annual report. The abnormal-volatility
+evidence now uses the official CNINFO filing rather than a secondary mirror.
+The official Q1, annual-report, disposal and abnormal-volatility records carry
+separate `published_at`, `available_at` and `retrieved_at` timestamps.
 
 ## Current executable evidence
 
@@ -93,20 +115,28 @@ journey and value/market-path comparison remain unchecked.
   equivalent double-zoom layout without document-level horizontal overflow.
   All native summary controls were focusable; disclosure interactions retained
   focus and exposed the expected typed audit groups.
-- Full Python suite: 368 passed in 542.45 seconds.
-- Focused valuation, forecast, simulation, source-gate, decision-view and
-  journey suite: 130 passed in 95.03 seconds.
+- Final-code full Python suite: 374 passed, 3 skipped in 589.95 seconds.
 - Web decision-view suite: 18 passed, including an enterprise-value labeling
   regression.
 - Valuation workbook suite: 4 passed with the bundled Node runtime.
 - Public acceptance CLI regression: 1 passed.
 - Real in-app Chromium acceptance passed for enterprise-value labeling and the
   narrow mobile wrapper, with no unintended per-share presentation.
-- Final standards and specification reviews found no P0/P1 findings.
-- Ruff over every changed Python source and test file: passed.
-- Source-manifest validator: intentionally failed closed with 10 errors
-  (seven absent raw files and three missing critical bridge fields).
-- The four repository-bound Duofuduo candidate assets pass their declared hash
-  checks. Final public-journey hash acceptance remains blocked by the seven
-  absent raw source files; historical results are not reused as current
-  completion evidence.
+- Specification review found a caller-controlled calibration-gate tolerance;
+  the gate now uses a platform-owned `1e-12` serialization tolerance and a
+  public-facade negative test proves a forged artifact tolerance cannot mask
+  changed vectors.
+- Standards review found the weekend heuristic, implicit tick-size policy and
+  missing official PIT timestamps. Each finding is resolved as described above.
+- Python compile check passed. Ruff is not installed in either the system or
+  repository virtual environment, so no new Ruff result is claimed.
+- Source-manifest validator: `valid_with_limits`, 11 hash checks, zero errors,
+  three explicit capability warnings.
+- Focused source, market-path, workflow, journey and research-engine regression:
+  92 passed in 77.86 seconds.
+- Post-review focused market-path, artifact, journey and manifest regression:
+  45 passed in 59.91 seconds.
+- Post-review adversarial tick-size regression: 5 passed, covering NaN,
+  Infinity, zero, negative and valid prior-session behavior.
+- Duofuduo public six-artifact journey and restart replay: 1 passed in 8.96
+  seconds.

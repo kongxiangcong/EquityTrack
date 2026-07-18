@@ -146,6 +146,7 @@ def request(
             one_way_transaction_cost_bps=Decimal("8"),
             minimum_execution_lag_sessions=1,
             price_limit_fraction=Decimal("0.10"),
+            price_tick_size=Decimal("0.01"),
             preserve_observed_suspensions=True,
             preserve_observed_limit_states=True,
         ),
@@ -192,6 +193,37 @@ def test_pit_dates_are_compared_in_the_declared_market_timezone() -> None:
     with pytest.raises(MarketPathInvariantError) as error:
         MarketPathEngine().run(request(rows=(leaked, *rows[1:])))
     assert error.value.code == "MARKET_PATH_PIT_INVALID"
+
+
+def test_prior_effective_session_does_not_use_a_weekend_heuristic() -> None:
+    base = request()
+    result = MarketPathEngine().run(
+        replace(
+            base,
+            as_of="2026-07-08",
+            as_of_at="2026-07-08T16:00:00+08:00",
+            calibration=replace(base.calibration, as_of="2026-07-08"),
+        )
+    )
+    assert result.starting_price_session == "2026-07-07"
+
+
+@pytest.mark.parametrize(
+    "tick_size",
+    (Decimal("NaN"), Decimal("Infinity"), Decimal("0"), Decimal("-0.01")),
+)
+def test_price_tick_size_must_be_finite_and_positive(
+    tick_size: Decimal,
+) -> None:
+    base = request()
+    with pytest.raises(MarketPathInvariantError) as error:
+        MarketPathEngine().run(
+            replace(
+                base,
+                constraints=replace(base.constraints, price_tick_size=tick_size),
+            )
+        )
+    assert error.value.code == "MARKET_PATH_POLICY_INVALID"
 
 
 def test_retrieval_cutoff_does_not_reject_a_valid_western_market_local_date() -> None:

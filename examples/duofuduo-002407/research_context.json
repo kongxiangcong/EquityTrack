@@ -8,37 +8,37 @@
       "status": "ready",
       "conclusion": "多氟多以氟基新材料为资源与工艺底盘，向六氟磷酸锂等新能源材料、电子化学品和电池制造延伸；纵向链条提供成本弹性，也带来重资产扩张和跨业务资本配置压力。",
       "key_findings": [
-        {"text": "氟基材料收入底盘与已披露锂盐产能共同构成周期修复的规模基础。", "evidence_fields": ["revenue", "lipf6_capacity_tpy"]},
+        {"text": "氟基材料收入底盘与已披露锂盐产能共同构成周期修复的规模基础。", "evidence_fields": ["revenue", "lipf6_capacity"]},
         "氟化工底盘覆盖氢氟酸、氟化铝等产品，是新能源材料和电子化学品的原料与工艺基础。",
         "六氟磷酸锂等锂盐是盈利弹性的主要来源，价格、订单、开工率和库存成本共同决定单吨利润。",
         "电子化学品具有长期选择权，但当前半导体级氢氟酸收入占比仍低，不能替代现有主营判断。",
         "电池业务扩大产业链长度，同时提高资本开支、产能利用率和客户验证要求。"
       ],
-      "counterpoints": [{"text": "产能与收入规模不自动等于高资本回报。", "evidence_fields": ["lipf6_capacity_tpy", "revenue"]}, "纵向一体化不自动等于高回报，若利用率不足或价格下行，折旧和财务成本会削弱协同。"],
-      "uncertainties": [{"text": "锂盐规模能否转化为持续利润和现金流仍待验证。", "evidence_fields": ["lipf6_capacity_tpy", "net_income", "cfo"]}, "锂盐单吨盈利", "电子化学品客户放量", "电池业务盈利状态"],
+      "counterpoints": [{"text": "产能与收入规模不自动等于高资本回报。", "evidence_fields": ["lipf6_capacity", "revenue"]}, "纵向一体化不自动等于高回报，若利用率不足或价格下行，折旧和财务成本会削弱协同。"],
+      "uncertainties": [{"text": "锂盐规模能否转化为持续利润和现金流仍待验证。", "evidence_fields": ["lipf6_capacity", "net_income", "cfo"]}, "锂盐单吨盈利", "电子化学品客户放量", "电池业务盈利状态"],
       "key_metrics": [
-        {"label": "LiPF6 产能", "calculation": "direct", "display": "tpy_10k", "evidence_refs": [{"source_id": "SRC_IR_20260625", "field_name": "lipf6_capacity_tpy", "period": "2026 event"}]},
+        {"label": "LiPF6 产能", "calculation": "direct", "display": "tpy_10k", "evidence_refs": [{"source_id": "SRC_CNINFO_2025AR", "field_name": "lipf6_capacity", "period": "2025FY"}]},
         {"label": "年度收入", "calculation": "direct", "display": "cny_100m", "evidence_refs": [{"source_id": "SRC_CNINFO_2025AR", "field_name": "revenue", "period": "2025FY"}]},
         {"label": "资产处置对价", "calculation": "direct", "display": "cny_100m", "evidence_refs": [{"source_id": "SRC_SZSE_NINGXIA_TRANSFER_20260617", "field_name": "transaction_consideration", "period": "2026 event"}]}
       ],
-      "evidence_fields": ["revenue", "lipf6_capacity_tpy", "transaction_consideration"]
+      "evidence_fields": ["revenue", "lipf6_capacity", "transaction_consideration"]
     },
     "industry": {
       "status": "ready",
       "conclusion": "公司处于氟化工、锂电材料和电子化学品交叉地带，行业具有价格周期、产能周期和客户认证三种不同节奏；研究中应按业务块拆分，而不是用单一材料行业倍数概括。",
       "key_findings": [
-        {"text": "锂盐产能体现规模属性，半导体级氢氟酸收入占比上限体现认证业务仍处早期。", "evidence_fields": ["lipf6_capacity_tpy", "semiconductor_grade_hf_revenue_share_upper_bound"]},
+        {"text": "锂盐产能体现规模属性，半导体级氢氟酸收入占比上限体现认证业务仍处早期。", "evidence_fields": ["lipf6_capacity", "semiconductor_grade_hf_revenue_share_upper_bound"]},
         "六氟磷酸锂同时受新能源车与储能需求、锂盐成本和行业扩产影响，盈利波动显著。",
         "传统氟化工更依赖资源、能源、环保和开工率，承担业务底盘角色。",
         "电子化学品认证周期长、质量壁垒高，但当前收入贡献与市场叙事存在明显时间差。",
         "电池制造与材料业务的竞争要素不同，需要单独验证客户、出货和单位经济性。"
       ],
-      "counterpoints": [{"text": "公司产能与产品收入上限不能替代行业价格和同行开工率验证。", "evidence_fields": ["lipf6_capacity_tpy", "semiconductor_grade_hf_revenue_share_upper_bound"]}, "公司侧 IR 对行业紧平衡和成本优势的判断需要第三方价格、库存和同行开工率交叉验证。"],
-      "uncertainties": [{"text": "锂盐产能与电子材料收入贡献的兑现节奏仍有分歧。", "evidence_fields": ["lipf6_capacity_tpy", "semiconductor_grade_hf_revenue_share_upper_bound"]}, "LiPF6 新增供给", "下游订单持续性", "电子材料认证到收入的转化周期"],
+      "counterpoints": [{"text": "公司产能与产品收入上限不能替代行业价格和同行开工率验证。", "evidence_fields": ["lipf6_capacity", "semiconductor_grade_hf_revenue_share_upper_bound"]}, "公司披露对行业紧平衡和成本优势的判断需要第三方价格、库存和同行开工率交叉验证。"],
+      "uncertainties": [{"text": "锂盐产能与电子材料收入贡献的兑现节奏仍有分歧。", "evidence_fields": ["lipf6_capacity", "semiconductor_grade_hf_revenue_share_upper_bound"]}, "LiPF6 新增供给", "下游订单持续性", "电子材料认证到收入的转化周期"],
       "key_metrics": [
         {"label": "半导体级 HF 收入占比上限", "calculation": "direct", "display": "percent_upper_bound", "tone": "caution", "evidence_refs": [{"source_id": "SRC_ABNORMAL_20260702", "field_name": "semiconductor_grade_hf_revenue_share_upper_bound", "period": "2025FY/2026Q1"}]}
       ],
-      "evidence_fields": ["revenue", "lipf6_capacity_tpy", "semiconductor_grade_hf_revenue_share_upper_bound"]
+      "evidence_fields": ["revenue", "lipf6_capacity", "semiconductor_grade_hf_revenue_share_upper_bound"]
     },
     "fundamentals": {
       "status": "ready",
@@ -66,14 +66,14 @@
       "conclusion": "当前可确认研究时点的价格与对应市值快照；由于证据台账未纳入连续行情和可复算指标，本报告不判断趋势、动量或交易拥挤度。",
       "key_findings": [
         {"text": "证据台账确认研究时点价格和对应市值快照。", "evidence_fields": ["current_price", "market_cap"]},
-        "2026-07-03 价格快照为 49.34 元，对应市值约 587.36 亿元。",
+        "2026-07-17 收盘价格为 31.24 元，按已披露总股本计算对应市值约 371.89 亿元。",
         "单点价格只用于刻画研究时点，不能替代价格序列、成交量和复权处理。"
       ],
       "counterpoints": [{"text": "单点价格与市值快照不能证明趋势或动量。", "evidence_fields": ["current_price", "market_cap"]}, "强趋势可能来自盈利修复与主题交易共同作用，技术指标不能区分两者。"],
       "uncertainties": [{"text": "价格快照之外的趋势结构仍需连续行情验证。", "evidence_fields": ["current_price"]}, "价格序列与复权口径", "异常波动后的成交结构"],
       "key_metrics": [
-        {"label": "研究时点价格", "calculation": "direct", "display": "cny_per_share", "evidence_refs": [{"source_id": "SRC_YAHOO_20260703", "field_name": "current_price", "period": "2026-07-03"}]},
-        {"label": "对应市值", "calculation": "direct", "display": "cny_100m", "evidence_refs": [{"source_id": "SRC_MARKET_SNAPSHOT_20260703", "field_name": "market_cap", "period": "2026-07-03"}]}
+        {"label": "研究时点价格", "calculation": "direct", "display": "cny_per_share", "evidence_refs": [{"source_id": "SRC_TUSHARE_DFD_DAILY_20260717", "field_name": "current_price", "period": "2026-07-17"}]},
+        {"label": "对应市值", "calculation": "direct", "display": "cny_100m", "evidence_refs": [{"source_id": "SRC_MARKET_SNAPSHOT_20260717", "field_name": "market_cap", "period": "2026-07-17"}]}
       ],
       "evidence_fields": ["current_price", "market_cap"]
     },
@@ -111,8 +111,8 @@
       "counterpoints": [{"text": "静态倍数使用低盈利基线，不能替代中周期利润与现金流判断。", "evidence_fields": ["eps", "net_income", "cfo", "fcf"]}, "若 2026 后续季度利润和现金流同时改善，当前静态倍数会快速下降。"],
       "uncertainties": [{"text": "中周期利润与现金流正常化程度决定估值方法解释力。", "evidence_fields": ["net_income", "cfo", "fcf"]}, "中周期 LiPF6 单吨利润", "分部资本占用", "同源同行倍数", "现金流正常化"],
       "key_metrics": [
-        {"label": "价格 / 年度 EPS", "calculation": "ratio", "display": "multiple", "tone": "caution", "evidence_refs": [{"source_id": "SRC_YAHOO_20260703", "field_name": "current_price", "period": "2026-07-03"}, {"source_id": "SRC_CNINFO_2025AR", "field_name": "eps", "period": "2025FY"}]},
-        {"label": "市值 / 年度收入", "calculation": "ratio", "display": "multiple", "evidence_refs": [{"source_id": "SRC_MARKET_SNAPSHOT_20260703", "field_name": "market_cap", "period": "2026-07-03"}, {"source_id": "SRC_CNINFO_2025AR", "field_name": "revenue", "period": "2025FY"}]}
+        {"label": "价格 / 年度 EPS", "calculation": "ratio", "display": "multiple", "tone": "caution", "evidence_refs": [{"source_id": "SRC_TUSHARE_DFD_DAILY_20260717", "field_name": "current_price", "period": "2026-07-17"}, {"source_id": "SRC_CNINFO_2025AR", "field_name": "eps", "period": "2025FY"}]},
+        {"label": "市值 / 年度收入", "calculation": "ratio", "display": "multiple", "evidence_refs": [{"source_id": "SRC_MARKET_SNAPSHOT_20260717", "field_name": "market_cap", "period": "2026-07-17"}, {"source_id": "SRC_CNINFO_2025AR", "field_name": "revenue", "period": "2025FY"}]}
       ],
       "evidence_fields": ["current_price", "market_cap", "eps", "revenue", "cfo", "fcf"]
     },
@@ -141,7 +141,7 @@
       "thesis": "LiPF6 景气修复、纵向一体化和电子化学品长期选择权可能使盈利改善延续。",
       "arguments": [
         {"argument_id": "DFD-B1", "claim": "最新季度收入和归母利润已经显示显著经营杠杆。", "evidence_fields": ["revenue", "net_income"]},
-        {"argument_id": "DFD-B2", "claim": "已披露 LiPF6 产能和氟化工收入底盘为周期修复提供规模基础。", "evidence_fields": ["lipf6_capacity_tpy", "revenue"]},
+        {"argument_id": "DFD-B2", "claim": "已披露 LiPF6 产能和氟化工收入底盘为周期修复提供规模基础。", "evidence_fields": ["lipf6_capacity", "revenue"]},
         {"argument_id": "DFD-B3", "response_to": "DFD-R1", "claim": "负现金流削弱利润质量，但现金余额仍为周期修复提供短期缓冲，后续重点是现金转化而非否定利润修复。", "evidence_fields": ["cfo", "fcf", "cash", "net_income"]},
         {"argument_id": "DFD-B4", "response_to": "DFD-R2", "claim": "电子化学品当前贡献有限，因此其价值只能作为待验证选择权，核心判断仍应基于锂盐与现金流。", "evidence_fields": ["semiconductor_grade_hf_revenue_share_upper_bound", "revenue", "cfo"]}
       ]
@@ -168,10 +168,10 @@
     "risk_reward_summary": "潜在改善来自锂盐利润延续、成本优势和电子材料放量；主要约束是负现金流、债务、资本开支、周期回落和主题预期。",
     "key_uncertainties": ["LiPF6 单吨利润", "经营现金流", "电子化学品收入占比", "电池业务盈利", "债务和资本开支"],
     "what_would_change_the_view": ["半年报现金流转正且应收库存周转改善", "官方披露锂盐订单与单吨盈利的可持续证据", "电子化学品收入占比显著提升", "利润修复但现金流继续恶化或债务持续上升"],
-    "evidence_fields": ["revenue", "net_income", "cfo", "fcf", "cash", "debt", "current_price", "lipf6_capacity_tpy", "semiconductor_grade_hf_revenue_share_upper_bound"]
+    "evidence_fields": ["revenue", "net_income", "cfo", "fcf", "cash", "debt", "current_price", "lipf6_capacity", "semiconductor_grade_hf_revenue_share_upper_bound"]
   },
   "theses": [
-    {"title": "锂盐周期修复", "detail": "价格、订单和成本决定利润弹性。", "evidence_fields": ["revenue", "net_income", "lipf6_capacity_tpy"]},
+    {"title": "锂盐周期修复", "detail": "价格、订单和成本决定利润弹性。", "evidence_fields": ["revenue", "net_income", "lipf6_capacity"]},
     {"title": "利润与现金流背离", "detail": "经营修复需要现金转化验证。", "evidence_fields": ["net_income", "cfo", "fcf"]}
   ],
   "risks": [

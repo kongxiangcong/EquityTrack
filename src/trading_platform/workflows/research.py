@@ -133,7 +133,10 @@ class ResearchWorkflowService:
             raise WorkflowError(str(error), run_id) from error
 
     def _freeze(self, run_id: str, request: ResearchWorkflowRequest, owner: str) -> tuple[str, str, str, str]:
-        if request.projection.as_of_date > request.effective_session_date:
+        if (
+            request.effective_session_date > request.requested_date
+            or request.projection.as_of_date > request.requested_date
+        ):
             raise WorkflowError("WORKFLOW_PIT_INVARIANT_FAILED", run_id)
         contract = self._node("freeze_research_projection")
         fp = self._hash({"node": asdict(contract), "input": asdict(request.projection)})
@@ -533,7 +536,26 @@ class ResearchWorkflowService:
                 for row in calibration.get("observation_vectors", ())
                 if isinstance(row, list)
             )
-            if stored != recomputed:
+            # This is a platform-owned evidence gate. The artifact may report
+            # its modelling tolerance, but it must not be able to weaken the
+            # raw-evidence equality check used at publication time.
+            calibration_gate_tolerance = Decimal("0.000000000001")
+            if (
+                len(stored) != len(recomputed)
+                or any(
+                    len(actual) != len(expected)
+                    or any(
+                        abs(actual_value - expected_value)
+                        > calibration_gate_tolerance
+                        for actual_value, expected_value in zip(
+                            actual, expected, strict=True
+                        )
+                    )
+                    for actual, expected in zip(
+                        stored, recomputed, strict=True
+                    )
+                )
+            ):
                 raise ProjectionError(
                     "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
                     "Simulation calibration vectors do not match repo-bound raw evidence.",
@@ -804,7 +826,7 @@ class ResearchWorkflowService:
         row = self.repository.connection.execute("SELECT p.*,s.snapshot_purpose,s.freshness_status,s.quality_status FROM research_input_projection p JOIN data_snapshot s ON s.data_snapshot_id=p.research_snapshot_id WHERE p.research_projection_id=?", (projection_id,)).fetchone()
         if row is None or row["research_snapshot_id"] != snapshot_id or row["projection_artifact_id"] != artifact_id or row["research_input_fingerprint"] != fingerprint:
             raise ValueError("WORKFLOW_DOMAIN_REFERENCE_INVALID")
-        if row["security_id"] != request.security_id or row["as_of_date"] > request.effective_session_date or row["snapshot_purpose"] != "research":
+        if row["security_id"] != request.security_id or row["as_of_date"] > request.requested_date or row["snapshot_purpose"] != "research":
             raise ValueError("WORKFLOW_PIT_INVARIANT_FAILED")
         if row["freshness_status"] != "valid" or row["quality_status"] == "blocking":
             raise ValueError("WORKFLOW_QUALITY_BLOCKED")

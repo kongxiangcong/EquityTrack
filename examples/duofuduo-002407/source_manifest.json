@@ -1,5 +1,5 @@
 {
-  "source_manifest_version": 1,
+  "source_manifest_version": 2,
   "company": {
     "name": "多氟多新材料股份有限公司",
     "ticker": "002407.SZ",
@@ -9,7 +9,7 @@
     "accounting_standard": "China Accounting Standards for Business Enterprises",
     "latest_financial_period": "2026Q1"
   },
-  "as_of_date": "2026-07-17",
+  "as_of_date": "2026-07-18",
   "workflow": {
     "output_type": "EQUITY_REPORT",
     "valuation_depth": "L2",
@@ -25,6 +25,8 @@
       "title": "多氟多新材料股份有限公司2026年第一季度报告",
       "official_or_secondary": "official",
       "url_or_api": "https://static.cninfo.com.cn/finalpage/2026-04-24/1225159579.PDF",
+      "published_at": "2026-04-24T00:00:00+08:00",
+      "available_at": "2026-04-24T00:00:00+08:00",
       "retrieved_at": "2026-07-03T21:42:00+08:00",
       "query_params": {
         "ticker": "002407",
@@ -199,6 +201,8 @@
       "title": "多氟多新材料股份有限公司2025年年度报告全文",
       "official_or_secondary": "official",
       "url_or_api": "https://static.cninfo.com.cn/finalpage/2026-04-16/1225107815.pdf",
+      "published_at": "2026-04-16T00:00:00+08:00",
+      "available_at": "2026-04-16T00:00:00+08:00",
       "retrieved_at": "2026-07-03T21:42:00+08:00",
       "query_params": {
         "ticker": "002407",
@@ -533,78 +537,117 @@
       "cross_checks": []
     },
     {
-      "source_id": "SRC_YAHOO_20260703",
+      "source_id": "SRC_TUSHARE_DFD_DAILY_20260717",
       "tier": "terminal",
       "market": "a-share",
-      "publisher": "Yahoo Finance chart API",
-      "title": "002407.SZ 1-year daily market data and metadata as of 2026-07-03",
+      "publisher": "Preconfigured Tushare-compatible non-official gateway",
+      "title": "002407.SZ daily market record for the 2026-07-17 session",
       "official_or_secondary": "secondary",
-      "url_or_api": "https://query1.finance.yahoo.com/v8/finance/chart/002407.SZ",
-      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "url_or_api": "configured:tushare-compatible-gateway/daily",
+      "retrieved_at": "2026-07-18T20:07:26+08:00",
+      "available_at": "2026-07-17T15:00:00+08:00",
       "query_params": {
-        "range": "1y",
-        "interval": "1d",
-        "symbol": "002407.SZ"
+        "credential": "redacted",
+        "end_date": "20260717",
+        "start_date": "20260717",
+        "ts_code": "002407.SZ"
       },
-      "filing_period": "2026-07-03",
-      "report_date": "2026-07-03",
+      "filing_period": "2026-07-17",
+      "report_date": "2026-07-17",
       "currency": "CNY",
       "unit": "yuan/share",
-      "raw_file_path": "assets/002407_SZ_yahoo_metadata.json",
-      "raw_file_sha256": "0E45D020A82EA92C8FD29173142ACAE323225C98B1D6F2EB9F2ABADC8C5407D1",
-      "page_or_table": "chart metadata",
+      "raw_file_path": "assets/dfd_daily_20260717.json",
+      "raw_file_sha256": "22E66A0627B4C4BF2C0FAE2D211914261533F64260D653F6FFA76BB68CC795BC",
+      "page_or_table": "daily API row",
       "extracted_fields": [
         {
           "field_name": "current_price",
-          "period": "2026-07-03",
-          "value": 49.34,
+          "period": "2026-07-17",
+          "value": 31.24,
           "unit": "CNY/share",
           "currency": "CNY",
-          "extraction_method": "Yahoo Finance chart API metadata",
+          "extraction_method": "direct daily API close",
           "confidence": "medium",
-          "note": "Regular market price / close on 2026-07-03."
+          "note": "Non-official structured market close; not an official disclosure authority."
         }
       ],
       "cross_checks": []
     },
     {
-      "source_id": "SRC_MARKET_SNAPSHOT_20260703",
+      "source_id": "SRC_MARKET_SNAPSHOT_20260717",
       "tier": "secondary",
       "market": "a-share",
       "publisher": "Local calculation from official share capital and terminal close",
       "title": "多氟多002407.SZ market-cap snapshot calculation",
       "official_or_secondary": "secondary",
       "url_or_api": "local calculation asset",
-      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "retrieved_at": "2026-07-18T20:07:26+08:00",
+      "available_at": "2026-07-17T15:00:00+08:00",
       "query_params": {
-        "price_source": "SRC_YAHOO_20260703",
+        "price_source": "SRC_TUSHARE_DFD_DAILY_20260717",
         "share_source": "SRC_CNINFO_2026Q1"
       },
-      "filing_period": "2026-07-03",
-      "report_date": "2026-07-03",
+      "filing_period": "2026-07-17",
+      "report_date": "2026-07-17",
       "currency": "CNY",
       "unit": "yuan",
-      "raw_file_path": "assets/market_snapshot_002407_20260703.json",
-      "raw_file_sha256": "C4F6A03D92FAA51B61EEE5F9717EA4AD2D3E398356B9366BA57EBDB98A9B312A",
+      "raw_file_path": "assets/dfd_market_snapshot_20260717.json",
+      "raw_file_sha256": "2E8052EA3BB6AF29F04F80AA242FB9416D66C1CD267C0387BBC5C474DF08CD1A",
       "page_or_table": "market snapshot JSON",
       "extracted_fields": [
         {
           "field_name": "market_cap",
-          "period": "2026-07-03",
-          "value": 58735942954.46,
+          "period": "2026-07-17",
+          "value": 37189113455.56,
           "unit": "CNY",
           "currency": "CNY",
           "extraction_method": "calculated from terminal close and official share capital",
           "confidence": "medium",
-          "note": "49.34 * 1,190,432,569; see market snapshot asset."
+          "note": "31.24 * 1,190,432,569; see immutable market snapshot asset."
         },
         {
           "field_name": "fx_rate",
-          "period": "2026-07-03",
+          "period": "2026-07-17",
           "value": 1.0,
           "unit": "CNY/CNY",
           "currency": "CNY",
           "extraction_method": "same reporting and trading currency",
+          "confidence": "high"
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_TUSHARE_DFD_MARKET_PATH_CALIBRATION_20260401_20260717",
+      "tier": "terminal",
+      "market": "a-share",
+      "publisher": "Preconfigured Tushare-compatible non-official gateway",
+      "title": "002407.SZ PIT daily closes and adjustment factors for market-path calibration",
+      "official_or_secondary": "secondary",
+      "url_or_api": "configured:tushare-compatible-gateway/daily+adj_factor",
+      "retrieved_at": "2026-07-18T20:07:26+08:00",
+      "available_at": "2026-07-17T15:00:00+08:00",
+      "query_params": {
+        "credential": "redacted",
+        "end_date": "20260717",
+        "start_date": "20260401",
+        "ts_code": "002407.SZ"
+      },
+      "filing_period": "2026-04-01/2026-07-17",
+      "report_date": "2026-07-17",
+      "currency": "CNY",
+      "unit": "daily OHLCV and adjustment factor",
+      "raw_file_path": "assets/dfd_market_path_calibration_20260401_20260717.json",
+      "raw_file_sha256": "497A464FC04A4C0DA74EB1BA051FB0CA969B971876733020AC73DB8042378BE7",
+      "page_or_table": "daily and adj_factor API rows",
+      "extracted_fields": [
+        {
+          "field_name": "market_path_observation_count",
+          "period": "2026-04-01/2026-07-17",
+          "value": 73,
+          "unit": "daily observations",
+          "currency": "N/A",
+          "extraction_method": "count of immutable merged daily and adjustment-factor rows",
           "confidence": "high"
         }
       ],
@@ -618,6 +661,8 @@
       "title": "多氟多关于宁夏天霖新材料科技有限公司70%股权转让暨被动形成对参股公司财务资助、对外担保的公告",
       "official_or_secondary": "official",
       "url_or_api": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-06-17/6cfefb76-936c-4af7-bf13-78ca66801fda.PDF",
+      "published_at": "2026-06-17T00:00:00+08:00",
+      "available_at": "2026-06-17T00:00:00+08:00",
       "retrieved_at": "2026-07-03T21:42:00+08:00",
       "query_params": {
         "announcement_date": "2026-06-17"
@@ -644,47 +689,16 @@
       "cross_checks": []
     },
     {
-      "source_id": "SRC_IR_20260625",
-      "tier": "secondary",
-      "market": "a-share",
-      "publisher": "Company investor relations record via Eastmoney disclosure mirror",
-      "title": "多氟多投资者关系活动记录表",
-      "official_or_secondary": "secondary",
-      "url_or_api": "https://pdf.dfcfw.com/pdf/H2_AN202606261824919913_1.pdf",
-      "retrieved_at": "2026-07-03T21:42:00+08:00",
-      "query_params": {
-        "activity_date": "2026-06-25"
-      },
-      "filing_period": "2026 event",
-      "report_date": "2026-06-25",
-      "currency": "CNY",
-      "unit": "text",
-      "raw_file_path": "raw/ir_20260625.pdf",
-      "raw_file_sha256": "453525045684BB55EA588A08A8B9D3ED8FE8DEA40C1C50A433F214F8A6AAB669",
-      "page_or_table": "investor Q&A",
-      "extracted_fields": [
-        {
-          "field_name": "lipf6_capacity_tpy",
-          "period": "2026 event",
-          "value": 65000,
-          "unit": "tons/year",
-          "currency": "N/A",
-          "extraction_method": "direct PDF text extraction",
-          "confidence": "medium",
-          "note": "Company IR statement; non-critical operating context field."
-        }
-      ],
-      "cross_checks": []
-    },
-    {
       "source_id": "SRC_ABNORMAL_20260702",
-      "tier": "secondary",
+      "tier": "official",
       "market": "a-share",
-      "publisher": "Sina Finance disclosure mirror",
+      "publisher": "CNINFO / SZSE disclosure platform",
       "title": "多氟多股票交易异常波动公告",
-      "official_or_secondary": "secondary",
-      "url_or_api": "http://file.finance.sina.com.cn/211.154.219.97:9494/MRGG/CNSESZ_STOCK/2026/2026-7/2026-07-02/12427135.PDF",
-      "retrieved_at": "2026-07-03T21:42:00+08:00",
+      "official_or_secondary": "official",
+      "url_or_api": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225404077.PDF",
+      "published_at": "2026-07-02T00:00:00+08:00",
+      "retrieved_at": "2026-07-18T00:00:00+08:00",
+      "available_at": "2026-07-02T00:00:00+08:00",
       "query_params": {
         "announcement_date": "2026-07-02"
       },

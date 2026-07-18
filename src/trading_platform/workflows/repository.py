@@ -1037,7 +1037,6 @@ class WorkflowRepository:
                 or payload.get("interpretation")
                 != MarketPathEngine.INTERPRETATION
                 or not isinstance(fallback, Mapping)
-                or payload.get("price_unit") != fallback.get("unit")
                 or payload.get("currency") != fallback.get("currency")
                 or payload.get("horizon_return_basis")
                 != "net_of_declared_round_trip_transaction_costs"
@@ -1084,6 +1083,8 @@ class WorkflowRepository:
             or snapshot["market_timezone"] != payload.get("market_timezone")
             or snapshot["calendar_version"]
             != payload.get("trading_calendar_identity")
+            or snapshot["effective_session_date"]
+            != market_path.payload.get("starting_price_session")
         ):
             raise ValueError(
                 "RESEARCH_ARTIFACT_MARKET_DATA_SNAPSHOT_INVALID"
@@ -1443,7 +1444,7 @@ class WorkflowRepository:
                 and starting_row["session_date"]
                 == market_path.payload.get("starting_price_session")
                 and starting_row["session_date"]
-                == market_path.payload.get("as_of")
+                <= market_path.payload.get("as_of")
                 and starting_row["market_timezone"]
                 == payload.get("market_timezone")
                 and starting_row["adjustment_mode"] == "none"

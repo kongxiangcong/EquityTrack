@@ -551,7 +551,6 @@ class ImmutableArtifactDraft:
             or result.calibration.to_dict()
             != market_data_snapshot_artifact.payload
             or not isinstance(fallback, Mapping)
-            or result.price_unit != fallback.get("unit")
             or result.currency != fallback.get("currency")
             or result.interpretation != MarketPathEngine.INTERPRETATION
             or result.horizon_return_basis

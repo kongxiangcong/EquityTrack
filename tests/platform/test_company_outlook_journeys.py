@@ -24,6 +24,8 @@ from equity_research import (
     ForecastNarrativeStatement,
     ForecastQuantity,
     ForecastRequest,
+    MarketPathEngine,
+    MarketPathObservation,
     NarrativeBasis,
     NarrativeCategory,
     ScenarioDefinition,
@@ -96,7 +98,7 @@ def _dfd_projection() -> ResearchProjection:
         manifest=manifest,
         estimates=None,
         context=_load_dfd("research_context.json"),
-        as_of_date="2026-07-17",
+        as_of_date="2026-07-18",
         profile="standard",
         field_semantics=semantics,
         diluted_share_identity="",
@@ -114,8 +116,8 @@ def _dfd_projection() -> ResearchProjection:
                     allow_nan=False,
                 ).encode("utf-8")
             ).hexdigest(),
-            "passed": False,
-            "source_manifest_status": "invalid",
+            "passed": True,
+            "source_manifest_status": "valid_with_limits",
         },
         source_manifest_path="examples/duofuduo-002407/source_manifest.json",
     )
@@ -125,13 +127,13 @@ def _dfd_request(invocation_id: str) -> ResearchWorkflowRequest:
     return ResearchWorkflowRequest(
         invocation_id=invocation_id,
         security_id="security_duofuduo",
-        requested_date="2026-07-17",
+        requested_date="2026-07-18",
         effective_session_date="2026-07-17",
         projection=_dfd_projection(),
     )
 
 
-DFD_AS_OF = "2026-07-17"
+DFD_AS_OF = "2026-07-18"
 DFD_OPENING_PERIOD = "2025FY"
 DFD_FORECAST_PERIODS = ("2026E", "2027E", "2028E", "2029E", "2030E")
 
@@ -848,6 +850,166 @@ def _dfd_analysis_drafts() -> tuple[ImmutableArtifactDraft, ...]:
     return data_snapshot, forecast, valuation, simulation
 
 
+def _dfd_market_path_request():
+    raw = _load_dfd(
+        "assets/dfd_market_path_calibration_20260401_20260717.json"
+    )
+    rows = [
+        item
+        for item in raw["rows"]
+        if 20260520 <= item["trade_date"] < 20260717
+    ]
+    observations = []
+    previous_ref = None
+    previous_close = None
+    for item in rows:
+        session = str(item["trade_date"])
+        session_date = f"{session[:4]}-{session[4:6]}-{session[6:]}"
+        close = Decimal(str(item["close"]))
+        daily_return = (
+            close / previous_close - Decimal("1")
+            if previous_close is not None
+            else Decimal("0")
+        )
+        limit_tolerance = (
+            Decimal("0.005") / previous_close
+            if previous_close is not None
+            else Decimal("0")
+        )
+        evidence_ref = (
+            "Evidence:SRC_TUSHARE_DFD_MARKET_PATH_CALIBRATION_"
+            f"20260401_20260717:{session}"
+        )
+        observations.append(
+            MarketPathObservation(
+                session_date=session_date,
+                unadjusted_close=close,
+                adjustment_factor=Decimal("1"),
+                market_state=(
+                    "warmup"
+                    if previous_close is None
+                    else "risk_on"
+                    if daily_return > 0
+                    else "risk_off"
+                    if daily_return < 0
+                    else "flat"
+                ),
+                close_available_at=f"{session_date}T15:00:00+08:00",
+                factor_available_at=f"{session_date}T15:00:00+08:00",
+                state_available_at=f"{session_date}T15:00:00+08:00",
+                retrieved_at=raw["retrieved_at"],
+                suspended=False,
+                limit_state=(
+                    "up"
+                    if abs(daily_return - Decimal("0.10")) <= limit_tolerance
+                    else "down"
+                    if abs(daily_return + Decimal("0.10")) <= limit_tolerance
+                    else "none"
+                ),
+                corporate_action_identity=None,
+                evidence_refs=tuple(
+                    ref
+                    for ref in (evidence_ref, previous_ref)
+                    if ref is not None
+                ),
+            )
+        )
+        previous_ref = evidence_ref
+        previous_close = close
+    assert len(observations) >= 40
+    starting_ref = (
+        "Evidence:SRC_TUSHARE_DFD_DAILY_20260717:20260717"
+    )
+    base = market_path_request(rows=tuple(observations), state="risk_off")
+    return replace(
+        base,
+        simulation_id="dfd_market_path_simulation@1",
+        security_id="002407.SZ",
+        as_of=DFD_AS_OF,
+        as_of_at="2026-07-18T20:07:26+08:00",
+        model_identity="dfd-state-block-bootstrap@1",
+        policy_identity="dfd-market-path-policy@1",
+        starting_price=Decimal("31.24"),
+        starting_price_session="2026-07-17",
+        starting_price_member_id=starting_ref,
+        starting_price_available_at="2026-07-17T15:00:00+08:00",
+        starting_price_evidence_refs=(starting_ref,),
+        current_market_state="risk_off",
+        current_state_available_at="2026-07-17T15:00:00+08:00",
+        current_state_evidence_refs=(
+            starting_ref,
+            observations[-1].evidence_refs[0],
+            "one_session_return_sign@1",
+        ),
+        calibration=replace(
+            base.calibration,
+            snapshot_id="dfd-market-calibration-20260520-20260716@1",
+            market="SZSE",
+            market_timezone="Asia/Shanghai",
+            series_identity="dfd-pit-unadjusted-close-stable-factor-window@1",
+            series_evidence_refs=tuple(
+                item.evidence_refs[0] for item in observations
+            ),
+            trading_calendar_identity="szse-trade-cal-20260717@1",
+            calendar_evidence_refs=tuple(
+                f"Calendar:SZSE:{item.session_date}"
+                for item in observations
+            )
+            + ("Calendar:SZSE:2026-07-17",),
+            calendar_member_ids=tuple(
+                f"Calendar:SZSE:{item.session_date}"
+                for item in observations
+            ),
+            trading_sessions=tuple(
+                item.session_date for item in observations
+            ),
+            next_session_date="2026-07-17",
+            next_session_calendar_member_id="Calendar:SZSE:2026-07-17",
+            series_member_ids=tuple(
+                item.evidence_refs[0] for item in observations
+            ),
+            observations=tuple(observations),
+            window_start=observations[0].session_date,
+            window_end=observations[-1].session_date,
+            as_of=DFD_AS_OF,
+            basis=(
+                "State-conditioned contiguous block bootstrap over the frozen "
+                "post-corporate-action stable-factor window; raw close and "
+                "adjustment-factor rows remain hash-bound in the source manifest."
+            ),
+        ),
+        budget=replace(base.budget, seed=20260717),
+        price_thresholds=(Decimal("28"), Decimal("40")),
+    )
+
+
+def _dfd_market_path_drafts(
+    deterministic: tuple[ImmutableArtifactDraft, ...],
+    bound_request,
+) -> tuple[ImmutableArtifactDraft, ...]:
+    simulation = deterministic[-1]
+    result = MarketPathEngine().run(
+        replace(
+            bound_request,
+            valuation_simulation_source_identity=simulation.source_identity,
+        )
+    )
+    market_data = ImmutableArtifactDraft.from_market_data_snapshot(
+        result.calibration,
+        security_id=simulation.subject_id,
+        model_identity="dfd-cyclical-manufacturing-model@1",
+        policy_identity="dfd-evidence-constrained-policy@1",
+    )
+    market_path = ImmutableArtifactDraft.from_market_path_simulation(
+        result,
+        valuation_simulation_artifact=simulation,
+        market_data_snapshot_artifact=market_data,
+        model_identity="dfd-cyclical-manufacturing-model@1",
+        policy_identity="dfd-evidence-constrained-policy@1",
+    )
+    return (*deterministic, market_data, market_path)
+
+
 def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
@@ -1022,14 +1184,89 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
         "watch:security_duofuduo",
         SecurityIdentity("security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"),
     )
+    bound_market_request, market_member_ids = _install_market_snapshot(
+        root,
+        _dfd_market_path_request(),
+        security_id="security_duofuduo",
+        snapshot_id="snapshot_market_path_duofuduo_20260717",
+    )
     request = replace(
         _dfd_request("journey:dfd:first"),
-        analysis_artifacts=artifacts,
+        analysis_artifacts=_dfd_market_path_drafts(
+            artifacts,
+            bound_market_request,
+        ),
+        workflow_snapshot_id=(
+            bound_market_request.calibration.platform_snapshot_id
+        ),
+        candidate_member_ids=market_member_ids,
+        market_only_member_ids=market_member_ids,
     )
-    with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
-    assert caught.value.code == "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED"
+    first = root.facade.run_research_workflow(request)
+    published = tuple(
+        root.facade.get_research_artifact(record_id)
+        for record_id in first.artifact_record_ids
+    )
+    assert [item.artifact_kind for item in published] == [
+        "DataSnapshot",
+        "Forecast",
+        "Valuation",
+        "Simulation",
+        "MarketDataSnapshot",
+        "MarketPathSimulation",
+    ]
+    assert all(item.content_hash for item in published)
+    research_run = root.facade.get_research_run_payload(first.research_run_id)
+    assert research_run["status"] != "blocked"
+    view = root.facade.get_workspace(
+        "security_duofuduo",
+        first.research_snapshot_id,
+    )["research_views"][0]
+    assert view["story"]["what_happens"]
+    assert view["key_drivers"]
+    assert view["valuation_simulation"]["output_level"] == "basis_value"
+    assert view["market_price_paths"]["terminal_price_quantiles"]
+    assert view["value_market_divergence"]["status"] == "not_comparable"
+    assert view["audit"]["permissions"]["formal_per_share_valuation"] is False
+    assert not any(term in json.dumps(view, ensure_ascii=False) for term in FORBIDDEN)
+    manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
+    hashes = tuple(item.content_hash for item in published)
     root.close()
+
+    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
+    replay = rebuilt.facade.run_research_workflow(
+        replace(request, invocation_id="journey:dfd:replay")
+    )
+    replayed = tuple(
+        rebuilt.facade.get_research_artifact(record_id)
+        for record_id in replay.artifact_record_ids
+    )
+    assert replay.research_run_id == first.research_run_id
+    assert replay.research_snapshot_id == first.research_snapshot_id
+    assert replay.artifact_record_ids == first.artifact_record_ids
+    assert tuple(item.content_hash for item in replayed) == hashes
+    replay_manifest = rebuilt.facade.get_artifact_manifest(
+        replay.final_manifest_id
+    )
+    assert [item["member_role"] for item in replay_manifest.members] == [
+        item["member_role"] for item in manifest.members
+    ]
+    first_by_role = {item["member_role"]: item for item in manifest.members}
+    replay_by_role = {
+        item["member_role"]: item for item in replay_manifest.members
+    }
+    for role in (
+        "data_snapshot",
+        "forecast",
+        "valuation",
+        "simulation",
+        "market_data_snapshot",
+        "market_path_simulation",
+    ):
+        assert replay_by_role[role]["artifact_id"] == first_by_role[role][
+            "artifact_id"
+        ]
+    rebuilt.close()
 
 
 def test_duofuduo_calibration_vectors_are_recomputed_from_raw_rows() -> None:
@@ -1051,6 +1288,45 @@ def test_duofuduo_calibration_vectors_are_recomputed_from_raw_rows() -> None:
     with pytest.raises(SimulationInvariantError) as caught:
         validated_income_calibration_vectors(raw, wrong_period)
     assert caught.value.code == "SIMULATION_CALIBRATION_PERIOD_BINDING_INVALID"
+
+
+def test_public_facade_does_not_trust_artifact_calibration_tolerance(
+    tmp_path: Path,
+) -> None:
+    root = ProductionCompositionRoot(tmp_path, research_engine=CountingEngine())
+    root.facade.add_watchlist_item(
+        "watch:security_duofuduo",
+        SecurityIdentity(
+            "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
+        ),
+    )
+    drafts = _dfd_analysis_drafts()
+    simulation = drafts[-1]
+    payload = json.loads(simulation.payload_json)
+    payload["dependency_model"]["calibration"]["observation_vectors"][0][0] = "0.1"
+    payload["dependency_model"]["calibration_tolerance"] = "1"
+    tampered = ImmutableArtifactDraft._build(
+        artifact_kind=simulation.artifact_kind,
+        schema_version=simulation.schema_version,
+        subject_id=simulation.subject_id,
+        as_of=simulation.as_of,
+        source_identity=simulation.source_identity,
+        model_identity=simulation.model_identity,
+        policy_identity=simulation.policy_identity,
+        status=simulation.status,
+        formula_identities=simulation.formula_identities,
+        dependency_kinds=simulation.dependency_kinds,
+        payload=payload,
+        summary=simulation.summary,
+    )
+    request = replace(
+        _dfd_request("journey:dfd:forged-calibration-tolerance"),
+        analysis_artifacts=(*drafts[:-1], tampered),
+    )
+    with pytest.raises(WorkflowError) as caught:
+        root.facade.run_research_workflow(request)
+    assert caught.value.code == "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED"
+    root.close()
 
 
 def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
@@ -1237,7 +1513,7 @@ def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
     root.close()
 
 
-def test_public_facade_ignores_forged_source_validation_result(
+def test_public_facade_revalidates_forged_sufficient_result(
     tmp_path: Path,
 ) -> None:
     root = ProductionCompositionRoot(tmp_path, research_engine=CountingEngine())
@@ -1258,9 +1534,12 @@ def test_public_facade_ignores_forged_source_validation_result(
         projection=replace(base, source_manifest_validation_result=forged),
         analysis_artifacts=_dfd_analysis_drafts()[:3],
     )
-    with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
-    assert caught.value.code == "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED"
+    result = root.facade.run_research_workflow(request)
+    view = root.facade.get_workspace(
+        "security_duofuduo",
+        result.research_snapshot_id,
+    )["research_views"][0]
+    assert view["audit"]["permissions"]["formal_per_share_valuation"] is False
     root.close()
 
 

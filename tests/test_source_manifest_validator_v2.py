@@ -58,3 +58,31 @@ def test_v2_manifest_still_fails_closed_on_source_integrity_errors(tmp_path: Pat
     assert result["authority"] == "platform_source_manifest_gate@1"
     assert result["passed"] is False and result["source_manifest_status"] == "invalid"
     assert any(item["code"] == "REQUIRED_FIELD_MISSING" for item in result["issues"])
+
+
+def test_duofuduo_v2_manifest_passes_with_only_per_share_limits() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR),
+            "--manifest",
+            str(ROOT / "examples/duofuduo-002407/source_manifest.json"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    result = json.loads(completed.stdout)
+
+    assert completed.returncode == 0
+    assert result["passed"] is True
+    assert result["source_manifest_status"] == "valid_with_limits"
+    assert result["summary"]["hash_checks"] == 11
+    assert result["summary"]["errors"] == 0
+    assert set(result["limitations"]["missing_critical_fields"]) == {
+        "diluted_shares",
+        "pension_deficit",
+        "sbc_options_dilution",
+    }

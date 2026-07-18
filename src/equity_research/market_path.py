@@ -128,6 +128,7 @@ class MarketConstraintPolicy:
     one_way_transaction_cost_bps: Decimal
     minimum_execution_lag_sessions: int
     price_limit_fraction: Decimal
+    price_tick_size: Decimal | None
     preserve_observed_suspensions: bool
     preserve_observed_limit_states: bool
 
@@ -139,6 +140,11 @@ class MarketConstraintPolicy:
             ),
             "minimum_execution_lag_sessions": self.minimum_execution_lag_sessions,
             "price_limit_fraction": _text(self.price_limit_fraction),
+            "price_tick_size": (
+                _text(self.price_tick_size)
+                if self.price_tick_size is not None
+                else None
+            ),
             "preserve_observed_suspensions": self.preserve_observed_suspensions,
             "preserve_observed_limit_states": self.preserve_observed_limit_states,
         }
@@ -476,7 +482,7 @@ class MarketPathEngine:
                 "Market path dates must use ISO calendar dates.",
             ) from None
         if (
-            starting_session != as_of
+            starting_session > as_of
             or as_of_local_date != as_of
             or self._local_date(
                 request.starting_price_available_at,
@@ -536,6 +542,13 @@ class MarketPathEngine:
             or not Decimal("0")
             < request.constraints.price_limit_fraction
             < Decimal("1")
+            or (
+                request.constraints.price_tick_size is not None
+                and (
+                    not request.constraints.price_tick_size.is_finite()
+                    or request.constraints.price_tick_size <= 0
+                )
+            )
             or any(threshold <= 0 for threshold in request.price_thresholds)
         ):
             raise MarketPathInvariantError(
@@ -637,6 +650,19 @@ class MarketPathEngine:
                 current.adjusted_close / previous.adjusted_close - Decimal("1")
             )
             limit = float(request.constraints.price_limit_fraction)
+            # Price limits are applied to a tick-rounded reference price. The
+            # observed close-to-close return can therefore differ slightly
+            # from the nominal percentage. Tick semantics are data, not a
+            # policy-name convention.
+            limit_rounding_tolerance = (
+                float(
+                    request.constraints.price_tick_size
+                    / Decimal("2")
+                    / previous.adjusted_close
+                )
+                if request.constraints.price_tick_size is not None
+                else 1e-12
+            )
             if current.suspended:
                 if not request.constraints.preserve_observed_suspensions:
                     raise MarketPathInvariantError(
@@ -649,7 +675,7 @@ class MarketPathEngine:
                         "A suspended session cannot carry a changed adjusted close.",
                     )
                 simple_return = 0.0
-            if abs(simple_return) > limit + 1e-12:
+            if abs(simple_return) > limit + limit_rounding_tolerance:
                 raise MarketPathInvariantError(
                     "MARKET_PATH_LIMIT_SEMANTICS_INVALID",
                     "Observed returns must respect the declared market price limit.",
@@ -664,11 +690,11 @@ class MarketPathEngine:
                 )
             if (
                 current.limit_state == "up"
-                and abs(simple_return - limit) > 1e-9
+                and abs(simple_return - limit) > limit_rounding_tolerance
                 or current.limit_state == "down"
-                and abs(simple_return + limit) > 1e-9
+                and abs(simple_return + limit) > limit_rounding_tolerance
                 or current.limit_state == "none"
-                and abs(simple_return) >= limit - 1e-9
+                and abs(simple_return) >= limit - limit_rounding_tolerance
             ):
                 raise MarketPathInvariantError(
                     "MARKET_PATH_LIMIT_STATE_CONTRADICTION",

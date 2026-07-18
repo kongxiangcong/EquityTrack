@@ -47,8 +47,13 @@ def _market_path_drafts(
     return (*deterministic, market_data, market_path)
 
 
-def _install_market_snapshot(root, base_request):
-    snapshot_id = "snapshot_market_path_fixture"
+def _install_market_snapshot(
+    root,
+    base_request,
+    *,
+    security_id: str = "security_yihua",
+    snapshot_id: str = "snapshot_market_path_fixture",
+):
     calendar_ids = tuple(
         f"market_path_cal_{index:03d}"
         for index, _ in enumerate(base_request.calibration.observations)
@@ -152,10 +157,10 @@ def _install_market_snapshot(root, base_request):
             "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 snapshot_id,
-                "security_yihua",
+                security_id,
                 "workflow",
                 base_request.as_of,
-                rows[-1].session_date,
+                base_request.starting_price_session,
                 base_request.as_of_at,
                 bound.calibration.market_timezone,
                 bound.calibration.trading_calendar_identity,
@@ -230,7 +235,7 @@ def _install_market_snapshot(root, base_request):
                 (
                     series_record,
                     "daily",
-                    f"security_yihua:{observation.session_date}:none",
+                    f"{security_id}:{observation.session_date}:none",
                 ),
             )
             connection.execute(
@@ -256,7 +261,7 @@ def _install_market_snapshot(root, base_request):
                 "INSERT INTO ohlcv_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     series_id,
-                    "security_yihua",
+                    security_id,
                     observation.session_date,
                     bound.calibration.market_timezone,
                     "none",
@@ -327,7 +332,7 @@ def _install_market_snapshot(root, base_request):
             (
                 starting_record,
                 "daily",
-                f"security_yihua:{base_request.starting_price_session}:none",
+                f"{security_id}:{base_request.starting_price_session}:none",
             ),
         )
         connection.execute(
@@ -353,7 +358,7 @@ def _install_market_snapshot(root, base_request):
             "INSERT INTO ohlcv_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 starting_price_member_id,
-                "security_yihua",
+                security_id,
                 base_request.starting_price_session,
                 bound.calibration.market_timezone,
                 "none",
@@ -923,6 +928,59 @@ def test_market_path_artifact_rejects_unfrozen_data_dimensions_and_unsafe_copy()
                 model_identity="company-outlook-model@1",
                 policy_identity="company-outlook-policy@1",
             )
+
+
+def test_market_path_can_publish_beside_non_comparable_enterprise_value() -> None:
+    simulation = _simulation_drafts()[-1]
+    enterprise_value_fallback = {
+        **simulation.payload["deterministic_fallback"],
+        "unit": "CNY",
+        "output_level": "basis_value",
+    }
+    enterprise_value_simulation = ImmutableArtifactDraft._build(
+        artifact_kind=simulation.artifact_kind,
+        schema_version=simulation.schema_version,
+        subject_id=simulation.subject_id,
+        as_of=simulation.as_of,
+        source_identity=simulation.source_identity,
+        model_identity=simulation.model_identity,
+        policy_identity=simulation.policy_identity,
+        status=simulation.status,
+        formula_identities=simulation.formula_identities,
+        dependency_kinds=simulation.dependency_kinds,
+        payload={
+            **simulation.payload,
+            "deterministic_fallback": enterprise_value_fallback,
+        },
+        summary=simulation.summary,
+    )
+    base_request = replace(
+        market_path_request(),
+        security_id=enterprise_value_simulation.subject_id,
+        as_of=enterprise_value_simulation.as_of,
+        starting_price_session=enterprise_value_simulation.as_of,
+        valuation_simulation_source_identity=(
+            enterprise_value_simulation.source_identity
+        ),
+    )
+    result = MarketPathEngine().run(base_request)
+    market_data = ImmutableArtifactDraft.from_market_data_snapshot(
+        result.calibration,
+        security_id=enterprise_value_simulation.subject_id,
+        model_identity="company-outlook-model@1",
+        policy_identity="company-outlook-policy@1",
+    )
+
+    artifact = ImmutableArtifactDraft.from_market_path_simulation(
+        result,
+        valuation_simulation_artifact=enterprise_value_simulation,
+        market_data_snapshot_artifact=market_data,
+        model_identity="company-outlook-model@1",
+        policy_identity="company-outlook-policy@1",
+    )
+
+    assert artifact.payload["price_unit"] == "CNY/share"
+    assert enterprise_value_fallback["unit"] == "CNY"
 
 
 def test_value_market_divergence_fails_closed_across_dimensions() -> None:
