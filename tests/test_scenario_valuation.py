@@ -794,8 +794,9 @@ def cyclical_resource_spec(
 def cyclical_request(
     *,
     spec: CyclicalResourceValuationSpec | None = None,
+    probabilities: bool = False,
 ) -> DeterministicScenarioRequest:
-    subject = scenario_request()
+    subject = scenario_request(probabilities=probabilities)
     cyclical_spec = spec or cyclical_resource_spec()
     base = replace(
         subject.base_forecast_request,
@@ -1791,6 +1792,96 @@ def test_cyclical_resource_route_executes_mid_cycle_nav_and_pit_historical_band(
         )
 
 
+def test_cyclical_enterprise_value_survives_when_per_share_basis_is_unavailable() -> None:
+    subject = cyclical_request(probabilities=True)
+    plan = replace(
+        subject.valuation_plan,
+        present_value_bridge=replace(
+            subject.valuation_plan.present_value_bridge,
+            diluted_shares=None,
+        ),
+        terminal_value_bridge=replace(
+            subject.valuation_plan.terminal_value_bridge,
+            diluted_shares=None,
+        ),
+    )
+
+    result = ScenarioValuationEngine().run(
+        replace(subject, valuation_plan=plan)
+    )
+
+    for scenario in result.scenarios:
+        mid_cycle = scenario.method("mid_cycle_ev_ebitda")
+        assert mid_cycle.status == "ready"
+        assert mid_cycle.conditional_value_range is not None
+        assert mid_cycle.conditional_value_range.base.equity_value.normalized_value
+        assert mid_cycle.conditional_value_range.base.per_share_value is None
+        assert not any(
+            step["operation"] == "divide_diluted_shares"
+            for step in mid_cycle.conditional_value_range.base.bridge_trace
+        )
+    assert result.weighted_method_ranges == ()
+    assert any(
+        "mid_cycle_ev_ebitda: not weighted because the per-share basis is unavailable."
+        == item
+        for item in result.weighting_diagnostics
+    )
+
+
+def test_cyclical_manufacturer_runs_mid_cycle_without_resource_or_history_inputs() -> None:
+    subject = cyclical_request(
+        spec=replace(
+            cyclical_resource_spec(),
+            assets=(),
+            historical_observations=(),
+        )
+    )
+
+    result = ScenarioValuationEngine().run(subject)
+
+    for scenario in result.scenarios:
+        assert scenario.method("mid_cycle_ev_ebitda").status == "ready"
+        assert scenario.method("resource_nav").status == "blocked"
+        assert "RESOURCE_NAV_NOT_APPLICABLE" in scenario.method(
+            "resource_nav"
+        ).diagnostics[0]
+        assert scenario.method("cyclical_historical_band").status == "blocked"
+        assert "CYCLICAL_HISTORY_INSUFFICIENT" in scenario.method(
+            "cyclical_historical_band"
+        ).diagnostics[0]
+
+
+def test_cyclical_manufacturing_has_an_explicit_non_resource_route() -> None:
+    subject = cyclical_request(
+        spec=replace(
+            cyclical_resource_spec(),
+            assets=(),
+            historical_observations=(),
+        )
+    )
+    request = replace(
+        subject.base_forecast_request,
+        security=replace(
+            subject.base_forecast_request.security,
+            archetype=CompanyArchetype.CYCLICAL_MANUFACTURING,
+        ),
+    )
+
+    result = ScenarioValuationEngine().run(
+        replace(subject, base_forecast_request=request)
+    )
+
+    assert all(
+        scenario.forecast_graph.template_id
+        == "cyclical_manufacturing_driver_graph@1"
+        for scenario in result.scenarios
+    )
+    assert all(
+        scenario.method("mid_cycle_ev_ebitda").status == "ready"
+        for scenario in result.scenarios
+    )
+
+
 def test_cyclical_stress_links_price_volume_yield_cost_and_maintenance_capex() -> None:
     result = ScenarioValuationEngine().run(cyclical_request())
     by_role = {item.role: item for item in result.scenarios}
@@ -2728,6 +2819,31 @@ def test_biopharma_route_executes_rnpv_sotp_and_runway_gate() -> None:
         < per_share[ScenarioRole.IMPROVEMENT]
     )
     assert result.cross_method_composite is None
+
+
+def test_biopharma_missing_share_basis_blocks_methods_without_crashing() -> None:
+    subject = biopharma_request()
+    plan = replace(
+        subject.valuation_plan,
+        present_value_bridge=replace(
+            subject.valuation_plan.present_value_bridge,
+            diluted_shares=None,
+        ),
+        terminal_value_bridge=replace(
+            subject.valuation_plan.terminal_value_bridge,
+            diluted_shares=None,
+        ),
+    )
+
+    result = ScenarioValuationEngine().run(
+        replace(subject, valuation_plan=plan)
+    )
+
+    for scenario_result in result.scenarios:
+        for method_id in ("pipeline_rnpv", "pipeline_sotp"):
+            method = scenario_result.method(method_id)
+            assert method.status == "blocked"
+            assert "BIOPHARMA_DILUTION_BASIS_MISSING" in method.diagnostics[0]
 
 
 def test_biopharma_shared_event_failure_hits_dependent_assets() -> None:

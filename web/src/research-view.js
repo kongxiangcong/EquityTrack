@@ -53,19 +53,24 @@ function horizonLabel(value) {
 }
 
 function basisLabel(value) {
-  if (value === "enterprise_value") return "企业价值口径，经股权桥转换为每股值"
+  if (value === "enterprise_value") return "企业价值口径；股权桥完整时才继续转换"
   if (value === "equity_value") return "股权价值口径"
   return String(value ?? "未声明价值口径")
 }
 
 export function methodSummary(method) {
-  const range = method.conditional_per_share_range
+  const range = method.conditional_value_range
+  const level = {
+    basis_value: "企业价值",
+    equity_value: "股权价值",
+    per_share_value: "每股价值",
+  }[method.display_value_level] ?? "条件价值"
   const value = range
     ? `${formatQuantity(range.low)} / ${formatQuantity(range.base)} / ${formatQuantity(range.high)}`
     : `受限：${method.display_applicability ?? method.applicability ?? "输入不足"}`
   const diagnostics = method.display_diagnostics ?? method.diagnostics ?? []
   const warning = diagnostics.length ? ` · 注意：${diagnostics.join("；")}` : ""
-  return `${method.method_id} · ${value} · ${basisLabel(method.value_basis)} · ${horizonLabel(method.horizon)}${warning}`
+  return `${method.method_id} · ${level} ${value} · ${basisLabel(method.value_basis)} · ${horizonLabel(method.horizon)}${warning}`
 }
 
 function list(items) {
@@ -81,18 +86,23 @@ export function renderSandboxReport(view) {
     const methods = (scenario.methods ?? [])
       .map(method => `<li>${escapeHtml(methodSummary(method))}</li>`)
       .join("")
-    return `<article><p class="eyebrow">${escapeHtml(scenario.role)}</p><h3>${escapeHtml(scenario.label)}情景</h3><p>${escapeHtml(scenario.terminal_period)}</p><h4>关键财务</h4><ul class="metrics">${financials}</ul><h4>方法级条件每股价值区间</h4><ul class="metrics">${methods}</ul></article>`
+    return `<article><p class="eyebrow">${escapeHtml(scenario.role)}</p><h3>${escapeHtml(scenario.label)}情景</h3><p>${escapeHtml(scenario.terminal_period)}</p><h4>关键财务</h4><ul class="metrics">${financials}</ul><h4>方法级条件价值区间</h4><ul class="metrics">${methods}</ul></article>`
   }).join("")
   const drivers = (view.key_drivers ?? []).map(item => `<li><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(formatQuantity(item))} · ${escapeHtml(item.period)}</span></li>`).join("")
   const implied = (view.market_implied_expectations ?? []).map(item => `<li><strong>${escapeHtml(item.scenario_label)}情景</strong><span>${escapeHtml(formatPercent(item.base))} · ${escapeHtml(item.explanation)}</span></li>`).join("")
   const simulation = view.valuation_simulation
+  const simulationLevel = {
+    basis_value: "企业价值",
+    equity_value: "股权价值",
+    per_share_value: "每股价值",
+  }[simulation?.output_level] ?? "条件价值"
   const simulationAssumptions = (simulation?.assumptions ?? []).map(item => {
     const calibration = item.calibration ?? {}
     return `${item.assumption_id} · ${item.family} · reference ${item.reference_value} ${item.unit} · sample ${calibration.sample_id} · ${calibration.window_start}–${calibration.window_end} · available ${calibration.available_at} · override ${item.user_override_identity ?? "无"}`
   })
   const fallback = simulation?.deterministic_fallback ?? {}
   const simulationHtml = simulation
-    ? `<section><p class="eyebrow">Valuation Simulation · 条件分布</p><h2>校准后的每股价值分布</h2><p>${escapeHtml(simulation.converged ? "已通过收敛门禁" : "模拟受限，保留确定性情景")}</p><ul class="metrics">${Object.entries(simulation.quantiles ?? {}).map(([key, quantity]) => `<li><strong>${escapeHtml(key.toUpperCase())}</strong><span>${escapeHtml(formatQuantity(quantity))}</span></li>`).join("")}</ul><h3>关键变量贡献</h3>${list((simulation.contributions ?? []).map(item => `${item.assumption_id} · ${formatPercent({value:item.share,unit:"decimal"})}`))}<p>RNG ${escapeHtml(simulation.rng_algorithm)} · seed ${escapeHtml(simulation.seed)} · 样本预算 ${escapeHtml(simulation.sample_budget)} · 无效路径率 ${escapeHtml(simulation.invalid_path_rate)}</p><details><summary>展开分布校准、依赖结构与降级依据</summary><h3>随机变量与点时校准</h3>${list(simulationAssumptions)}<h3>依赖结构</h3><pre>${escapeHtml(JSON.stringify(simulation.dependency_model ?? {}, null, 2))}</pre><h3>确定性估值锚</h3><p>${escapeHtml(`${fallback.scenario_id} / ${fallback.method_id} / ${fallback.formula_version} · ${fallback.low} / ${fallback.base} / ${fallback.high} ${fallback.unit}`)}</p><h3>诊断</h3>${list(simulation.diagnostics ?? [])}</details></section>`
+    ? `<section><p class="eyebrow">Valuation Simulation · 条件分布</p><h2>校准后的${escapeHtml(simulationLevel)}分布</h2><p>${escapeHtml(simulation.converged ? "已通过收敛门禁" : "模拟受限，保留确定性情景")}</p><ul class="metrics">${Object.entries(simulation.quantiles ?? {}).map(([key, quantity]) => `<li><strong>${escapeHtml(key.toUpperCase())}</strong><span>${escapeHtml(formatQuantity(quantity))}</span></li>`).join("")}</ul><h3>关键变量贡献</h3>${list((simulation.contributions ?? []).map(item => `${item.assumption_id} · ${formatPercent({value:item.share,unit:"decimal"})}`))}<p>RNG ${escapeHtml(simulation.rng_algorithm)} · seed ${escapeHtml(simulation.seed)} · 样本预算 ${escapeHtml(simulation.sample_budget)} · 无效路径率 ${escapeHtml(simulation.invalid_path_rate)}</p><details><summary>展开分布校准、依赖结构与降级依据</summary><h3>随机变量与点时校准</h3>${list(simulationAssumptions)}<h3>依赖结构</h3><pre>${escapeHtml(JSON.stringify(simulation.dependency_model ?? {}, null, 2))}</pre><h3>确定性估值锚</h3><p>${escapeHtml(`${fallback.scenario_id} / ${fallback.method_id} / ${fallback.formula_version} · ${fallback.low} / ${fallback.base} / ${fallback.high} ${fallback.unit}`)}</p><h3>诊断</h3>${list(simulation.diagnostics ?? [])}</details></section>`
     : ""
   const marketPath = view.market_price_paths
   const divergence = view.value_market_divergence

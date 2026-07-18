@@ -38,13 +38,17 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
     view = workspace["research_views"][0]
     assert view["schema_version"] == "ResearchDecisionView@2"
     assert view["subject_id"] == "002897.SZ"
-    assert tuple(view["story"]) == (
+    assert {
+        "core_thesis",
+        "variant_view",
+        "valuation_view",
+        "valuation_guardrails",
         "what_happens",
         "why_it_matters",
         "transmission",
         "counterevidence",
         "what_would_change_the_view",
-    )
+    } <= set(view["story"])
     assert view["key_drivers"]
     assert [scenario["role"] for scenario in view["scenarios"]] == [
         "stress",
@@ -59,7 +63,7 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
             "company.fcff",
         }
         ready = [method for method in scenario["methods"] if method["status"] == "ready"]
-        assert ready and all(method["conditional_per_share_range"] for method in ready)
+        assert ready and all(method["conditional_per_share_range"] is None for method in ready)
         assert all(
             method["reconciliation"]["base"]["bridge_trace"]
             for method in ready

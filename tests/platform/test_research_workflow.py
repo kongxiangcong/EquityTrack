@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -66,6 +67,23 @@ def _projection(context=None) -> ResearchProjection:
         field_semantics=tuple(semantics),
         diluted_share_identity="SRC_CNINFO_2026Q1:diluted_shares:2026Q1",
         net_debt_bridge_identity="SRC_CNINFO_2026Q1:cash+debt:2026Q1",
+        source_manifest_validation_result={
+            "validator": "source_manifest_validator",
+            "validator_version": 2,
+            "authority": "platform_source_manifest_gate@1",
+            "manifest_content_hash": hashlib.sha256(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest(),
+            "passed": True,
+            "source_manifest_status": "valid_with_limits",
+        },
+        source_manifest_path="examples/yihua-002897/source_manifest.json",
     )
 
 
@@ -147,6 +165,23 @@ def test_public_workflow_creates_canonical_research_artifacts_and_replays_invoca
     root.close()
 
 
+def test_fresh_projection_rejects_future_as_of_before_freeze(tmp_path: Path) -> None:
+    root = _root(tmp_path, CountingEngine())
+    future = replace(_projection(), as_of_date="2026-07-08")
+    with pytest.raises(WorkflowError) as caught:
+        root.facade.run_research_workflow(
+            _request("research:future-projection", future)
+        )
+    assert caught.value.code == "WORKFLOW_PIT_INVARIANT_FAILED"
+    assert (
+        root._store.connection.execute(
+            "SELECT count(*) FROM research_input_projection"
+        ).fetchone()[0]
+        == 0
+    )
+    root.close()
+
+
 def test_new_invocation_reuses_immutable_research_and_market_only_snapshot(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
@@ -208,7 +243,8 @@ def test_typed_research_relevant_snapshot_member_requires_and_accepts_updated_pr
         connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
         connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1", "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
         connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_filing", "filing:2026Q2", "financial_statement", 0))
-    context = _load("research_context.json"); context["workflow_research_member_ids"] = ["filing:2026Q2"]
+    context = _load("research_context.json")
+    context["workflow_research_member_ids"] = ["filing:2026Q2"]
     changed = root.facade.run_research_workflow(_request("research:after-disclosure", _projection(context), requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id="snapshot_filing", candidate_member_ids=("filing:2026Q2",)))
     assert engine.calls == 2 and changed.research_run_id != first.research_run_id
     assert changed.research_snapshot_id != first.research_snapshot_id
@@ -226,7 +262,8 @@ def test_projection_semantics_and_cutoff_fail_closed(tmp_path: Path, mutation: s
     elif mutation == "authority":
         projection = replace(projection, field_semantics=(replace(projection.field_semantics[0], source_authority="secondary"), *projection.field_semantics[1:]))
     elif mutation == "future":
-        manifest = json.loads(json.dumps(projection.manifest)); manifest["sources"][0]["retrieved_at"] = "2026-07-08T00:00:00+08:00"
+        manifest = json.loads(json.dumps(projection.manifest))
+        manifest["sources"][0]["retrieved_at"] = "2026-07-08T00:00:00+08:00"
         projection = replace(projection, manifest=manifest)
     elif mutation == "bridge":
         projection = replace(projection, net_debt_bridge_identity="")
@@ -273,8 +310,9 @@ def test_missing_diluted_shares_reaches_capability_degradation(tmp_path: Path) -
         projection,
         manifest=manifest,
         field_semantics=semantics,
-        diluted_share_identity="",
-        profile="standard",
+            diluted_share_identity="",
+            profile="standard",
+            source_manifest_validation_result=None,
     )
     engine = CountingEngine()
     root = _root(tmp_path, engine)
@@ -322,8 +360,9 @@ def test_missing_net_debt_component_reaches_capability_degradation(
         field_semantics=tuple(
             item for item in projection.field_semantics if item.field_name != "debt"
         ),
-        net_debt_bridge_identity="",
-    )
+            net_debt_bridge_identity="",
+            source_manifest_validation_result=None,
+        )
     engine = CountingEngine()
     root = _root(tmp_path, engine)
 

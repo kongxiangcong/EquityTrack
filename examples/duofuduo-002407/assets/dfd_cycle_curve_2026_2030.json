@@ -1,0 +1,19 @@
+{
+  "schema_version": "AnalystCycleCurve@1",
+  "subject_id": "002407.SZ",
+  "as_of": "2026-07-17",
+  "curve_identity": "dfd-consolidated-cycle-curve@2026-07-17",
+  "classification": "analyst_assumption",
+  "basis_refs": [
+    "SRC_CNINFO_2025AR",
+    "SRC_TUSHARE_DFD_INCOME_CALIBRATION_2018_2025"
+  ],
+  "basis": "Conditional consolidated-revenue paths anchored to 2025 official revenue and bounded against the frozen 2019Q1-2025Q4 historical revenue-growth sample. These are scenario assumptions, not observed facts or consensus.",
+  "curve": {
+    "2026E": ["9000000000", "11200000000", "13000000000"],
+    "2027E": ["8800000000", "10800000000", "12600000000"],
+    "2028E": ["9000000000", "10500000000", "12000000000"],
+    "2029E": ["9200000000", "10400000000", "11600000000"],
+    "2030E": ["9400000000", "10400000000", "11400000000"]
+  }
+}

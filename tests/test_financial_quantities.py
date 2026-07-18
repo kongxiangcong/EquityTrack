@@ -80,6 +80,21 @@ def test_enterprise_value_bridge_is_exact_and_recomputable() -> None:
     }
 
 
+def test_enterprise_value_bridge_preserves_equity_value_when_share_basis_is_missing() -> None:
+    result = replace(bridge(), diluted_shares=None).evaluate()
+
+    assert result.equity_value == Decimal("870000000")
+    assert result.diluted_shares is None
+    assert result.per_share_value is None
+    assert result.to_dict()["diluted_shares"] is None
+    assert result.to_dict()["per_share_value"] is None
+    assert result.trace[-1] == {
+        "operation": "subtract_pension_deficit",
+        "amount": "10000000",
+        "ref_ids": ["Fact:pension_deficit"],
+    }
+
+
 def test_bridge_blocks_period_mismatch_with_stable_code() -> None:
     subject = bridge()
     subject = replace(

@@ -8,7 +8,6 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Iterable, Mapping
 
 from trading_platform.domain.workflow import (
@@ -1806,7 +1805,7 @@ class WorkflowRepository:
         return manifest_id
 
     def freeze_projection(self, security_id: str, projection: ResearchProjection, projection_fingerprint: str) -> tuple[str, str, str, ReferenceDisposition]:
-        payload = json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "context": projection.context, "as_of_date": projection.as_of_date, "profile": projection.profile, "field_semantics": [item.__dict__ for item in projection.field_semantics], "diluted_share_identity": projection.diluted_share_identity, "net_debt_bridge_identity": projection.net_debt_bridge_identity}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        payload = json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "context": projection.context, "as_of_date": projection.as_of_date, "profile": projection.profile, "field_semantics": [item.__dict__ for item in projection.field_semantics], "diluted_share_identity": projection.diluted_share_identity, "net_debt_bridge_identity": projection.net_debt_bridge_identity, "source_manifest_validation_result": projection.source_manifest_validation_result, "source_manifest_path": projection.source_manifest_path}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         projection_hash = hashlib.sha256(payload).hexdigest()
         existing = self.connection.execute("SELECT research_projection_id,research_snapshot_id,projection_artifact_id FROM research_input_projection WHERE projection_hash=?", (projection_hash,)).fetchone()
         if existing:

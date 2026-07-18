@@ -9,6 +9,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -33,7 +34,12 @@ from trading_platform.research_view import ResearchDecisionViewBuilder
 
 from .registry import RESEARCH_WORKFLOW, NodeDefinition
 from .repository import WorkflowRepository
-from equity_research import ForecastReviewEngine, ForecastReviewRequest
+from equity_research import (
+    ForecastReviewEngine,
+    ForecastReviewRequest,
+    validated_income_calibration_vectors,
+    validate_source_manifest_runtime,
+)
 
 
 class WorkflowError(RuntimeError):
@@ -54,7 +60,8 @@ class ResearchWorkflowService:
         self.repository = repository
         self.adapter = adapter
         self.assembler = assembler
-        self.engine_identity = research_engine_identity(repo_root)
+        self.repo_root = repo_root.resolve()
+        self.engine_identity = research_engine_identity(self.repo_root)
         self.fault_injector = fault_injector
 
     def _fault(self, boundary: str) -> None:
@@ -126,6 +133,8 @@ class ResearchWorkflowService:
             raise WorkflowError(str(error), run_id) from error
 
     def _freeze(self, run_id: str, request: ResearchWorkflowRequest, owner: str) -> tuple[str, str, str, str]:
+        if request.projection.as_of_date > request.effective_session_date:
+            raise WorkflowError("WORKFLOW_PIT_INVARIANT_FAILED", run_id)
         contract = self._node("freeze_research_projection")
         fp = self._hash({"node": asdict(contract), "input": asdict(request.projection)})
         completed = self.repository.validate_checkpoint(run_id, contract, fp)
@@ -186,6 +195,10 @@ class ResearchWorkflowService:
             return record, decision, run_members, completed["workflow_node_run_id"], attempt
         node, attempt = self.repository.begin_or_retry_node(run_id, contract, fp, owner)
         self._fault("workflow.node_attempt_started:run_or_link_research")
+        try:
+            trusted_source_validation = self._validate_analysis_artifact_gate(request)
+        except ProjectionError as error:
+            self._fail_node(run_id, node, attempt, error.code)
         record = self.repository.connection.execute("SELECT r.* FROM research_run_record r WHERE r.research_input_fingerprint=? AND r.engine_code_identity=?", (research_fp, self.engine_identity)).fetchone()
         values = None
         if record is None:
@@ -276,6 +289,13 @@ class ResearchWorkflowService:
                     record["research_run_id"]
                 )
             )
+            research_payload = self._presentation_permissions(
+                research_payload,
+                request,
+                by_kind["Valuation"].payload,
+                by_kind["DataSnapshot"].payload,
+                trusted_source_validation,
+            )
             decision_view = ResearchDecisionViewBuilder().build(
                 workflow_run_id=run_id,
                 data_snapshot=by_kind["DataSnapshot"],
@@ -345,6 +365,367 @@ class ResearchWorkflowService:
         self._fault("workflow.research_checkpoint_committed")
         return record, disposition, run_members, node, attempt
 
+    @classmethod
+    def _has_per_share_output(cls, value: object) -> bool:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                normalized_key = str(key).strip().lower()
+                if (
+                    "per_share" in normalized_key
+                    and nested not in (None, "", (), [], {})
+                ):
+                    return True
+                if normalized_key in {"output_level", "value_level", "kind", "level"} and isinstance(nested, str) and "per_share" in nested.lower():
+                    return True
+                if normalized_key == "unit" and isinstance(nested, str):
+                    normalized_unit = nested.strip().lower()
+                    if normalized_unit.endswith("/share") or normalized_unit.endswith(
+                        " per share"
+                    ):
+                        return True
+                if cls._has_per_share_output(nested):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(cls._has_per_share_output(item) for item in value)
+        return False
+
+    def _trusted_source_manifest_validation(
+        self, projection: ResearchProjection
+    ) -> Mapping[str, object]:
+        if not projection.source_manifest_path:
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Typed valuation artifacts require a repo-contained source-manifest path.",
+            )
+        relative = Path(projection.source_manifest_path)
+        if relative.is_absolute():
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Source-manifest path must be relative to the repository root.",
+            )
+        path = (self.repo_root / relative).resolve()
+        if path != self.repo_root and self.repo_root not in path.parents:
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Source-manifest path escapes the repository root.",
+            )
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Platform could not load the frozen source manifest.",
+            ) from error
+        if not isinstance(manifest, Mapping):
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Frozen source manifest must be an object.",
+            )
+        if self.assembler.fingerprint(
+            ResearchProjection(
+                **{
+                    **asdict(projection),
+                    "manifest": manifest,
+                    "field_semantics": projection.field_semantics,
+                }
+            )
+        ) != self.assembler.fingerprint(projection):
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Repo source manifest does not match the frozen projection.",
+            )
+        result = validate_source_manifest_runtime(manifest, path)
+        if (
+            result.get("authority") != "platform_source_manifest_gate@1"
+            or result.get("passed") is not True
+            or result.get("source_manifest_status")
+            not in {"sufficient", "valid_with_limits"}
+        ):
+            raise ProjectionError(
+                "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                "Platform source-manifest validation did not authorize typed valuation publication.",
+            )
+        return result
+
+    def _validate_simulation_calibration(
+        self, request: ResearchWorkflowRequest
+    ) -> None:
+        manifest_path = (self.repo_root / str(request.projection.source_manifest_path)).resolve()
+        source_by_hash = {
+            str(source.get("raw_file_sha256", "")).lower(): source
+            for source in request.projection.manifest.get("sources", ())
+            if isinstance(source, Mapping) and source.get("raw_file_sha256")
+        }
+        requires_income_derivation = any(
+            str(field.get("field_name", ""))
+            == "historical_operating_calibration_derivation"
+            for source in request.projection.manifest.get("sources", ())
+            if isinstance(source, Mapping)
+            for field in source.get("extracted_fields", ())
+            if isinstance(field, Mapping)
+        )
+        for draft in request.analysis_artifacts:
+            if draft.artifact_kind != "Simulation":
+                continue
+            dependency = draft.payload.get("dependency_model")
+            calibration = (
+                dependency.get("calibration")
+                if isinstance(dependency, Mapping)
+                else None
+            )
+            if not isinstance(calibration, Mapping):
+                continue
+            derivation_kind = calibration.get("derivation_kind")
+            if requires_income_derivation and derivation_kind != "cumulative_income_quarterly":
+                raise ProjectionError(
+                    "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                    "Declared income calibration evidence requires repo-bound quarterly re-derivation.",
+                )
+            if derivation_kind == "embedded_observation_vectors":
+                vectors = calibration.get("observation_vectors")
+                if (
+                    not isinstance(vectors, list)
+                    or len(vectors) < 20
+                    or any(not isinstance(row, list) or not row for row in vectors)
+                ):
+                    raise ProjectionError(
+                        "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                        "Embedded simulation calibration requires a non-empty typed observation sample.",
+                    )
+                continue
+            if derivation_kind != "cumulative_income_quarterly":
+                raise ProjectionError(
+                    "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                    "Unknown simulation calibration derivation kind fails closed.",
+                )
+            raw_hash = str(calibration.get("raw_observation_content_hash", "")).lower()
+            ledger_hash = str(
+                calibration.get("derivation_ledger_content_hash", "")
+            ).lower()
+            raw_source = source_by_hash.get(raw_hash)
+            ledger_source = source_by_hash.get(ledger_hash)
+            if raw_source is None or ledger_source is None:
+                raise ProjectionError(
+                    "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                    "Simulation calibration assets are not hash-bound to the source manifest.",
+                )
+
+            def load_asset(source: Mapping[str, object]) -> Mapping[str, object]:
+                path = (manifest_path.parent / str(source.get("raw_file_path", ""))).resolve()
+                if path != self.repo_root and self.repo_root not in path.parents:
+                    raise ProjectionError(
+                        "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                        "Simulation calibration asset escapes the repository root.",
+                    )
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(loaded, Mapping):
+                    raise ProjectionError(
+                        "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                        "Simulation calibration asset must be an object.",
+                    )
+                return loaded
+
+            recomputed = validated_income_calibration_vectors(
+                load_asset(raw_source), load_asset(ledger_source)
+            )
+            stored = tuple(
+                tuple(Decimal(str(value)) for value in row)
+                for row in calibration.get("observation_vectors", ())
+                if isinstance(row, list)
+            )
+            if stored != recomputed:
+                raise ProjectionError(
+                    "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED",
+                    "Simulation calibration vectors do not match repo-bound raw evidence.",
+                )
+
+    def _validate_analysis_artifact_gate(
+        self, request: ResearchWorkflowRequest
+    ) -> Mapping[str, object] | None:
+        if not request.analysis_artifacts:
+            return None
+        if not request.projection.diluted_share_identity:
+            for draft in request.analysis_artifacts:
+                if draft.artifact_kind not in {"Valuation", "Simulation"}:
+                    continue
+                if self._has_per_share_output(draft.payload) or self._has_per_share_output(
+                    draft.summary
+                ):
+                    raise ProjectionError(
+                        "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED",
+                        "Per-share valuation cannot be published without a frozen diluted-share identity.",
+                    )
+        result = self._trusted_source_manifest_validation(request.projection)
+        self._validate_simulation_calibration(request)
+        return result
+
+    @staticmethod
+    def _diluted_share_binding(
+        projection: ResearchProjection,
+        data_snapshot_payload: Mapping[str, object],
+    ) -> tuple[Decimal, str] | None:
+        try:
+            source_id, field_name, period = projection.diluted_share_identity.split(
+                ":", 2
+            )
+        except ValueError:
+            return None
+        manifest_field = next(
+            (
+                field
+                for source in projection.manifest.get("sources", ())
+                if isinstance(source, Mapping)
+                and str(source.get("source_id")) == source_id
+                for field in source.get("extracted_fields", ())
+                if isinstance(field, Mapping)
+                and str(field.get("field_name")) == field_name
+                and str(field.get("period")) == period
+            ),
+            None,
+        )
+        snapshot_fact = next(
+            (
+                fact
+                for fact in data_snapshot_payload.get("facts", ())
+                if isinstance(fact, Mapping)
+                and str(fact.get("source_id")) == source_id
+                and str(fact.get("field_name")) == field_name
+                and str(fact.get("period")) == period
+                and fact.get("official") is True
+            ),
+            None,
+        )
+        if manifest_field is None or snapshot_fact is None:
+            return None
+        try:
+            expected = Decimal(str(manifest_field.get("value"))) * Decimal(
+                str(manifest_field.get("scale", "1"))
+            )
+            observed = Decimal(str(snapshot_fact.get("value")))
+        except Exception:
+            return None
+        if expected != observed or str(snapshot_fact.get("unit")) != str(
+            manifest_field.get("unit")
+        ):
+            return None
+        return observed, str(snapshot_fact.get("fact_id"))
+
+    @staticmethod
+    def _share_bound_ready_methods(
+        valuation_payload: Mapping[str, object],
+        diluted_shares: Decimal,
+        diluted_share_fact_id: str,
+    ) -> set[str]:
+        bound: set[str] = set()
+        invalid: set[str] = set()
+        roles_by_method: dict[str, set[str]] = {}
+        expected_ref = f"Fact:{diluted_share_fact_id}"
+        expected_roles = {"stress", "base", "improvement"}
+        expected_points = {"low", "base", "high"}
+
+        def quantity_value(value: object) -> Decimal | None:
+            if not isinstance(value, Mapping):
+                return None
+            raw = value.get("normalized_value", value.get("value"))
+            try:
+                return Decimal(str(raw))
+            except Exception:
+                return None
+
+        for scenario in valuation_payload.get("scenarios", ()):
+            if not isinstance(scenario, Mapping):
+                continue
+            for method in scenario.get("methods", ()):
+                if not isinstance(method, Mapping) or method.get("status") != "ready":
+                    continue
+                method_id = str(method.get("method_id"))
+                role = str(scenario.get("role"))
+                value_range = method.get("conditional_value_range")
+                if not isinstance(value_range, Mapping) or set(value_range) != expected_points:
+                    invalid.add(method_id)
+                    continue
+                points_valid = True
+                for point in value_range.values():
+                    if not isinstance(point, Mapping):
+                        points_valid = False
+                        break
+                    equity = quantity_value(point.get("equity_value"))
+                    per_share = quantity_value(point.get("per_share_value"))
+                    trace = point.get("bridge_trace")
+                    divide_steps = (
+                        [
+                            step
+                            for step in trace
+                            if isinstance(step, Mapping)
+                            and step.get("operation") == "divide_diluted_shares"
+                        ]
+                        if isinstance(trace, list)
+                        else []
+                    )
+                    if (
+                        equity is None
+                        or per_share is None
+                        or diluted_shares == 0
+                        or per_share != equity / diluted_shares
+                        or len(divide_steps) != 1
+                        or expected_ref not in divide_steps[0].get("ref_ids", ())
+                        or Decimal(str(divide_steps[0].get("amount")))
+                        != diluted_shares
+                    ):
+                        points_valid = False
+                        break
+                if points_valid:
+                    bound.add(method_id)
+                    roles_by_method.setdefault(method_id, set()).add(role)
+                else:
+                    invalid.add(method_id)
+        return {
+            method_id
+            for method_id in bound - invalid
+            if roles_by_method.get(method_id) == expected_roles
+        }
+
+    @staticmethod
+    def _presentation_permissions(
+        research_payload: Mapping[str, object],
+        request: ResearchWorkflowRequest,
+        valuation_payload: Mapping[str, object],
+        data_snapshot_payload: Mapping[str, object],
+        trusted_source_validation: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        share_binding = ResearchWorkflowService._diluted_share_binding(
+            request.projection, data_snapshot_payload
+        )
+        ready_methods = (
+            ResearchWorkflowService._share_bound_ready_methods(
+                valuation_payload, share_binding[0], share_binding[1]
+            )
+            if share_binding is not None
+            else set()
+        )
+        permissions = research_payload.get("permissions")
+        base_permissions = dict(permissions) if isinstance(permissions, Mapping) else {}
+        platform_prerequisites = (
+            research_payload.get("status") != "blocked"
+            and base_permissions.get("research_report") is True
+            and base_permissions.get("scenario_analysis") is True
+        )
+        formal_per_share = platform_prerequisites and (
+            base_permissions.get("formal_per_share_valuation") is True
+            and bool(request.projection.diluted_share_identity)
+            and share_binding is not None
+            and isinstance(trusted_source_validation, Mapping)
+            and trusted_source_validation.get("passed") is True
+            and len(ready_methods) >= 2
+        )
+        return {
+            **research_payload,
+            "permissions": {
+                **base_permissions,
+                "formal_per_share_valuation": formal_per_share,
+            },
+        }
+
     def _fail_node(self, run_id: str, node: str, attempt: str, code: str) -> None:
         node_name = self.repository.connection.execute("SELECT node_id FROM workflow_node_run WHERE workflow_node_run_id=?", (node,)).fetchone()[0]
         contract = self._node(node_name)
@@ -401,17 +782,22 @@ class ResearchWorkflowService:
             "ForecastReview": "forecast_review",
         }[artifact_kind]
     def _validate_workflow_snapshot(self, workflow_snapshot_id: str, research_snapshot_id: str) -> None:
-        if workflow_snapshot_id == research_snapshot_id: raise ProjectionError("SNAPSHOT_PURPOSE_COLLISION", "snapshots differ")
+        if workflow_snapshot_id == research_snapshot_id:
+            raise ProjectionError("SNAPSHOT_PURPOSE_COLLISION", "snapshots differ")
         row = self.repository.connection.execute("SELECT snapshot_purpose FROM data_snapshot WHERE data_snapshot_id=?", (workflow_snapshot_id,)).fetchone()
-        if row is None or row[0] not in {"workflow", "market"}: raise ProjectionError("WORKFLOW_SNAPSHOT_INVALID", "snapshot invalid")
+        if row is None or row[0] not in {"workflow", "market"}:
+            raise ProjectionError("WORKFLOW_SNAPSHOT_INVALID", "snapshot invalid")
     def _validate_snapshot_classification(self, snapshot_id: str, candidates: tuple[str, ...], market_only: tuple[str, ...], context: object) -> None:
         rows = self.repository.connection.execute("SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=?", (snapshot_id,)).fetchall()
         actual = {r[0]: r[1] for r in rows}
-        if set(candidates) != set(actual): raise ProjectionError("SNAPSHOT_CANDIDATE_CLASSIFICATION_INVALID", "candidate mismatch")
+        if set(candidates) != set(actual):
+            raise ProjectionError("SNAPSHOT_CANDIDATE_CLASSIFICATION_INVALID", "candidate mismatch")
         market = {i for i, dataset in actual.items() if dataset in {"trade_cal", "market_universe", "daily"}}
-        if set(market_only) != market: raise ProjectionError("SNAPSHOT_MARKET_CLASSIFICATION_INVALID", "market mismatch")
+        if set(market_only) != market:
+            raise ProjectionError("SNAPSHOT_MARKET_CLASSIFICATION_INVALID", "market mismatch")
         declared = set(context.get("workflow_research_member_ids", ())) if isinstance(context, dict) else set()
-        if set(actual) - market != declared: raise ProjectionError("RESEARCH_RELEVANT_SNAPSHOT_CHANGE", "relevant mismatch")
+        if set(actual) - market != declared:
+            raise ProjectionError("RESEARCH_RELEVANT_SNAPSHOT_CHANGE", "relevant mismatch")
     def _validate_completed_projection_refs(self, request: ResearchWorkflowRequest, refs: dict[str, str], artifact_id: str, fingerprint: str) -> None:
         projection_id = refs.get("research_projection")
         snapshot_id = refs.get("research_snapshot")

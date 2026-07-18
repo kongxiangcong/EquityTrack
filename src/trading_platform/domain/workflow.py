@@ -87,18 +87,30 @@ def simulation_fallback_matches_valuation(
     value_range = method.get("conditional_value_range")
     if not isinstance(value_range, Mapping):
         return False
+    output_level = fallback.get("output_level")
+    if output_level not in {
+        "basis_value",
+        "equity_value",
+        "per_share_value",
+    }:
+        return False
     for label in ("low", "base", "high"):
         item = value_range.get(label)
-        quantity = item.get("per_share_value") if isinstance(item, Mapping) else None
-        if (
-            not isinstance(quantity, Mapping)
-            or comparable_decimal(
+        quantity = (
+            item.get(output_level)
+            if isinstance(item, Mapping)
+            else None
+        )
+        if not (
+            isinstance(quantity, Mapping)
+            and
+            comparable_decimal(
                 quantity.get("normalized_value", quantity.get("value"))
             )
-            != comparable_decimal(fallback.get(label))
-            or quantity.get("unit") != fallback.get("unit")
-            or quantity.get("currency") != fallback.get("currency")
-            or quantity.get("period") != fallback.get("period")
+            == comparable_decimal(fallback.get(label))
+            and quantity.get("unit") == fallback.get("unit")
+            and quantity.get("currency") == fallback.get("currency")
+            and quantity.get("period") == fallback.get("period")
         ):
             return False
     return True
@@ -1039,6 +1051,8 @@ class ResearchProjection:
     field_semantics: tuple[FieldSemantics, ...]
     diluted_share_identity: str
     net_debt_bridge_identity: str
+    source_manifest_validation_result: Mapping[str, Any] | None = None
+    source_manifest_path: str | None = None
 
 
 @dataclass(frozen=True)

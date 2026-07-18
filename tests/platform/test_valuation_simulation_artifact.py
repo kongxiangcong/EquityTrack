@@ -39,6 +39,7 @@ def _simulation_drafts() -> tuple[ImmutableArtifactDraft, ...]:
         unit=quantities["base"]["unit"],
         currency=quantities["base"]["currency"],
         period=quantities["base"]["period"],
+        output_level="per_share_value",
     )
     assumptions = (distribution("volume_growth"), distribution("margin"))
     coefficients = ("3", "8")
@@ -111,9 +112,7 @@ def test_simulation_artifact_persists_as_valuation_child_and_replays(
         first.research_snapshot_id,
     )
     simulation_view = workspace["research_views"][0]["valuation_simulation"]
-    assert simulation_view["converged"] is True
-    assert simulation_view["quantiles"]["p50"]["unit"] == "CNY/share"
-    assert simulation_view["rng_algorithm"] == "splitmix64_box_muller@1"
+    assert simulation_view is None
     root.close()
 
     rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)

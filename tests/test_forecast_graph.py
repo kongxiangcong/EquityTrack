@@ -11,7 +11,7 @@ from equity_research import (
     DataSnapshot,
     ForecastEdge,
     ForecastEngine,
-    ForecastGraph,
+    ForecastAssumption,
     ForecastInvariantError,
     ForecastNodeKind,
     ForecastQuantity,
@@ -1123,3 +1123,17 @@ def test_research_engine_rejects_fact_not_exactly_bound_to_manifest() -> None:
         )
 
     assert error.value.code == "FORECAST_FACT_MANIFEST_MISMATCH"
+
+
+def test_forecast_assumption_must_resolve_to_frozen_fact_lineage() -> None:
+    unresolved = ForecastAssumption(
+        assumption_id="unresolved_case@1",
+        description="A typed analyst condition with deliberately missing lineage.",
+        available_at=AS_OF,
+        evidence_refs=("Fact:missing:basis",),
+    )
+
+    with pytest.raises(ForecastInvariantError) as error:
+        replace(request(), assumptions=(unresolved,))
+
+    assert error.value.code == "FORECAST_ASSUMPTION_EVIDENCE_INVALID"

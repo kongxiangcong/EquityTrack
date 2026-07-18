@@ -26,7 +26,7 @@ const methodRows = [];
 const bridgeRows = [];
 for (const scenario of view.scenarios || []) {
   for (const method of scenario.methods || []) {
-    const range = method.conditional_per_share_range;
+    const range = method.conditional_value_range;
     if (method.status !== "ready" || !range) continue;
     const rawScenario = (view.audit?.parameters || []).find(
       (item) => item.scenario_id === scenario.scenario_id && item.method_id === method.method_id,
@@ -41,10 +41,10 @@ for (const scenario of view.scenarios || []) {
         point,
         Number(sourcePoint.basis_value.value),
         Number(sourcePoint.equity_value.value),
-        Number(sourcePoint.per_share_value.value),
-        sourcePoint.per_share_value.unit,
-        sourcePoint.per_share_value.currency,
-        sourcePoint.per_share_value.period,
+        Number(sourcePoint.per_share_value?.value ?? 0),
+        sourcePoint.per_share_value?.unit ?? range[point].unit,
+        sourcePoint.per_share_value?.currency ?? range[point].currency,
+        sourcePoint.per_share_value?.period ?? range[point].period,
         method.formula_version,
         rawScenario ? "parameter-trace-present" : "parameter-trace-missing",
       ]);
@@ -80,11 +80,11 @@ summary.getRange("A3:B9").values = [
   ["Status", view.status],
   ["Boundary", view.boundary],
 ];
-summary.getRange("A11:D11").values = [["Scenario", "Method", "Base per share", "Horizon"]];
+summary.getRange("A11:D11").values = [["Scenario", "Method", "Base displayed value", "Horizon"]];
 const summaryRows = [];
 for (const scenario of view.scenarios || []) {
   for (const method of scenario.methods || []) {
-    if (method.status === "ready" && method.conditional_per_share_range?.base) {
+    if (method.status === "ready" && method.conditional_value_range?.base) {
       const reconciliationIndex = reconciliationRows.findIndex(
         (row) => row[0] === scenario.role
           && row[1] === method.method_id
@@ -98,6 +98,7 @@ for (const scenario of view.scenarios || []) {
         method.method_id,
         reconciliationIndex + 2,
         method.horizon,
+        method.display_value_level,
       ]);
     }
   }
@@ -107,7 +108,7 @@ if (summaryRows.length) {
     summaryRows.map((row) => [row[0], row[1], null, row[3]]);
   for (let index = 0; index < summaryRows.length; index += 1) {
     summary.getRange(`C${index + 12}`).formulas = [[
-      `='Reconciliation'!I${summaryRows[index][2]}`,
+      `='Reconciliation'!${summaryRows[index][4] === "basis_value" ? "D" : summaryRows[index][4] === "equity_value" ? "F" : "J"}${summaryRows[index][2]}`,
     ]];
   }
   summary.getRange(`C12:C${11 + summaryRows.length}`).format.numberFormat =
@@ -159,7 +160,7 @@ for (let index = 0; index < reconciliationRows.length; index += 1) {
   reconciliation.getRange(`J${row}`).formulas = [[`='Canonical Inputs'!G${row}`]];
   reconciliation.getRange(`K${row}`).formulas = [[`=I${row}-J${row}`]];
   reconciliation.getRange(`L${row}`).formulas = [[`=IF(ABS(G${row})<0.0000001,"OK","FAIL")`]];
-  reconciliation.getRange(`M${row}`).formulas = [[`=IF(ABS(K${row})<0.0000001,"OK","FAIL")`]];
+  reconciliation.getRange(`M${row}`).formulas = [[`=IF('Canonical Inputs'!G${row}=0,"N/A",IF(ABS(K${row})<0.0000001,"OK","FAIL"))`]];
 }
 
 const artifactRows = (view.audit?.artifact_records || []).map((item) => [

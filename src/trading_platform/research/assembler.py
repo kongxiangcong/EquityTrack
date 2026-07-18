@@ -52,10 +52,29 @@ class SnapshotToResearchRequestAssembler:
             "field_semantics": [asdict(item) for item in projection.field_semantics],
             "diluted_share_identity": projection.diluted_share_identity,
             "net_debt_bridge_identity": projection.net_debt_bridge_identity,
+            "source_manifest_validation_result": (
+                projection.source_manifest_validation_result
+            ),
+            "source_manifest_path": projection.source_manifest_path,
         })
 
     def _validate(self, projection: ResearchProjection) -> None:
         manifest = projection.manifest
+        validation = projection.source_manifest_validation_result
+        if validation is not None and (
+            not isinstance(validation, Mapping)
+            or validation.get("validator_version") != 2
+            or validation.get("authority") != "platform_source_manifest_gate@1"
+            or validation.get("manifest_content_hash")
+            != canonical_mapping_hash(manifest)
+            or validation.get("source_manifest_status")
+            not in {"sufficient", "valid_with_limits", "insufficient", "invalid"}
+            or not isinstance(validation.get("passed"), bool)
+        ):
+            raise ProjectionError(
+                "SOURCE_MANIFEST_VALIDATION_BINDING_INVALID",
+                "Source-manifest validation must be versioned and content-hash bound to the frozen manifest.",
+            )
         sources = manifest.get("sources") if isinstance(manifest, Mapping) else None
         if not isinstance(sources, list) or not sources:
             raise ProjectionError("RESEARCH_SOURCES_MISSING", "Frozen projection requires source records.")

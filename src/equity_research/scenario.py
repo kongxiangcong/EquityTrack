@@ -640,11 +640,11 @@ class ScenarioDefinition:
 @dataclass(frozen=True)
 class EquityBridgeSpec:
     timing: EquityBridgeTiming
-    diluted_shares: FinancialQuantity
+    diluted_shares: FinancialQuantity | None
     lease_debt: FinancialQuantity
     preferred_stock: FinancialQuantity
     minority_interest: FinancialQuantity
-    pension_deficit: FinancialQuantity
+    pension_deficit: FinancialQuantity | None
     associates_jv_value: FinancialQuantity
     non_operating_assets: FinancialQuantity
     output_currency: str = ""
@@ -655,31 +655,50 @@ class EquityBridgeSpec:
                 "VALUATION_BRIDGE_TIMING_INVALID",
                 "Equity bridge timing must be opening or terminal.",
             )
-        quantities = (
-            self.diluted_shares,
+        required_money_inputs = (
             self.lease_debt,
             self.preferred_stock,
             self.minority_interest,
-            self.pension_deficit,
             self.associates_jv_value,
             self.non_operating_assets,
         )
-        if any(not isinstance(item, FinancialQuantity) for item in quantities):
+        if any(
+            not isinstance(item, FinancialQuantity)
+            for item in required_money_inputs
+        ) or (
+            self.pension_deficit is not None
+            and not isinstance(self.pension_deficit, FinancialQuantity)
+        ):
             raise ScenarioInvariantError(
                 "VALUATION_BRIDGE_INPUT_INVALID",
-                "Every equity-bridge input must be a FinancialQuantity.",
+                "Every equity-bridge adjustment must be a FinancialQuantity.",
             )
-        if self.diluted_shares.kind != "shares":
+        if self.diluted_shares is not None and not isinstance(
+            self.diluted_shares, FinancialQuantity
+        ):
+            raise ScenarioInvariantError(
+                "VALUATION_BRIDGE_INPUT_INVALID",
+                "diluted_shares must be a FinancialQuantity when supplied.",
+            )
+        if (
+            self.diluted_shares is not None
+            and self.diluted_shares.kind != "shares"
+        ):
             raise ScenarioInvariantError(
                 "VALUATION_BRIDGE_INPUT_INVALID",
                 "diluted_shares must carry a shares dimension.",
             )
-        money_inputs = quantities[1:]
+        money_inputs = required_money_inputs + (
+            (self.pension_deficit,) if self.pension_deficit is not None else ()
+        )
         if any(item.kind != "money" for item in money_inputs):
             raise ScenarioInvariantError(
                 "VALUATION_BRIDGE_INPUT_INVALID",
                 "Equity-bridge adjustments must carry a money dimension.",
             )
+        quantities = money_inputs + (
+            (self.diluted_shares,) if self.diluted_shares is not None else ()
+        )
         time_bases = {(item.period, item.as_of) for item in quantities}
         money_currencies = {item.currency for item in money_inputs}
         if len(time_bases) != 1 or len(money_currencies) != 1:
@@ -690,16 +709,24 @@ class EquityBridgeSpec:
 
     @property
     def balance_sheet_period(self) -> str:
-        return self.diluted_shares.period
+        return self.lease_debt.period
 
     @property
     def provenance_refs(self) -> tuple[str, ...]:
         return _merge_refs(
-            self.diluted_shares.provenance_refs,
+            *(
+                (self.diluted_shares.provenance_refs,)
+                if self.diluted_shares is not None
+                else ()
+            ),
             self.lease_debt.provenance_refs,
             self.preferred_stock.provenance_refs,
             self.minority_interest.provenance_refs,
-            self.pension_deficit.provenance_refs,
+            *(
+                (self.pension_deficit.provenance_refs,)
+                if self.pension_deficit is not None
+                else ()
+            ),
             self.associates_jv_value.provenance_refs,
             self.non_operating_assets.provenance_refs,
         )
@@ -924,7 +951,6 @@ class CommodityCurvePoint:
             _require_refs(
                 quantity.lineage_refs,
                 f"CommodityCurvePoint.{field_name}",
-                facts_only=True,
             )
 
     @property
@@ -1354,7 +1380,6 @@ class CyclicalResourceValuationSpec:
             )
         if (
             not isinstance(self.assets, tuple)
-            or not self.assets
             or any(not isinstance(item, ResourceAssetSpec) for item in self.assets)
         ):
             raise ScenarioInvariantError(
@@ -1395,7 +1420,6 @@ class CyclicalResourceValuationSpec:
             )
         if (
             not isinstance(self.historical_observations, tuple)
-            or len(self.historical_observations) < 3
             or any(
                 not isinstance(item, HistoricalCycleObservation)
                 for item in self.historical_observations
@@ -3132,15 +3156,23 @@ class ValuationSensitivity:
 @dataclass(frozen=True)
 class ValuationPoint:
     basis_value: FinancialQuantity
-    equity_value: FinancialQuantity
-    per_share_value: FinancialQuantity
+    equity_value: FinancialQuantity | None
+    per_share_value: FinancialQuantity | None
     bridge_trace: tuple[dict[str, Any], ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "basis_value": self.basis_value.to_dict(),
-            "equity_value": self.equity_value.to_dict(),
-            "per_share_value": self.per_share_value.to_dict(),
+            "equity_value": (
+                self.equity_value.to_dict()
+                if self.equity_value is not None
+                else None
+            ),
+            "per_share_value": (
+                self.per_share_value.to_dict()
+                if self.per_share_value is not None
+                else None
+            ),
             "bridge_trace": [dict(item) for item in self.bridge_trace],
         }
 
@@ -3165,14 +3197,29 @@ class ConditionalValueRange:
 
     @property
     def equity_value_low(self) -> Decimal:
+        if self.low.equity_value is None:
+            raise ScenarioInvariantError(
+                "EQUITY_BRIDGE_INCOMPLETE",
+                "Equity value is unavailable because the bridge is incomplete.",
+            )
         return self.low.equity_value.normalized_value
 
     @property
     def equity_value_base(self) -> Decimal:
+        if self.base.equity_value is None:
+            raise ScenarioInvariantError(
+                "EQUITY_BRIDGE_INCOMPLETE",
+                "Equity value is unavailable because the bridge is incomplete.",
+            )
         return self.base.equity_value.normalized_value
 
     @property
     def equity_value_high(self) -> Decimal:
+        if self.high.equity_value is None:
+            raise ScenarioInvariantError(
+                "EQUITY_BRIDGE_INCOMPLETE",
+                "Equity value is unavailable because the bridge is incomplete.",
+            )
         return self.high.equity_value.normalized_value
 
     @property
@@ -3566,14 +3613,16 @@ class ScenarioValuationEngine:
         as_of: str,
     ) -> None:
         quantities = {
-            "diluted_shares": bridge.diluted_shares,
             "lease_debt": bridge.lease_debt,
             "preferred_stock": bridge.preferred_stock,
             "minority_interest": bridge.minority_interest,
-            "pension_deficit": bridge.pension_deficit,
             "associates_jv_value": bridge.associates_jv_value,
             "non_operating_assets": bridge.non_operating_assets,
         }
+        if bridge.pension_deficit is not None:
+            quantities["pension_deficit"] = bridge.pension_deficit
+        if bridge.diluted_shares is not None:
+            quantities["diluted_shares"] = bridge.diluted_shares
         for field_name, quantity in quantities.items():
             fact_refs = tuple(
                 ref for ref in quantity.provenance_refs if ref.startswith("Fact:")
@@ -3727,10 +3776,10 @@ class ScenarioValuationEngine:
             self._relative(graph, plan, spec, terminal_horizon, base_request)
             for spec in plan.relative_methods
         )
-        if (
-            base_request.security.archetype
-            == CompanyArchetype.CYCLICAL_RESOURCE
-        ):
+        if base_request.security.archetype in {
+            CompanyArchetype.CYCLICAL_MANUFACTURING,
+            CompanyArchetype.CYCLICAL_RESOURCE,
+        }:
             methods.extend(
                 self._cyclical_methods(
                     graph,
@@ -3819,7 +3868,10 @@ class ScenarioValuationEngine:
         )
         if (
             bridge.balance_sheet_period != expected_period
-            or bridge.diluted_shares.as_of != self._as_of(graph)
+            or (
+                bridge.diluted_shares is not None
+                and bridge.diluted_shares.as_of != self._as_of(graph)
+            )
         ):
             raise _MethodBlocked(
                 "VALUATION_HORIZON_MISMATCH: equity bridge does not bind the method horizon and frozen as-of."
@@ -3894,6 +3946,7 @@ class ScenarioValuationEngine:
         if (
             base_request.security.archetype
             in {
+                CompanyArchetype.CYCLICAL_MANUFACTURING,
                 CompanyArchetype.CYCLICAL_RESOURCE,
                 CompanyArchetype.FINANCIAL_INSTITUTION,
                 CompanyArchetype.BIOPHARMA,
@@ -3903,7 +3956,11 @@ class ScenarioValuationEngine:
             raise _MethodBlocked(
                 (
                     "CYCLICAL_STABLE_GROWTH_DISABLED: ordinary FCFF/WACC DCF is disabled because a current commodity price or peak margin must not be capitalized in perpetuity; use finite-life NAV and mid-cycle methods."
-                    if archetype == CompanyArchetype.CYCLICAL_RESOURCE.value
+                    if archetype
+                    in {
+                        CompanyArchetype.CYCLICAL_MANUFACTURING.value,
+                        CompanyArchetype.CYCLICAL_RESOURCE.value,
+                    }
                     else (
                         "FINANCIAL_FCFF_DISABLED: deposits, policyholder liabilities, and regulatory capital are operating inputs rather than industrial financing debt; use P/B-ROE/COE, DDM, or residual income."
                         if archetype
@@ -4435,6 +4492,8 @@ class ScenarioValuationEngine:
         graph: ForecastGraph,
         base_request: ForecastRequest,
         spec: CyclicalResourceValuationSpec,
+        *,
+        require_resources: bool = False,
     ) -> None:
         periods = self._periods(graph)
         forecast_curve_keys = {
@@ -4451,18 +4510,19 @@ class ScenarioValuationEngine:
             (item.segment_id, item.period) for item in spec.commodity_curve
         }
         asset_ids = {item.segment_id for item in spec.assets}
-        if (
-            not forecast_curve_keys.issubset(curve_keys)
-            or curve_keys != schedule_curve_keys
-        ):
+        if not forecast_curve_keys.issubset(curve_keys):
             raise _MethodBlocked(
-                "COMMODITY_CURVE_COVERAGE_INVALID: curve must cover every forecast and finite resource-schedule segment-period exactly once."
+                "COMMODITY_CURVE_COVERAGE_INVALID: curve must cover every forecast segment-period."
             )
-        if asset_ids != set(base_request.security.segment_ids):
+        if require_resources and curve_keys != schedule_curve_keys:
+            raise _MethodBlocked(
+                "COMMODITY_CURVE_COVERAGE_INVALID: resource NAV curve must cover every finite resource-schedule segment-period exactly once."
+            )
+        if require_resources and asset_ids != set(base_request.security.segment_ids):
             raise _MethodBlocked(
                 "RESOURCE_ASSET_COVERAGE_INVALID: resource assets must cover every modeled segment exactly once."
             )
-        if any(
+        if require_resources and any(
             asset.schedule[0].period != periods[0]
             for asset in spec.assets
         ):
@@ -4484,7 +4544,7 @@ class ScenarioValuationEngine:
         if any(
             point.price_base.currency != reporting_currency
             for point in spec.commodity_curve
-        ) or any(
+        ) or (require_resources and any(
             quantity.currency != reporting_currency
             for asset in spec.assets
             for item in asset.schedule
@@ -4499,11 +4559,11 @@ class ScenarioValuationEngine:
                 item.maintenance_capex_base,
                 item.maintenance_capex_high,
             )
-        ):
+        )):
             raise _MethodBlocked(
                 "RESOURCE_REPORTING_CURRENCY_MISMATCH: every asset curve, cost, opex, and capex input must use the reporting currency unless an explicit FX conversion model is present."
             )
-        if (
+        if spec.historical_observations and (
             spec.peak_earnings_threshold.as_of != self._as_of(graph)
             or spec.peak_earnings_threshold.period != self._as_of(graph)
         ):
@@ -4520,6 +4580,9 @@ class ScenarioValuationEngine:
         facts = {
             fact.fact_id: fact for fact in base_request.data_snapshot.facts
         }
+        assumptions = {
+            item.assumption_id: item for item in base_request.assumptions
+        }
 
         def exact_fact(
             quantity: ForecastQuantity | FinancialQuantity,
@@ -4529,6 +4592,7 @@ class ScenarioValuationEngine:
             available_by: str,
             official_required: bool,
             metric_id: str,
+            assumption_allowed: bool = False,
         ) -> None:
             refs = (
                 quantity.lineage_refs
@@ -4537,12 +4601,38 @@ class ScenarioValuationEngine:
             )
             resolved = tuple(
                 facts.get(ref.removeprefix("Fact:")) for ref in refs
+                if ref.startswith("Fact:")
+            )
+            resolved_assumptions = tuple(
+                assumptions.get(ref.removeprefix("Assumption:"))
+                for ref in refs
+                if ref.startswith("Assumption:")
+            )
+            assumption_match = (
+                assumption_allowed
+                and bool(resolved_assumptions)
+                and len(resolved_assumptions) == len(refs)
+                and any(
+                    item is not None
+                    and item.value == quantity.normalized_value
+                    and item.scope == scope
+                    and item.segment_id == segment_id
+                    and item.metric_id == metric_id
+                    and item.period == quantity.period
+                    and item.unit == quantity.unit
+                    and item.currency == quantity.currency
+                    and date.fromisoformat(item.available_at)
+                    <= date.fromisoformat(available_by)
+                    for item in resolved_assumptions
+                )
             )
             if (
                 not refs
-                or any(not ref.startswith("Fact:") for ref in refs)
-                or any(fact is None for fact in resolved)
-                or not any(
+                or not assumption_match
+                and (
+                    len(resolved) != len(refs)
+                    or any(fact is None for fact in resolved)
+                    or not any(
                     fact.subject_id == base_request.security.security_id
                     and fact.scope == scope
                     and fact.segment_id == segment_id
@@ -4556,6 +4646,7 @@ class ScenarioValuationEngine:
                     and (not official_required or fact.official)
                     for fact in resolved
                     if fact is not None
+                )
                 )
             ):
                 raise _MethodBlocked(
@@ -4575,6 +4666,7 @@ class ScenarioValuationEngine:
                     available_by=spec.curve_as_of,
                     official_required=False,
                     metric_id="commodity_curve_price",
+                    assumption_allowed=True,
                 )
         for asset in spec.assets:
             exact_fact(
@@ -4610,7 +4702,11 @@ class ScenarioValuationEngine:
         base_request: ForecastRequest,
         spec: CyclicalResourceValuationSpec,
     ) -> MethodCalculationResult:
-        self._validate_cyclical_runtime(graph, base_request, spec)
+        self._validate_cyclical_runtime(
+            graph,
+            base_request,
+            spec,
+        )
         self._validate_method_bridge(
             graph,
             plan.terminal_value_bridge,
@@ -4626,66 +4722,61 @@ class ScenarioValuationEngine:
         case_ebitda = [Decimal("0"), Decimal("0"), Decimal("0")]
         lineage: tuple[str, ...] = ()
         for segment_id in base_request.security.segment_ids:
-            asset = assets[segment_id]
-            yields = (
-                asset.grade_yield_low.normalized_value,
-                asset.grade_yield_base.normalized_value,
-                asset.grade_yield_high.normalized_value,
-            )
-            production_totals = tuple(
-                sum(
-                    (
-                        getattr(item, field_name).normalized_value
-                        for item in asset.schedule
-                    ),
-                    Decimal("0"),
+            asset = assets.get(segment_id)
+            if asset is None:
+                yields = (Decimal("1"),) * 3
+                production_factors = (Decimal("1"),) * 3
+                cost_factors = (Decimal("1"),) * 3
+                asset_lineage: tuple[str, ...] = ()
+            else:
+                yields = (
+                    asset.grade_yield_low.normalized_value,
+                    asset.grade_yield_base.normalized_value,
+                    asset.grade_yield_high.normalized_value,
                 )
-                for field_name in (
-                    "production_low",
-                    "production_base",
-                    "production_high",
-                )
-            )
-            if production_totals[1] <= 0:
-                raise _MethodBlocked(
-                    "RESOURCE_PRODUCTION_RANGE_INVALID: base finite-life production must be positive."
-                )
-            production_factors = tuple(
-                value / production_totals[1] for value in production_totals
-            )
-            weighted_costs = tuple(
-                sum(
-                    (
-                        getattr(item, production_name).normalized_value
-                        * getattr(item, cost_name).normalized_value
-                        for item in asset.schedule
-                    ),
-                    Decimal("0"),
-                )
-                / production_total
-                for production_name, cost_name, production_total in (
-                    (
+                production_totals = tuple(
+                    sum(
+                        (
+                            getattr(item, field_name).normalized_value
+                            for item in asset.schedule
+                        ),
+                        Decimal("0"),
+                    )
+                    for field_name in (
                         "production_low",
-                        "unit_cost_low",
-                        production_totals[0],
-                    ),
-                    (
                         "production_base",
-                        "unit_cost_base",
-                        production_totals[1],
-                    ),
-                    (
                         "production_high",
-                        "unit_cost_high",
-                        production_totals[2],
-                    ),
+                    )
                 )
-            )
-            cost_factors = (
-                weighted_costs[2] / weighted_costs[1],
-                Decimal("1"),
-                weighted_costs[0] / weighted_costs[1],
-            )
+                if production_totals[1] <= 0:
+                    raise _MethodBlocked(
+                        "RESOURCE_PRODUCTION_RANGE_INVALID: base finite-life production must be positive."
+                    )
+                production_factors = tuple(
+                    value / production_totals[1] for value in production_totals
+                )
+                weighted_costs = tuple(
+                    sum(
+                        (
+                            getattr(item, production_name).normalized_value
+                            * getattr(item, cost_name).normalized_value
+                            for item in asset.schedule
+                        ),
+                        Decimal("0"),
+                    )
+                    / production_total
+                    for production_name, cost_name, production_total in (
+                        ("production_low", "unit_cost_low", production_totals[0]),
+                        ("production_base", "unit_cost_base", production_totals[1]),
+                        ("production_high", "unit_cost_high", production_totals[2]),
+                    )
+                )
+                cost_factors = (
+                    weighted_costs[2] / weighted_costs[1],
+                    Decimal("1"),
+                    weighted_costs[0] / weighted_costs[1],
+                )
+                asset_lineage = asset.lineage_refs
             for period in periods:
                 point = curve[(segment_id, period)]
                 prices = (
@@ -4703,7 +4794,7 @@ class ScenarioValuationEngine:
                     f"{segment_id}.operating_expense.{period}"
                 )
                 if (
-                    volume.unit != asset.reserve_quantity.unit
+                    (asset is not None and volume.unit != asset.reserve_quantity.unit)
                     or unit_cost.unit != point.price_base.unit
                     or unit_cost.currency != point.price_base.currency
                     or operating_expense.currency != point.price_base.currency
@@ -4732,7 +4823,7 @@ class ScenarioValuationEngine:
                 lineage = _merge_refs(
                     lineage,
                     point.lineage_refs,
-                    asset.lineage_refs,
+                    asset_lineage,
                     volume.lineage_refs,
                     scenario_asp.lineage_refs,
                     reference_asp.lineage_refs,
@@ -4800,7 +4891,16 @@ class ScenarioValuationEngine:
         base_request: ForecastRequest,
         spec: CyclicalResourceValuationSpec,
     ) -> MethodCalculationResult:
-        self._validate_cyclical_runtime(graph, base_request, spec)
+        if not spec.assets:
+            raise _MethodBlocked(
+                "RESOURCE_NAV_NOT_APPLICABLE: no reserve-backed resource asset was supplied for this cyclical manufacturer."
+            )
+        self._validate_cyclical_runtime(
+            graph,
+            base_request,
+            spec,
+            require_resources=True,
+        )
         self._validate_method_bridge(
             graph,
             plan.present_value_bridge,
@@ -5062,6 +5162,10 @@ class ScenarioValuationEngine:
         base_request: ForecastRequest,
         spec: CyclicalResourceValuationSpec,
     ) -> MethodCalculationResult:
+        if len(spec.historical_observations) < 3:
+            raise _MethodBlocked(
+                "CYCLICAL_HISTORY_INSUFFICIENT: at least three replayable PIT observations are required."
+            )
         self._validate_cyclical_runtime(graph, base_request, spec)
         self._validate_method_bridge(
             graph,
@@ -5276,102 +5380,135 @@ class ScenarioValuationEngine:
                 ),
             )
 
-        grade_values = tuple(
-            sum(
+        if not assets:
+            volume_total = sum(
                 (
-                    getattr(asset, field_name).normalized_value
-                    for asset in assets
+                    graph.quantity(
+                        f"{segment_id}.volume.{period}"
+                    ).normalized_value
+                    for segment_id in base_request.security.segment_ids
+                    for period in periods
                 ),
                 Decimal("0"),
             )
-            / Decimal(len(assets))
-            for field_name in (
-                "grade_yield_low",
-                "grade_yield_base",
-                "grade_yield_high",
-            )
-        )
-        production_values = tuple(
-            sum(
+            unit_cost_average = sum(
                 (
-                    getattr(item, field_name).normalized_value
-                    * scenario_factors[asset.segment_id]["volume"]
-                    for asset in assets
-                    for item in asset.schedule
+                    graph.quantity(
+                        f"{segment_id}.unit_cost.{period}"
+                    ).normalized_value
+                    for segment_id in base_request.security.segment_ids
+                    for period in periods
+                ),
+                Decimal("0"),
+            ) / Decimal(len(base_request.security.segment_ids) * len(periods))
+            opex_total = sum(
+                (
+                    graph.quantity(
+                        f"{segment_id}.operating_expense.{period}"
+                    ).normalized_value
+                    for segment_id in base_request.security.segment_ids
+                    for period in periods
                 ),
                 Decimal("0"),
             )
-            for field_name in (
-                "production_low",
-                "production_base",
-                "production_high",
-            )
-        )
-        cost_values = tuple(
-            sum(
+            capex_total = sum(
                 (
-                    getattr(item, production_name).normalized_value
-                    * scenario_factors[asset.segment_id]["volume"]
-                    * getattr(item, cost_name).normalized_value
-                    * scenario_factors[asset.segment_id]["unit_cost"]
-                    for asset in assets
-                    for item in asset.schedule
+                    graph.quantity(
+                        f"{segment_id}.capex.{period}"
+                    ).normalized_value
+                    for segment_id in base_request.security.segment_ids
+                    for period in periods
                 ),
                 Decimal("0"),
             )
-            / production
-            for production_name, cost_name, production in (
-                (
+            grade_values = (Decimal("1"),) * 3
+            production_values = (volume_total,) * 3
+            cost_values = (unit_cost_average,) * 3
+            opex_values = (opex_total,) * 3
+            capex_values = (capex_total,) * 3
+        else:
+            grade_values = tuple(
+                sum(
+                    (
+                        getattr(asset, field_name).normalized_value
+                        for asset in assets
+                    ),
+                    Decimal("0"),
+                )
+                / Decimal(len(assets))
+                for field_name in (
+                    "grade_yield_low",
+                    "grade_yield_base",
+                    "grade_yield_high",
+                )
+            )
+            production_values = tuple(
+                sum(
+                    (
+                        getattr(item, field_name).normalized_value
+                        * scenario_factors[asset.segment_id]["volume"]
+                        for asset in assets
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                for field_name in (
                     "production_low",
-                    "unit_cost_low",
-                    production_values[0],
-                ),
-                (
                     "production_base",
-                    "unit_cost_base",
-                    production_values[1],
-                ),
-                (
                     "production_high",
-                    "unit_cost_high",
-                    production_values[2],
-                ),
+                )
             )
-        )
-        opex_values = tuple(
-            sum(
-                (
-                    getattr(item, field_name).normalized_value
-                    * scenario_factors[asset.segment_id][
-                        "operating_expense"
-                    ]
-                    for asset in assets
-                    for item in asset.schedule
-                ),
-                Decimal("0"),
+            cost_values = tuple(
+                sum(
+                    (
+                        getattr(item, production_name).normalized_value
+                        * scenario_factors[asset.segment_id]["volume"]
+                        * getattr(item, cost_name).normalized_value
+                        * scenario_factors[asset.segment_id]["unit_cost"]
+                        for asset in assets
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                / production
+                for production_name, cost_name, production in (
+                    ("production_low", "unit_cost_low", production_values[0]),
+                    ("production_base", "unit_cost_base", production_values[1]),
+                    ("production_high", "unit_cost_high", production_values[2]),
+                )
             )
-            for field_name in (
-                "operating_expense_low",
-                "operating_expense_base",
-                "operating_expense_high",
+            opex_values = tuple(
+                sum(
+                    (
+                        getattr(item, field_name).normalized_value
+                        * scenario_factors[asset.segment_id]["operating_expense"]
+                        for asset in assets
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                for field_name in (
+                    "operating_expense_low",
+                    "operating_expense_base",
+                    "operating_expense_high",
+                )
             )
-        )
-        capex_values = tuple(
-            sum(
-                (
-                    getattr(item, field_name).normalized_value
-                    * scenario_factors[asset.segment_id]["capex"]
-                    for asset in assets
-                    for item in asset.schedule
-                ),
-                Decimal("0"),
+            capex_values = tuple(
+                sum(
+                    (
+                        getattr(item, field_name).normalized_value
+                        * scenario_factors[asset.segment_id]["capex"]
+                        for asset in assets
+                        for item in asset.schedule
+                    ),
+                    Decimal("0"),
+                )
+                for field_name in (
+                    "maintenance_capex_low",
+                    "maintenance_capex_base",
+                    "maintenance_capex_high",
+                )
             )
-            for field_name in (
-                "maintenance_capex_low",
-                "maintenance_capex_base",
-                "maintenance_capex_high",
-            )
-        )
         price = quantities(price_values, "currency/unit")
         volume = quantities(production_values, "units")
         grade = quantities(grade_values, "decimal")
@@ -6661,6 +6798,10 @@ class ScenarioValuationEngine:
             base_request,
             spec,
         )
+        if plan.present_value_bridge.diluted_shares is None:
+            raise _MethodBlocked(
+                "BIOPHARMA_DILUTION_BASIS_MISSING: pipeline valuation requires an opening diluted-share basis because committed financing can change the share count."
+            )
         scenario_case = {
             ScenarioRole.STRESS: "low",
             ScenarioRole.BASE: "base",
@@ -7445,7 +7586,7 @@ class ScenarioValuationEngine:
                 spec.output_currency
                 or spec.lease_debt.currency
             )
-            as_of = spec.diluted_shares.as_of
+            as_of = spec.lease_debt.as_of
         basis = FinancialQuantity(
             value=value,
             unit=currency,
@@ -7457,13 +7598,28 @@ class ScenarioValuationEngine:
             kind="money",
         )
         if value_basis == "enterprise_value":
+            if spec.pension_deficit is None:
+                return ValuationPoint(
+                    basis_value=basis,
+                    equity_value=None,
+                    per_share_value=None,
+                    bridge_trace=(
+                        {
+                            "operation": "equity_bridge_incomplete",
+                            "amount": None,
+                            "ref_ids": ["Missing:pension_deficit"],
+                        },
+                    ),
+                )
             adjustments: dict[str, FinancialQuantity | None] = {
                 "cash": cash,
                 "debt": debt,
                 "lease_debt": self._normalized_financial(spec.lease_debt),
                 "preferred_stock": self._normalized_financial(spec.preferred_stock),
                 "minority_interest": self._normalized_financial(spec.minority_interest),
-                "pension_deficit": self._normalized_financial(spec.pension_deficit),
+                "pension_deficit": self._normalized_financial(
+                    spec.pension_deficit
+                ),
                 "associates_jv_value": self._normalized_financial(spec.associates_jv_value),
                 "non_operating_assets": self._normalized_financial(spec.non_operating_assets),
             }
@@ -7478,8 +7634,12 @@ class ScenarioValuationEngine:
                 "associates_jv_value": None,
                 "non_operating_assets": None,
             }
-        diluted_shares = self._normalized_financial(spec.diluted_shares)
-        if share_multiplier != Decimal("1"):
+        diluted_shares = (
+            self._normalized_financial(spec.diluted_shares)
+            if spec.diluted_shares is not None
+            else None
+        )
+        if diluted_shares is not None and share_multiplier != Decimal("1"):
             diluted_shares = FinancialQuantity(
                 value=diluted_shares.normalized_value * share_multiplier,
                 unit=diluted_shares.unit,
@@ -7546,15 +7706,19 @@ class ScenarioValuationEngine:
             provenance_refs=refs,
             kind="money",
         )
-        per_share = FinancialQuantity(
-            value=result.per_share_value,
-            unit=f"{result.output_currency}/share",
-            scale=Decimal("1"),
-            currency=result.output_currency,
-            period=basis.period,
-            as_of=result.valuation_as_of,
-            provenance_refs=refs,
-            kind="per_share",
+        per_share = (
+            FinancialQuantity(
+                value=result.per_share_value,
+                unit=f"{result.output_currency}/share",
+                scale=Decimal("1"),
+                currency=result.output_currency,
+                period=basis.period,
+                as_of=result.valuation_as_of,
+                provenance_refs=refs,
+                kind="per_share",
+            )
+            if result.per_share_value is not None
+            else None
         )
         return ValuationPoint(
             basis_value=basis,
@@ -7633,6 +7797,15 @@ class ScenarioValuationEngine:
                 item.probability.normalized_value for item in probability_evidence
             )
             ranges = tuple(item.conditional_value_range for item in methods)
+            if any(
+                point.per_share_value is None
+                for item in ranges
+                for point in (item.low, item.base, item.high)
+            ):
+                diagnostics.append(
+                    f"{method_id}: not weighted because the per-share basis is unavailable."
+                )
+                continue
             per_share_dimensions = {
                 (
                     item.base.per_share_value.unit,

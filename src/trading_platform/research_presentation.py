@@ -48,9 +48,17 @@ def render_research_decision_html(
         )
         + "</ul></article>"
         for key, label in (
+            ("core_thesis", "核心故事"),
+            ("variant_view", "市场可能忽略什么"),
+            ("business_quality", "业务质量"),
+            ("earnings_outlook", "盈利推演"),
             ("what_happens", "未来会发生什么"),
             ("why_it_matters", "为什么重要"),
             ("transmission", "如何传导到经营与价值"),
+            ("valuation_view", "估值视角"),
+            ("valuation_guardrails", "估值边界与选择权"),
+            ("risk_reward_summary", "潜在改善与主要约束"),
+            ("key_uncertainties", "关键不确定性"),
             ("counterevidence", "反证与不确定性"),
             ("what_would_change_the_view", "什么会改变当前判断"),
         )
@@ -70,6 +78,11 @@ def render_research_decision_html(
         if isinstance(item, Mapping)
     )
     scenario_sections = ""
+    value_level_labels = {
+        "basis_value": "条件企业价值基准值",
+        "equity_value": "条件股权价值基准值",
+        "per_share_value": "条件每股基准值",
+    }
     for scenario in scenarios:
         if not isinstance(scenario, Mapping):
             continue
@@ -78,7 +91,8 @@ def render_research_decision_html(
             f"<td>{_esc(method.get('method_id'))}</td>"
             f"<td>{_esc(method.get('status'))}</td>"
             f"<td>{_esc(method.get('display_applicability'))}</td>"
-            f"<td>{_quantity((method.get('conditional_per_share_range') or {}).get('base'))}</td>"
+            f"<td>{_esc(value_level_labels.get(method.get('display_value_level'), '条件价值基准值'))}</td>"
+            f"<td>{_quantity((method.get('conditional_value_range') or {}).get('base'))}</td>"
             f"<td>{_esc(method.get('horizon'))}</td>"
             "</tr>"
             for method in scenario.get("methods", ())
@@ -88,7 +102,7 @@ def render_research_decision_html(
             f"<section><div class='section-head'><h2>{_esc(scenario.get('label'))}情景</h2>"
             f"<span>{_esc(scenario.get('terminal_period'))}</span></div>"
             "<div class='table-wrap'><table><thead><tr>"
-            "<th>方法</th><th>状态</th><th>适用性</th><th>条件每股基准值</th><th>期限</th>"
+            "<th>方法</th><th>状态</th><th>适用性</th><th>价值层级</th><th>条件基准值</th><th>期限</th>"
             f"</tr></thead><tbody>{method_rows}</tbody></table></div></section>"
         )
     artifacts = audit.get("artifact_records", ())

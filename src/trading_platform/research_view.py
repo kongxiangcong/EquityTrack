@@ -86,8 +86,21 @@ class ResearchDecisionViewBuilder:
         scenario_payloads = valuation.payload.get("scenarios")
         if not isinstance(scenario_payloads, list) or not scenario_payloads:
             raise ResearchViewError("RESEARCH_VIEW_SCENARIOS_MISSING")
+        permissions = research_run_payload.get("permissions")
+        if not isinstance(permissions, Mapping):
+            prior_audit = research_run_payload.get("audit")
+            permissions = (
+                prior_audit.get("permissions")
+                if isinstance(prior_audit, Mapping)
+                else None
+            )
+        allow_per_share = bool(
+            isinstance(permissions, Mapping)
+            and permissions.get("formal_per_share_valuation") is True
+        )
         scenarios_with_expectations = tuple(
-            self._scenario(item) for item in scenario_payloads
+            self._scenario(item, allow_per_share=allow_per_share)
+            for item in scenario_payloads
         )
         by_role = {item["role"]: item for item in scenarios_with_expectations}
         if set(by_role) != set(self.SCENARIO_LABELS):
@@ -141,6 +154,8 @@ class ResearchDecisionViewBuilder:
                     "source_id",
                     "available_at",
                     "official",
+                    "evidence_kind",
+                    "calculation_identity",
                 )
             }
             for fact in data_snapshot.payload.get("facts", ())
@@ -184,7 +199,16 @@ class ResearchDecisionViewBuilder:
             )
         )
         simulation_view = (
-            self._simulation(simulation.payload) if simulation is not None else None
+            self._simulation(simulation.payload)
+            if simulation is not None
+            and (
+                simulation.payload.get("valuation_model", {}).get(
+                    "output_level"
+                )
+                != "per_share_value"
+                or allow_per_share
+            )
+            else None
         )
         market_path_view = (
             self._market_path(market_path.payload)
@@ -245,6 +269,16 @@ class ResearchDecisionViewBuilder:
                     )
                 ),
                 "fact_evidence": fact_evidence,
+                "declared_missing": tuple(
+                    item
+                    for item in research_run_payload.get("declared_missing", ())
+                    if isinstance(item, Mapping)
+                ),
+                "permissions": (
+                    dict(permissions)
+                    if isinstance(permissions, Mapping)
+                    else {}
+                ),
                 "formula_identities": tuple(
                     sorted(
                         {
@@ -406,6 +440,7 @@ class ResearchDecisionViewBuilder:
             "rng_algorithm": budget.get("rng_algorithm"),
             "seed": budget.get("seed"),
             "sample_budget": budget.get("sample_budget"),
+            "output_level": model.get("output_level"),
             "completed_samples": value.get("completed_samples"),
             "batch_size": budget.get("batch_size"),
             "invalid_path_rate": value.get("invalid_path_rate"),
@@ -574,7 +609,12 @@ class ResearchDecisionViewBuilder:
             ),
         }
 
-    def _scenario(self, value: Mapping[str, Any]) -> dict[str, Any]:
+    def _scenario(
+        self,
+        value: Mapping[str, Any],
+        *,
+        allow_per_share: bool,
+    ) -> dict[str, Any]:
         role = str(value.get("role", ""))
         graph = value.get("forecast_graph")
         methods = value.get("methods")
@@ -598,7 +638,11 @@ class ResearchDecisionViewBuilder:
             if isinstance(node, Mapping)
             and node.get("node_id") == f"{metric_id}.{terminal_period}"
         )
-        method_views = tuple(self._method(method) for method in methods if isinstance(method, Mapping))
+        method_views = tuple(
+            self._method(method, allow_per_share=allow_per_share)
+            for method in methods
+            if isinstance(method, Mapping)
+        )
         implied = tuple(
             {
                 "scenario_role": role,
@@ -627,17 +671,43 @@ class ResearchDecisionViewBuilder:
             "market_implied_expectations": implied,
         }
 
-    def _method(self, value: Mapping[str, Any]) -> dict[str, Any]:
+    def _method(
+        self,
+        value: Mapping[str, Any],
+        *,
+        allow_per_share: bool,
+    ) -> dict[str, Any]:
         conditional = value.get("conditional_value_range")
         diagnostics = tuple(str(item) for item in value.get("diagnostics", ()))
         reconciliation = (
             {
-                point: self._valuation_point(conditional.get(point))
+                point: self._valuation_point(
+                    conditional.get(point),
+                    allow_per_share=allow_per_share,
+                )
                 for point in ("low", "base", "high")
             }
             if isinstance(conditional, Mapping)
             else None
         )
+        display_level = None
+        display_range = None
+        if isinstance(conditional, Mapping):
+            for level in (
+                *(("per_share_value",) if allow_per_share else ()),
+                "equity_value",
+                "basis_value",
+            ):
+                candidate = {
+                    point: self._quantity(
+                        conditional.get(point, {}).get(level)
+                    )
+                    for point in ("low", "base", "high")
+                }
+                if any(item is not None for item in candidate.values()):
+                    display_level = level
+                    display_range = candidate
+                    break
         return {
             "method_id": value.get("method_id"),
             "status": value.get("status"),
@@ -653,9 +723,11 @@ class ResearchDecisionViewBuilder:
                     point: self._quantity(conditional.get(point, {}).get("per_share_value"))
                     for point in ("low", "base", "high")
                 }
-                if isinstance(conditional, Mapping)
+                if isinstance(conditional, Mapping) and allow_per_share
                 else None
             ),
+            "display_value_level": display_level,
+            "conditional_value_range": display_range,
             "reconciliation": reconciliation,
             "diagnostics": diagnostics,
             "display_diagnostics": tuple(
@@ -663,13 +735,22 @@ class ResearchDecisionViewBuilder:
             ),
         }
 
-    def _valuation_point(self, value: object) -> dict[str, Any] | None:
+    def _valuation_point(
+        self,
+        value: object,
+        *,
+        allow_per_share: bool,
+    ) -> dict[str, Any] | None:
         if not isinstance(value, Mapping):
             return None
         return {
             "basis_value": self._quantity(value.get("basis_value")),
             "equity_value": self._quantity(value.get("equity_value")),
-            "per_share_value": self._quantity(value.get("per_share_value")),
+            "per_share_value": (
+                self._quantity(value.get("per_share_value"))
+                if allow_per_share
+                else None
+            ),
             "bridge_trace": tuple(
                 {
                     "operation": str(item.get("operation", "")),
@@ -704,20 +785,49 @@ class ResearchDecisionViewBuilder:
         )[:5]
         stress_ebit = self._financial_value(by_role["stress"], "company.ebit")
         stress_fcff = self._financial_value(by_role["stress"], "company.fcff")
+        typed_narrative: dict[str, list[str]] = {}
+        for item in forecast_payload.get("narrative_statements", ()):
+            if not isinstance(item, Mapping):
+                continue
+            category = str(item.get("category", ""))
+            text = str(item.get("text", ""))
+            if category and text:
+                typed_narrative.setdefault(category, []).append(text)
+
+        def one(category: str) -> str:
+            values = typed_narrative.get(category, ())
+            return values[0] if values else ""
+
         return {
+            "core_thesis": one("core_thesis"),
+            "variant_view": one("variant_view"),
+            "business_quality": one("business_quality"),
+            "earnings_outlook": one("earnings_outlook"),
+            "valuation_view": one("valuation_view"),
+            "risk_reward_summary": one("risk_reward_summary"),
+            "key_uncertainties": tuple(
+                typed_narrative.get("key_uncertainties", ())
+            ),
+            "valuation_guardrails": tuple(
+                typed_narrative.get("valuation_guardrails", ())
+            ),
             "what_happens": (
                 f"到 {period}，压力/基准/改善情景的营业收入分别为 "
                 f"{stress_revenue} / {base_revenue} / {improvement_revenue}；"
                 "差异来自业务 Driver 的条件变化。"
             ),
-            "why_it_matters": "收入、成本与产能路径会继续传导到 EBIT、FCFF 和多方法条件每股价值区间。",
+            "why_it_matters": "收入、成本与产能路径会继续传导到 EBIT、FCFF 和多方法企业价值及权益价值区间；只有股本口径完整时才进一步换算每股价值。",
             "transmission": event_labels + ("事件 → Driver → 财务预测 → 条件价值区间",),
             "counterevidence": (
                 f"若压力路径成立，{period} 营业收入仅为 {stress_revenue}，基准增长故事将被削弱。",
                 f"压力路径下 {period} EBIT 为 {stress_ebit}、FCFF 为 {stress_fcff}，利润与现金流未达到基准情景。",
                 "若压力情景的 Driver 与失效条件持续出现，应优先修订 Forecast，而不是维持原有叙事。",
             ),
-            "what_would_change_the_view": change_conditions or ("关键 Driver 超出当前复核阈值。",),
+            "what_would_change_the_view": (
+                tuple(typed_narrative.get("what_would_change_the_view", ()))
+                or change_conditions
+                or ("关键 Driver 超出当前复核阈值。",)
+            ),
         }
 
     @staticmethod

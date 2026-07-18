@@ -183,6 +183,7 @@ def request(
             output_unit="CNY/share",
             currency="CNY",
             period="2026-07-07",
+            output_level="per_share_value",
             minimum_output=Decimal(minimum_output),
             maximum_output=None,
         ),
@@ -196,6 +197,7 @@ def request(
             unit="CNY/share",
             currency="CNY",
             period="2026-07-07",
+            output_level="per_share_value",
         ),
         tail_threshold=Decimal(tail_threshold),
         budget=SimulationBudget(
@@ -377,7 +379,7 @@ def test_invalid_operating_paths_limit_simulation_and_keep_deterministic_fallbac
     assert result.quantiles is None
     assert result.invalid_path_rate == "1"
     assert result.deterministic_fallback["base"] == "-1.5"
-    assert "per_share_value>=0" in result.constraint_path
+    assert "model_output>=0" in result.constraint_path
 
 
 def test_parameters_and_pit_timestamps_fail_closed_without_named_override() -> None:

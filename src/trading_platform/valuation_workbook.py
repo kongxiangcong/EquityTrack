@@ -246,7 +246,13 @@ class ValuationWorkbookAdapter:
             not formulas
             or len(formulas) != summary_row_count
             or any(
-                not formula.startswith("'Reconciliation'!I")
+                not formula.startswith(
+                    (
+                        "'Reconciliation'!D",
+                        "'Reconciliation'!F",
+                        "'Reconciliation'!J",
+                    )
+                )
                 for formula in formulas
             )
         ):

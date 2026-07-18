@@ -429,18 +429,14 @@ def test_market_path_is_an_independent_simulation_child_and_workspace_view(
         "security_yihua",
         result.research_snapshot_id,
     )["research_views"][0]
-    assert view["valuation_simulation"]["quantiles"]["p50"]["unit"] == "CNY/share"
+    assert view["valuation_simulation"] is None
     assert view["market_price_paths"]["terminal_price_quantiles"]["p50"]["unit"] == (
         "CNY/share"
     )
     assert view["market_price_paths"]["horizon_return_quantiles"]["p50"]["unit"] == (
         "decimal"
     )
-    assert view["value_market_divergence"]["status"] == (
-        "not_comparable_horizon"
-    )
-    assert "期限不同" in view["value_market_divergence"]["explanation"]
-    assert "确定性价格结论或交易动作" in view["value_market_divergence"]["explanation"]
+    assert view["value_market_divergence"] is None
     assert view["market_price_paths"]["terminal_price_quantiles"]["p50"][
         "period"
     ] == "T+21 trading sessions"

@@ -267,7 +267,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=read_json(DFD_EXAMPLE / "source_manifest.json"),
                 context=read_json(DFD_EXAMPLE / "research_context.json"),
-                as_of_date="2026-07-03",
+                as_of_date="2026-07-17",
                 render_html=True,
             )
         )

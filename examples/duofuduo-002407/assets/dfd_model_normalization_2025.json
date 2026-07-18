@@ -1,0 +1,28 @@
+{
+  "schema_version": "ModelNormalization@1",
+  "subject_id": "002407.SZ",
+  "period": "2025FY",
+  "model_identity": "dfd-cyclical-manufacturing-model@1",
+  "basis_source_id": "SRC_CNINFO_2025AR",
+  "purpose": "Represent the consolidated revenue identity in a one-unit activity model without claiming product volume, capacity, or utilization facts.",
+  "derived_fields": [
+    {
+      "field_name": "consolidated_activity_volume",
+      "value": 1,
+      "unit": "units",
+      "classification": "model_normalization"
+    },
+    {
+      "field_name": "consolidated_activity_capacity",
+      "value": 1,
+      "unit": "units",
+      "classification": "model_normalization"
+    },
+    {
+      "field_name": "consolidated_activity_utilization",
+      "value": 1,
+      "unit": "decimal",
+      "classification": "model_normalization"
+    }
+  ]
+}

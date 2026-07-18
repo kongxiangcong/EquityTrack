@@ -9,7 +9,7 @@
     "accounting_standard": "China Accounting Standards for Business Enterprises",
     "latest_financial_period": "2026Q1"
   },
-  "as_of_date": "2026-07-03",
+  "as_of_date": "2026-07-17",
   "workflow": {
     "output_type": "EQUITY_REPORT",
     "valuation_depth": "L2",
@@ -179,16 +179,6 @@
           "note": "长期股权投资。"
         },
         {
-          "field_name": "pension_deficit",
-          "period": "2026Q1",
-          "value": 0,
-          "unit": "CNY",
-          "currency": "CNY",
-          "extraction_method": "manual reconciliation from official Q1 balance sheet and 2025 annual employee-benefit notes",
-          "confidence": "medium",
-          "note": "Q1 balance sheet places 3,207,900.00 under long-term payables, while long-term employee benefits payable is blank. 2025 annual employee-benefit notes disclose defined-contribution plan balances only and no defined-benefit obligation or pension deficit."
-        },
-        {
           "field_name": "non_operating_assets",
           "period": "2026Q1",
           "value": 328877223.13,
@@ -329,6 +319,215 @@
           "extraction_method": "direct PDF text extraction",
           "confidence": "high",
           "note": "少数股东权益。"
+        },
+        {
+          "field_name": "preferred_stock",
+          "period": "2025FY",
+          "value": 0,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "年度报告明确公司不存在优先股。"
+        },
+        {
+          "field_name": "associates_jv_value",
+          "period": "2025FY",
+          "value": 349869593.46,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "长期股权投资，单独桥接以避免与非经营资产重复计价。"
+        },
+        {
+          "field_name": "non_operating_assets",
+          "period": "2025FY",
+          "value": 186939457.32,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official financial-asset and investment-property lines",
+          "confidence": "medium",
+          "note": "交易性金融资产 778,855.00 + 其他权益工具投资 125,019,626.99 + 其他非流动金融资产 60,000,000.00 + 投资性房地产 1,140,975.33；不含现金和长期股权投资。"
+        },
+        {
+          "field_name": "operating_cost",
+          "period": "2025FY",
+          "value": 8117050427.96,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "合并利润表营业成本。"
+        },
+        {
+          "field_name": "operating_expense",
+          "period": "2025FY",
+          "value": 1074378619.96,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official selling, administrative and R&D expense lines",
+          "confidence": "high",
+          "note": "55,073,591.15 + 532,017,809.38 + 487,287,219.43；不含财务费用和税金。"
+        },
+        {
+          "field_name": "effective_tax_rate",
+          "period": "2025FY",
+          "value": 0.28714203966508835,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "calculated from official income tax expense divided by profit before tax",
+          "confidence": "high",
+          "note": "74,267,704.19 / 258,644,482.28。"
+        },
+        {
+          "field_name": "working_capital",
+          "period": "2025FY",
+          "value": 2479919210.4,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official current assets minus current liabilities",
+          "confidence": "high",
+          "note": "10,704,565,673.13 - 8,224,646,462.73。"
+        },
+        {
+          "field_name": "net_ppe",
+          "period": "2025FY",
+          "value": 8503083657.0,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "合并资产负债表固定资产。"
+        },
+        {
+          "field_name": "other_assets",
+          "period": "2025FY",
+          "value": 8901426186.22,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "balance-sheet identity from official total assets, cash, working capital and fixed assets",
+          "confidence": "high",
+          "note": "用于可复算的 Forecast 期初资产恒等式，不是独立估值加项。"
+        },
+        {
+          "field_name": "other_liabilities",
+          "period": "2025FY",
+          "value": 7214625530.61,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "calculated from official total liabilities minus modeled debt",
+          "confidence": "high",
+          "note": "13,923,501,204.11 - 6,708,875,673.50。"
+        },
+        {
+          "field_name": "total_equity",
+          "period": "2025FY",
+          "value": 10991530152.74,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high",
+          "note": "合并资产负债表所有者权益合计。"
+        },
+        {
+          "field_name": "new_energy_material_revenue",
+          "period": "2025FY",
+          "value": 3133509634.0,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "new_energy_material_cost",
+          "period": "2025FY",
+          "value": 2452402434.9,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "new_energy_material_sales_volume",
+          "period": "2025FY",
+          "value": 56179.23,
+          "unit": "tons",
+          "currency": "N/A",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "lipf6_capacity",
+          "period": "2025FY",
+          "value": 65000,
+          "unit": "tons/year",
+          "currency": "N/A",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "lipf6_utilization_low",
+          "period": "2025FY",
+          "value": 0.7,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "lower bound of directly disclosed 70%-80% range",
+          "confidence": "high"
+        },
+        {
+          "field_name": "lipf6_utilization_high",
+          "period": "2025FY",
+          "value": 0.8,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "upper bound of directly disclosed 70%-80% range",
+          "confidence": "high"
+        },
+        {
+          "field_name": "battery_revenue",
+          "period": "2025FY",
+          "value": 2849639910.66,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "battery_cost",
+          "period": "2025FY",
+          "value": 2491434530.34,
+          "unit": "CNY",
+          "currency": "CNY",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "battery_capacity",
+          "period": "2025FY",
+          "value": 20,
+          "unit": "GWh/year",
+          "currency": "N/A",
+          "extraction_method": "direct PDF text extraction",
+          "confidence": "high"
+        },
+        {
+          "field_name": "battery_utilization_low",
+          "period": "2025FY",
+          "value": 0.5,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "lower bound of directly disclosed 50%-60% range",
+          "confidence": "high"
+        },
+        {
+          "field_name": "battery_utilization_high",
+          "period": "2025FY",
+          "value": 0.6,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "upper bound of directly disclosed 50%-60% range",
+          "confidence": "high"
         }
       ],
       "cross_checks": []
@@ -509,6 +708,169 @@
         }
       ],
       "cross_checks": []
+    },
+    {
+      "source_id": "SRC_ANALYST_DFD_CYCLE_CURVE_20260717",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Local deterministic valuation model",
+      "title": "多氟多 2026E-2030E 合并收入周期情景曲线",
+      "official_or_secondary": "secondary",
+      "url_or_api": "local:analyst-cycle-curve",
+      "retrieved_at": "2026-07-17T10:35:00+08:00",
+      "available_at": "2026-07-17T00:00:00+08:00",
+      "query_params": {
+        "curve_identity": "dfd-consolidated-cycle-curve@2026-07-17",
+        "classification": "analyst_assumption"
+      },
+      "filing_period": "2026E-2030E",
+      "report_date": "2026-07-17",
+      "currency": "CNY",
+      "unit": "CNY/year",
+      "raw_file_path": "assets/dfd_cycle_curve_2026_2030.json",
+      "raw_file_sha256": "56278FBA51D9B549818A43B9173AD1DA3C6C45B9883430BF0E10B8A45361E81A",
+      "page_or_table": "stress/base/improvement conditional revenue paths",
+      "extracted_fields": [
+        {
+          "field_name": "analyst_cycle_revenue_curve",
+          "period": "2026E-2030E",
+          "value": 15,
+          "unit": "scenario_points",
+          "currency": "CNY",
+          "extraction_method": "analyst scenario construction anchored to official 2025 revenue and historical secondary calibration",
+          "confidence": "low",
+          "note": "Assumption set only; not an observed fact or consensus forecast."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_MODEL_NORMALIZATION_DFD_2025",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Local deterministic valuation model",
+      "title": "多氟多 2025 合并口径单活动单位归一化",
+      "official_or_secondary": "secondary",
+      "url_or_api": "local:model-normalization",
+      "retrieved_at": "2026-07-17T10:30:00+08:00",
+      "available_at": "2026-04-16T00:00:00+08:00",
+      "query_params": {
+        "basis_source_id": "SRC_CNINFO_2025AR",
+        "model_identity": "dfd-cyclical-manufacturing-model@1"
+      },
+      "filing_period": "2025FY",
+      "report_date": "2026-04-16",
+      "currency": "N/A",
+      "unit": "model_normalization",
+      "raw_file_path": "assets/dfd_model_normalization_2025.json",
+      "raw_file_sha256": "5183F2D4DB6F26C9C06E6E14FA6F4D7E4258537776E8548ADF6364D233F649E2",
+      "page_or_table": "deterministic one-unit consolidated identity",
+      "extracted_fields": [
+        {
+          "field_name": "consolidated_activity_volume",
+          "period": "2025FY",
+          "value": 1,
+          "unit": "units",
+          "currency": "N/A",
+          "extraction_method": "model normalization",
+          "confidence": "high",
+          "note": "Not a product-volume fact."
+        },
+        {
+          "field_name": "consolidated_activity_capacity",
+          "period": "2025FY",
+          "value": 1,
+          "unit": "units",
+          "currency": "N/A",
+          "extraction_method": "model normalization",
+          "confidence": "high",
+          "note": "Not a product-capacity fact."
+        },
+        {
+          "field_name": "consolidated_activity_utilization",
+          "period": "2025FY",
+          "value": 1,
+          "unit": "decimal",
+          "currency": "N/A",
+          "extraction_method": "model normalization",
+          "confidence": "high",
+          "note": "Identity implied by one-unit activity; not reported utilization."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_TUSHARE_DFD_INCOME_CALIBRATION_2018_2025",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Preconfigured Tushare-compatible non-official gateway",
+      "title": "多氟多 2018-2025 单季度收入增长与营业利润率校准样本",
+      "official_or_secondary": "secondary",
+      "url_or_api": "tushare-compatible:income",
+      "retrieved_at": "2026-07-17T10:20:00+08:00",
+      "available_at": "2026-04-16T00:00:00+08:00",
+      "query_params": {
+        "ts_code": "002407.SZ",
+        "start_date": "20180101",
+        "end_date": "20260703",
+        "report_type": "1",
+        "credential": "redacted"
+      },
+      "filing_period": "2018Q1-2025Q4",
+      "report_date": "2026-04-16",
+      "currency": "CNY",
+      "unit": "decimal",
+      "raw_file_path": "assets/dfd_income_selected_cumulative_2018_2025.json",
+      "raw_file_sha256": "11DDFC3DA05FEFF15879E3E40C6424D2EE9142A3C489160E1F587832777C1C98",
+      "page_or_table": "income API; cumulative statements deterministically converted to single-quarter observations",
+      "extracted_fields": [
+        {
+          "field_name": "historical_operating_calibration_sample",
+          "period": "2019Q1-2025Q4",
+          "value": 28,
+          "unit": "paired_observations",
+          "currency": "N/A",
+          "extraction_method": "prefer update_flag=1 then latest disclosure; derive single-quarter revenue and operating profit; compute YoY revenue growth and operating margin",
+          "confidence": "medium",
+          "note": "The selected cumulative rows are preserved separately from the deterministic single-quarter derivation ledger. Secondary calibration only; no official-authority upgrade."
+        }
+      ],
+      "cross_checks": []
+    },
+    {
+      "source_id": "SRC_MODEL_DFD_INCOME_DERIVATION_2019_2025",
+      "tier": "secondary",
+      "market": "a-share",
+      "publisher": "Local deterministic calibration transform",
+      "title": "多氟多 2019Q1-2025Q4 单季度校准逐期派生账本",
+      "official_or_secondary": "secondary",
+      "url_or_api": "local:income-calibration-derivation",
+      "retrieved_at": "2026-07-17T11:45:00+08:00",
+      "available_at": "2026-07-17T11:45:00+08:00",
+      "query_params": {
+        "raw_source_id": "SRC_TUSHARE_DFD_INCOME_CALIBRATION_2018_2025",
+        "transform_identity": "cumulative-to-single-quarter-yoy-margin@1"
+      },
+      "filing_period": "2019Q1-2025Q4",
+      "report_date": "2026-07-17",
+      "currency": "CNY",
+      "unit": "decimal",
+      "raw_file_path": "assets/dfd_income_calibration_2018_2025.json",
+      "raw_file_sha256": "A947F0B69FFA2E493D787634193F3FC0D77C5ED7689A2A798FC949E39B6FF4AA",
+      "page_or_table": "28 row-level derivations with cumulative-row references and formulas",
+      "extracted_fields": [
+        {
+          "field_name": "historical_operating_calibration_derivation",
+          "period": "2019Q1-2025Q4",
+          "value": 28,
+          "unit": "paired_observations",
+          "currency": "N/A",
+          "extraction_method": "row-level cumulative-to-quarter conversion, same-quarter YoY growth, and operating-margin calculation",
+          "confidence": "medium",
+          "note": "Every vector resolves to selected cumulative row IDs in the companion raw asset."
+        }
+      ],
+      "cross_checks": []
     }
   ],
   "missing_critical_data": [
@@ -525,6 +887,13 @@
       "reason": "Q1 balance sheet discloses non-current lease liabilities of 629,404,406.85 and one-year due non-current liabilities of 1,381,052,087.46, but does not separately identify the current lease-liability component. 2025YE current lease-liability reference of 75,428,257.68 cannot be carried forward without estimation.",
       "required_for": "net debt and enterprise value bridge",
       "next_source_required": "2026 interim/annual lease-liability note with current and non-current split"
+    },
+    {
+      "field_name": "pension_deficit",
+      "period": "2026Q1/2025FY",
+      "reason": "The standardized balance-sheet line is blank and the annual notes disclose defined-contribution balances, but absence of a disclosed defined-benefit deficit is not evidence that the economic adjustment is exactly zero.",
+      "required_for": "complete enterprise-to-equity bridge",
+      "next_source_required": "explicit company confirmation or an audited employee-benefit note that quantifies any defined-benefit obligation and plan assets"
     },
     {
       "field_name": "diluted_shares",

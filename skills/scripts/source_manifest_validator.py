@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Validate legacy equity research source manifests.
+"""Validate equity research source manifests.
 
-Compatibility only: this script is not the platform's formal runtime authority.
-New runs freeze source semantics in DataSnapshot/ResearchProjection artifacts;
-typed evidence and artifact factories own provenance, cutoff, hash, identity,
-and selected-method input invariants.
+The CLI result is an audit artifact. Formal publication authority is granted
+only when the platform executes this validator itself against a repo-contained
+manifest whose canonical content matches the frozen ResearchProjection.
 
 Usage:
     python source_manifest_validator.py --manifest path/to/source_manifest.json
@@ -28,7 +27,7 @@ except ImportError:  # pragma: no cover - depends on local environment
 
 
 VALID_TIERS = {"official", "terminal", "secondary", "news", "estimate", "missing"}
-VALIDATOR_AUTHORITY = "legacy_compatibility_only"
+VALIDATOR_AUTHORITY = "platform_source_manifest_gate@1"
 VALID_OFFICIAL_FLAGS = {"official", "secondary"}
 VALID_CROSS_CHECK_STATUSES = {"match", "mismatch", "not_checked"}
 CONFLICT_STATUSES = {"mismatch", "conflict", "unresolved", "unresolved_conflict"}
@@ -808,6 +807,15 @@ class SourceManifestValidator:
             "validator_version": 2,
             "authority": VALIDATOR_AUTHORITY,
             "manifest_version": self.manifest_version,
+            "manifest_content_hash": hashlib.sha256(
+                json.dumps(
+                    self.manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest(),
             "input_path": str(self.manifest_path),
             "passed": not errors,
             "source_manifest_status": manifest_status,

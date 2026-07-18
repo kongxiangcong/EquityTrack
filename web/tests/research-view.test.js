@@ -20,6 +20,12 @@ const view = {
     method_id: "fcff_dcf",
     value_basis: "enterprise_value",
     horizon: "valuation_as_of=2026-07-07",
+    display_value_level: "per_share_value",
+    conditional_value_range: {
+      low: {value: "10", unit: "CNY/share"},
+      base: {value: "12", unit: "CNY/share"},
+      high: {value: "14", unit: "CNY/share"},
+    },
     conditional_per_share_range: {
       low: {value: "10", unit: "CNY/share"},
       base: {value: "12", unit: "CNY/share"},
@@ -29,6 +35,7 @@ const view = {
   }]}],
   market_implied_expectations: [{scenario_label: "基准", base: {value: "0.03", unit: "decimal"}, explanation: "当前价格需要该假设成立。"}],
   valuation_simulation: {
+    output_level: "per_share_value",
     converged: true,
     quantiles: {p50: {value: "12.5", unit: "CNY/share"}},
     contributions: [{assumption_id: "连接器需求", share: "0.6"}],
@@ -115,8 +122,32 @@ test("method summaries keep horizon, value basis, and material diagnostics besid
   const method = view.scenarios[0].methods[0]
   assert.equal(
     methodSummary(method),
-    "fcff_dcf · 10 CNY/share / 12 CNY/share / 14 CNY/share · 企业价值口径，经股权桥转换为每股值 · 估值时点 2026-07-07 · 注意：终值占比较高。",
+    "fcff_dcf · 每股价值 10 CNY/share / 12 CNY/share / 14 CNY/share · 企业价值口径；股权桥完整时才继续转换 · 估值时点 2026-07-07 · 注意：终值占比较高。",
   )
+})
+
+test("enterprise-value simulations and methods are never labeled per-share", () => {
+  const enterpriseMethod = {
+    ...view.scenarios[0].methods[0],
+    display_value_level: "basis_value",
+    conditional_value_range: {
+      low: {value: "100", unit: "CNY"},
+      base: {value: "120", unit: "CNY"},
+      high: {value: "140", unit: "CNY"},
+    },
+  }
+  assert.match(methodSummary(enterpriseMethod), /企业价值 100 CNY \/ 120 CNY \/ 140 CNY/)
+  const report = renderSandboxReport({
+    ...view,
+    scenarios: [{...view.scenarios[0], methods: [enterpriseMethod]}],
+    valuation_simulation: {
+      ...view.valuation_simulation,
+      output_level: "basis_value",
+      quantiles: {p50: {value: "125", unit: "CNY"}},
+    },
+  })
+  assert.match(report, /校准后的企业价值分布/)
+  assert.doesNotMatch(report, /校准后的每股价值分布/)
 })
 
 test("decision values are readable while exact decimals remain in the audit model", () => {

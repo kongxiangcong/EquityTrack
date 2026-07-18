@@ -25,7 +25,137 @@ class CompanyArchetype(str, Enum):
     MULTI_SEGMENT_MANUFACTURING = "multi_segment_manufacturing"
     FINANCIAL_INSTITUTION = "financial_institution"
     BIOPHARMA = "biopharma"
+    CYCLICAL_MANUFACTURING = "cyclical_manufacturing"
     CYCLICAL_RESOURCE = "cyclical_resource"
+
+
+class NarrativeCategory(str, Enum):
+    CORE_THESIS = "core_thesis"
+    VARIANT_VIEW = "variant_view"
+    BUSINESS_QUALITY = "business_quality"
+    EARNINGS_OUTLOOK = "earnings_outlook"
+    VALUATION_VIEW = "valuation_view"
+    RISK_REWARD = "risk_reward_summary"
+    KEY_UNCERTAINTY = "key_uncertainties"
+    VALUATION_GUARDRAIL = "valuation_guardrails"
+    VIEW_CHANGE = "what_would_change_the_view"
+
+
+class NarrativeBasis(str, Enum):
+    FACT = "fact"
+    CALCULATION = "calculation"
+    ASSUMPTION = "assumption"
+    JUDGMENT = "judgment"
+    RISK = "risk"
+
+
+@dataclass(frozen=True)
+class ForecastNarrativeStatement:
+    statement_id: str
+    category: NarrativeCategory
+    basis: NarrativeBasis
+    text: str
+    evidence_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.:-]+", self.statement_id or "")
+            or not isinstance(self.category, NarrativeCategory)
+            or not isinstance(self.basis, NarrativeBasis)
+            or not self.text.strip()
+            or not self.evidence_refs
+            or len(self.evidence_refs) != len(set(self.evidence_refs))
+            or any(
+                not ref.startswith(("Fact:", "Assumption:"))
+                for ref in self.evidence_refs
+            )
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_NARRATIVE_INVALID",
+                "Narrative statements require typed category, basis, text, and unique fact/assumption lineage.",
+            )
+        if self.basis == NarrativeBasis.FACT and any(
+            not ref.startswith("Fact:") for ref in self.evidence_refs
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_NARRATIVE_FACT_LINEAGE_INVALID",
+                "Fact narrative statements may reference only resolved facts.",
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "statement_id": self.statement_id,
+            "category": self.category.value,
+            "basis": self.basis.value,
+            "text": self.text,
+            "evidence_refs": list(self.evidence_refs),
+        }
+
+
+@dataclass(frozen=True)
+class ForecastAssumption:
+    assumption_id: str
+    description: str
+    available_at: str
+    evidence_refs: tuple[str, ...]
+    value: Decimal | None = None
+    unit: str = ""
+    currency: str = ""
+    period: str = ""
+    scope: str = ""
+    segment_id: str = ""
+    metric_id: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            date.fromisoformat(self.available_at)
+        except ValueError:
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_AVAILABLE_AT_INVALID",
+                "Forecast assumption available_at must be an ISO date.",
+            ) from None
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.:@-]+", self.assumption_id or "")
+            or not self.description.strip()
+            or not self.evidence_refs
+            or len(self.evidence_refs) != len(set(self.evidence_refs))
+            or any(not ref.startswith("Fact:") for ref in self.evidence_refs)
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_INVALID",
+                "Forecast assumptions require identity, rationale, availability, and unique Fact lineage.",
+            )
+        dimension_values = (
+            self.unit,
+            self.currency,
+            self.period,
+            self.scope,
+            self.metric_id,
+        )
+        if self.value is None and any(dimension_values) or (
+            self.value is not None and not all(dimension_values)
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_DIMENSION_INVALID",
+                "A quantified assumption requires complete value dimensions; a qualitative assumption must omit them.",
+            )
+        if self.value is not None:
+            _require_decimal(self.value, "ForecastAssumption.value")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "assumption_id": self.assumption_id,
+            "description": self.description,
+            "available_at": self.available_at,
+            "evidence_refs": list(self.evidence_refs),
+            "value": _decimal_text(self.value) if self.value is not None else None,
+            "unit": self.unit,
+            "currency": self.currency,
+            "period": self.period,
+            "scope": self.scope,
+            "segment_id": self.segment_id,
+            "metric_id": self.metric_id,
+        }
 
 
 class ForecastNodeKind(str, Enum):
@@ -148,6 +278,10 @@ class SnapshotFact:
     source_id: str
     available_at: str
     official: bool
+    derivation_refs: tuple[str, ...] = ()
+    evidence_kind: str = "reported"
+    calculation_identity: str = ""
+    calculation_formula: str = ""
 
     def __post_init__(self) -> None:
         _require_decimal(self.value, "SnapshotFact.value")
@@ -183,6 +317,62 @@ class SnapshotFact:
                 "FORECAST_FACT_AVAILABLE_AT_INVALID",
                 "SnapshotFact.available_at must be an ISO date.",
             ) from exc
+        if self.evidence_kind not in {
+            "reported",
+            "source_extracted",
+            "calculated_from_official",
+            "model_derived",
+        } or (
+            self.evidence_kind in {"reported", "source_extracted"}
+            and (self.calculation_identity or self.calculation_formula or self.derivation_refs)
+        ) or (
+            self.evidence_kind in {"calculated_from_official", "model_derived"}
+            and (
+                not self.calculation_identity.strip()
+                or not self.calculation_formula.strip()
+            )
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_FACT_EVIDENCE_KIND_INVALID",
+                "Snapshot facts must distinguish reported, calculated-from-official, and model-derived evidence.",
+            )
+        if self.evidence_kind in {"calculated_from_official", "model_derived"} and (
+            not self.derivation_refs
+            or f"Fact:{self.fact_id}" in self.derivation_refs
+            or (
+            len(self.derivation_refs) != len(set(self.derivation_refs))
+            or not any(ref.startswith("Fact:") for ref in self.derivation_refs)
+            or any(
+                not ref.startswith(("Fact:", "Assumption:"))
+                for ref in self.derivation_refs
+            )
+            )
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_DERIVED_FACT_LINEAGE_INVALID",
+                "Non-official derived facts require unique official-fact and optional assumption lineage.",
+            )
+        if self.evidence_kind == "calculated_from_official" and (
+            not self.official
+            or any(not ref.startswith("Fact:") for ref in self.derivation_refs)
+            or self.calculation_formula
+            not in {
+                "identity(operand)",
+                "sum(operands)",
+                "difference(operands)",
+                "product(operands)",
+                "ratio(operands)",
+            }
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_DERIVED_FACT_KIND_INVALID",
+                "Calculated-from-official facts require only official Fact operands.",
+            )
+        if self.evidence_kind == "model_derived" and self.official:
+            raise ForecastInvariantError(
+                "FORECAST_DERIVED_FACT_KIND_INVALID",
+                "Model-derived facts cannot be marked as official evidence.",
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -199,6 +389,10 @@ class SnapshotFact:
             "source_id": self.source_id,
             "available_at": self.available_at,
             "official": self.official,
+            "derivation_refs": list(self.derivation_refs),
+            "evidence_kind": self.evidence_kind,
+            "calculation_identity": self.calculation_identity,
+            "calculation_formula": self.calculation_formula,
         }
 
 
@@ -435,6 +629,55 @@ class DataSnapshot:
                 "FORECAST_FACT_DUPLICATE",
                 "SnapshotFact ids must be unique.",
             )
+        for fact in self.facts:
+            if fact.evidence_kind in {"reported", "source_extracted"}:
+                continue
+            operands = tuple(
+                fact_by_id.get(ref.removeprefix("Fact:"))
+                for ref in fact.derivation_refs
+                if ref.startswith("Fact:")
+            )
+            if not operands or any(
+                operand is None
+                or not operand.official
+                or operand.evidence_kind == "model_derived"
+                or date.fromisoformat(operand.available_at)
+                > date.fromisoformat(self.as_of)
+                for operand in operands
+            ):
+                raise ForecastInvariantError(
+                    "FORECAST_DERIVED_FACT_BASIS_INVALID",
+                    f"Derived Forecast Fact {fact.fact_id} requires resolved, PIT-legal official operands.",
+                )
+            if fact.evidence_kind == "calculated_from_official":
+                operand_values = tuple(
+                    operand.value for operand in operands if operand is not None
+                )
+                if fact.calculation_formula == "identity(operand)":
+                    calculated = operand_values[0] if len(operand_values) == 1 else None
+                elif fact.calculation_formula == "sum(operands)":
+                    calculated = sum(operand_values, Decimal("0"))
+                elif fact.calculation_formula == "difference(operands)":
+                    calculated = (
+                        operand_values[0] - sum(operand_values[1:], Decimal("0"))
+                        if operand_values
+                        else None
+                    )
+                elif fact.calculation_formula == "product(operands)":
+                    calculated = Decimal("1")
+                    for operand_value in operand_values:
+                        calculated *= operand_value
+                else:
+                    calculated = (
+                        operand_values[0] / operand_values[1]
+                        if len(operand_values) == 2 and operand_values[1] != 0
+                        else None
+                    )
+                if calculated != fact.value:
+                    raise ForecastInvariantError(
+                        "FORECAST_CALCULATED_FACT_MISMATCH",
+                        f"Calculated Forecast Fact {fact.fact_id} does not recompute from its operands.",
+                    )
         ids = [baseline.segment_id for baseline in self.segment_baselines]
         if len(ids) != len(set(ids)):
             raise ForecastInvariantError(
@@ -543,11 +786,24 @@ class DataSnapshot:
                         "FORECAST_FACT_BINDING_MISMATCH",
                         f"Snapshot Fact {fact_id} does not match its quantity and PIT dimensions.",
                     )
-                if not fact.official:
-                    raise ForecastInvariantError(
-                        "FORECAST_OFFICIAL_FACT_REQUIRED",
-                        f"Critical Forecast Fact {fact_id} requires an official source.",
+                if fact.evidence_kind in {"calculated_from_official", "model_derived"}:
+                    basis_facts = tuple(
+                        fact_by_id.get(ref.removeprefix("Fact:"))
+                        for ref in fact.derivation_refs
+                        if ref.startswith("Fact:")
                     )
+                    if not basis_facts or any(
+                        basis is None
+                        or not basis.official
+                        or basis.evidence_kind == "model_derived"
+                        or date.fromisoformat(basis.available_at)
+                        > date.fromisoformat(self.as_of)
+                        for basis in basis_facts
+                    ):
+                        raise ForecastInvariantError(
+                            "FORECAST_DERIVED_FACT_BASIS_INVALID",
+                            f"Derived Forecast Fact {fact_id} requires resolved, PIT-legal official operands.",
+                        )
         expected = self.canonical_content_hash(
             self.security_id,
             self.as_of,
@@ -742,6 +998,8 @@ class ForecastRequest:
     forecast_periods: tuple[str, ...]
     assumption_overrides: tuple[SegmentForecastOverride, ...] = ()
     review_date: str = ""
+    assumptions: tuple[ForecastAssumption, ...] = ()
+    narrative_statements: tuple[ForecastNarrativeStatement, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.assumption_overrides, tuple) or any(
@@ -751,6 +1009,78 @@ class ForecastRequest:
             raise ForecastInvariantError(
                 "FORECAST_OVERRIDE_TYPE_INVALID",
                 "assumption_overrides must be a tuple of SegmentForecastOverride.",
+            )
+        if (
+            not isinstance(self.assumptions, tuple)
+            or any(
+                not isinstance(item, ForecastAssumption)
+                for item in self.assumptions
+            )
+            or len({item.assumption_id for item in self.assumptions})
+            != len(self.assumptions)
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_INVALID",
+                "ForecastGraph assumptions must remain unique and typed.",
+            )
+        if (
+            not isinstance(self.narrative_statements, tuple)
+            or any(
+                not isinstance(item, ForecastNarrativeStatement)
+                for item in self.narrative_statements
+            )
+            or len({item.statement_id for item in self.narrative_statements})
+            != len(self.narrative_statements)
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_NARRATIVE_INVALID",
+                "narrative_statements must be a unique tuple of typed statements.",
+            )
+        fact_refs = {
+            f"Fact:{item.fact_id}" for item in self.data_snapshot.facts
+        }
+        if (
+            not isinstance(self.assumptions, tuple)
+            or any(
+                not isinstance(item, ForecastAssumption)
+                for item in self.assumptions
+            )
+            or len({item.assumption_id for item in self.assumptions})
+            != len(self.assumptions)
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_INVALID",
+                "assumptions must be a unique tuple of typed assumptions.",
+            )
+        assumption_refs = {
+            f"Assumption:{item.assumption_id}" for item in self.assumptions
+        }
+        if any(
+            date.fromisoformat(item.available_at) > date.fromisoformat(self.as_of)
+            or any(ref not in fact_refs for ref in item.evidence_refs)
+            for item in self.assumptions
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_ASSUMPTION_EVIDENCE_INVALID",
+                "Assumptions must be available by as-of and resolve to frozen facts.",
+            )
+        if any(
+            ref not in fact_refs | assumption_refs
+            for item in self.narrative_statements
+            for ref in item.evidence_refs
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_NARRATIVE_EVIDENCE_MISSING",
+                "Narrative fact lineage must resolve inside the frozen DataSnapshot.",
+            )
+        if any(
+            ref.startswith("Assumption:") and ref not in assumption_refs
+            for fact in self.data_snapshot.facts
+            for ref in fact.derivation_refs
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_DERIVED_FACT_ASSUMPTION_MISSING",
+                "Derived facts must resolve assumption lineage in the Forecast request.",
             )
         if self.as_of != self.data_snapshot.as_of:
             raise ForecastInvariantError(
@@ -818,6 +1148,10 @@ class ForecastRequest:
                 item.to_dict() for item in self.assumption_overrides
             ],
             "review_date": self.review_date,
+            "assumptions": [item.to_dict() for item in self.assumptions],
+            "narrative_statements": [
+                item.to_dict() for item in self.narrative_statements
+            ],
         }
 
 
@@ -998,12 +1332,25 @@ class ForecastGraph:
     routing_explanation: str
     nodes: tuple[ForecastNode, ...]
     edges: tuple[ForecastEdge, ...]
+    assumptions: tuple[ForecastAssumption, ...] = ()
+    narrative_statements: tuple[ForecastNarrativeStatement, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.nodes, tuple) or not isinstance(self.edges, tuple):
             raise ForecastInvariantError(
                 "FORECAST_GRAPH_TYPE_INVALID",
                 "ForecastGraph nodes and edges must be tuples.",
+            )
+        if (
+            not isinstance(self.narrative_statements, tuple)
+            or any(
+                not isinstance(item, ForecastNarrativeStatement)
+                for item in self.narrative_statements
+            )
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_NARRATIVE_INVALID",
+                "ForecastGraph narrative statements must remain typed.",
             )
         node_by_id = {node.node_id: node for node in self.nodes}
         if len(node_by_id) != len(self.nodes):
@@ -1387,6 +1734,10 @@ class ForecastGraph:
             "data_snapshot_id": self.data_snapshot_id,
             "template_id": self.template_id,
             "routing_explanation": self.routing_explanation,
+            "assumptions": [item.to_dict() for item in self.assumptions],
+            "narrative_statements": [
+                item.to_dict() for item in self.narrative_statements
+            ],
             "nodes": [
                 {
                     "node_id": node.node_id,
@@ -1467,6 +1818,7 @@ class ForecastEngine:
         if request.security.archetype not in {
             CompanyArchetype.GENERAL_MANUFACTURING,
             CompanyArchetype.MULTI_SEGMENT_MANUFACTURING,
+            CompanyArchetype.CYCLICAL_MANUFACTURING,
             CompanyArchetype.CYCLICAL_RESOURCE,
         }:
             raise ForecastInvariantError(
@@ -1548,8 +1900,17 @@ class ForecastEngine:
                 edges.extend(company_edges)
 
         template_id = (
-            "cyclical_resource_driver_graph@1"
-            if request.security.archetype == CompanyArchetype.CYCLICAL_RESOURCE
+            (
+                "cyclical_manufacturing_driver_graph@1"
+                if request.security.archetype
+                == CompanyArchetype.CYCLICAL_MANUFACTURING
+                else "cyclical_resource_driver_graph@1"
+            )
+            if request.security.archetype
+            in {
+                CompanyArchetype.CYCLICAL_MANUFACTURING,
+                CompanyArchetype.CYCLICAL_RESOURCE,
+            }
             else self.TEMPLATE_ID
         )
         identity_payload = {
@@ -1568,6 +1929,10 @@ class ForecastEngine:
                 for node in nodes
             ],
             "edges": [edge.to_dict() for edge in edges],
+            "assumptions": [item.to_dict() for item in request.assumptions],
+            "narrative_statements": [
+                item.to_dict() for item in request.narrative_statements
+            ],
         }
         identity = hashlib.sha256(
             json.dumps(
@@ -1580,11 +1945,15 @@ class ForecastEngine:
         archetype_label = request.security.archetype.value.replace(
             "multi_segment", "multi-segment"
         ).replace("_", " ")
-        if request.security.archetype == CompanyArchetype.CYCLICAL_RESOURCE:
+        if request.security.archetype in {
+            CompanyArchetype.CYCLICAL_MANUFACTURING,
+            CompanyArchetype.CYCLICAL_RESOURCE,
+        }:
             routing_explanation = (
-                "Routed cyclical/resource economics through explicit volume, utilization, "
+                "Routed cyclical economics through explicit volume, utilization, "
                 "price, unit-cost, tax, and maintenance-capex drivers. Ordinary stable-growth "
-                "valuation is disabled downstream; finite-life NAV and mid-cycle methods are required."
+                "valuation is disabled downstream; mid-cycle methods are required, while finite-life NAV "
+                "applies only when reserve-backed resource assets are present."
             )
         else:
             routing_explanation = (
@@ -1599,6 +1968,8 @@ class ForecastEngine:
             routing_explanation=routing_explanation,
             nodes=tuple(nodes),
             edges=tuple(edges),
+            assumptions=request.assumptions,
+            narrative_statements=request.narrative_statements,
         )
 
     def _build_financial_institution_shell(
@@ -1691,6 +2062,8 @@ class ForecastEngine:
             ),
             nodes=nodes,
             edges=edges,
+            assumptions=request.assumptions,
+            narrative_statements=request.narrative_statements,
         )
 
     def _build_biopharma_shell(
@@ -1796,6 +2169,8 @@ class ForecastEngine:
             ),
             nodes=nodes,
             edges=edges,
+            assumptions=request.assumptions,
+            narrative_statements=request.narrative_statements,
         )
 
     @staticmethod

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 import math
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 
 DistributionFamily = Literal[
@@ -15,6 +15,11 @@ DistributionFamily = Literal[
     "bernoulli",
 ]
 SimulationStatus = Literal["ready", "partial"]
+ValuationOutputLevel = Literal[
+    "basis_value",
+    "equity_value",
+    "per_share_value",
+]
 
 
 class SimulationInvariantError(ValueError):
@@ -145,6 +150,9 @@ class DependencyCalibrationEvidence:
     retrieved_at: str
     basis: str
     evidence_refs: tuple[str, ...]
+    derivation_kind: str = "embedded_observation_vectors"
+    raw_observation_content_hash: str | None = None
+    derivation_ledger_content_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,7 +169,173 @@ class DependencyCalibrationEvidence:
             "retrieved_at": self.retrieved_at,
             "basis": self.basis,
             "evidence_refs": list(self.evidence_refs),
+            "derivation_kind": self.derivation_kind,
+            "raw_observation_content_hash": self.raw_observation_content_hash,
+            "derivation_ledger_content_hash": self.derivation_ledger_content_hash,
         }
+
+
+def validated_income_calibration_vectors(
+    raw_asset: Mapping[str, Any],
+    derivation_ledger: Mapping[str, Any],
+) -> tuple[tuple[Decimal, Decimal], ...]:
+    """Recompute quarterly growth/margin vectors and verify the stored audit ledger."""
+
+    rows = raw_asset.get("rows")
+    derivations = derivation_ledger.get("quarterly_derivations")
+    stored_vectors = derivation_ledger.get("observation_vectors")
+    if not isinstance(rows, list) or not isinstance(derivations, list) or not isinstance(
+        stored_vectors, list
+    ):
+        raise SimulationInvariantError(
+            "SIMULATION_CALIBRATION_LEDGER_INVALID",
+            "Calibration assets require raw rows, quarterly derivations, and observation vectors.",
+        )
+    row_by_id = {
+        str(row.get("row_id")): row for row in rows if isinstance(row, Mapping)
+    }
+    if len(row_by_id) != len(rows):
+        raise SimulationInvariantError(
+            "SIMULATION_CALIBRATION_LEDGER_INVALID",
+            "Raw calibration row identities must be unique and non-empty.",
+        )
+
+    def single_quarter(refs: object, field: str) -> Decimal:
+        if not isinstance(refs, list) or len(refs) not in {1, 2}:
+            raise SimulationInvariantError(
+                "SIMULATION_CALIBRATION_LEDGER_INVALID",
+                "Each quarterly derivation requires one Q1 row or two cumulative rows.",
+            )
+        selected = [row_by_id.get(str(ref)) for ref in refs]
+        if any(row is None for row in selected):
+            raise SimulationInvariantError(
+                "SIMULATION_CALIBRATION_ROW_REFERENCE_MISSING",
+                "Quarterly derivation references an unknown raw row.",
+            )
+        values = [Decimal(str(row[field])) for row in selected if row is not None]
+        return values[0] if len(values) == 1 else values[0] - values[1]
+
+    recomputed: list[tuple[Decimal, Decimal]] = []
+    expected_periods: list[str] = []
+    for derivation in derivations:
+        if isinstance(derivation, Mapping):
+            expected_periods.append(str(derivation.get("period", "")))
+    if (
+        not expected_periods
+        or expected_periods[0] != str(derivation_ledger.get("window_start"))
+        or expected_periods[-1] != str(derivation_ledger.get("window_end"))
+    ):
+        raise SimulationInvariantError(
+            "SIMULATION_CALIBRATION_PERIOD_SEQUENCE_INVALID",
+            "Calibration periods must match the declared window.",
+        )
+
+    def quarter_end(year: int, quarter: int) -> str:
+        return f"{year}{quarter * 3:02d}{31 if quarter in {1, 4} else 30:02d}"
+
+    with localcontext() as context:
+        context.prec = 80
+        for index, derivation in enumerate(derivations):
+            if not isinstance(derivation, Mapping):
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_LEDGER_INVALID",
+                    "Quarterly derivation rows must be objects.",
+                )
+            period = str(derivation.get("period", ""))
+            try:
+                year = int(period[:4])
+                quarter = int(period[-1])
+            except (TypeError, ValueError) as exc:
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_PERIOD_SEQUENCE_INVALID",
+                    "Quarterly calibration period must use YYYYQn.",
+                ) from exc
+            if period != f"{year}Q{quarter}" or quarter not in {1, 2, 3, 4}:
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_PERIOD_SEQUENCE_INVALID",
+                    "Quarterly calibration period must use YYYYQ1 through YYYYQ4.",
+                )
+            ordinal = year * 4 + quarter - 1
+            if index and ordinal != (
+                int(expected_periods[index - 1][:4]) * 4
+                + int(expected_periods[index - 1][-1])
+            ):
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_PERIOD_SEQUENCE_INVALID",
+                    "Quarterly calibration periods must be consecutive.",
+                )
+            current_refs = derivation.get("current_row_refs")
+            prior_refs = derivation.get("prior_row_refs")
+            expected_current_ends = [quarter_end(year, quarter)]
+            expected_prior_ends = [quarter_end(year - 1, quarter)]
+            if quarter > 1:
+                expected_current_ends.append(quarter_end(year, quarter - 1))
+                expected_prior_ends.append(quarter_end(year - 1, quarter - 1))
+            actual_current_ends = [
+                str(row_by_id[str(ref)].get("end_date"))
+                for ref in current_refs
+            ] if isinstance(current_refs, list) and all(str(ref) in row_by_id for ref in current_refs) else []
+            actual_prior_ends = [
+                str(row_by_id[str(ref)].get("end_date"))
+                for ref in prior_refs
+            ] if isinstance(prior_refs, list) and all(str(ref) in row_by_id for ref in prior_refs) else []
+            if (
+                actual_current_ends != expected_current_ends
+                or actual_prior_ends != expected_prior_ends
+            ):
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_PERIOD_BINDING_INVALID",
+                    f"Calibration period {period} is not bound to matching current and prior-year quarters.",
+                )
+            revenue = single_quarter(
+                current_refs, "total_revenue_cumulative"
+            )
+            operate_profit = single_quarter(
+                current_refs, "operate_profit_cumulative"
+            )
+            prior_revenue = single_quarter(
+                prior_refs, "total_revenue_cumulative"
+            )
+            if revenue == 0 or prior_revenue == 0:
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_ZERO_DENOMINATOR",
+                    "Calibration growth and margin denominators must be non-zero.",
+                )
+            growth = revenue / prior_revenue - Decimal("1")
+            margin = operate_profit / revenue
+            expected_fields = {
+                "revenue": revenue,
+                "operate_profit": operate_profit,
+                "prior_year_revenue": prior_revenue,
+                "revenue_growth_yoy": growth,
+                "operating_margin": margin,
+            }
+            if any(
+                abs(Decimal(str(derivation.get(name))) - expected)
+                > (Decimal("1e-48") if name in {"revenue_growth_yoy", "operating_margin"} else Decimal("0"))
+                for name, expected in expected_fields.items()
+            ):
+                raise SimulationInvariantError(
+                    "SIMULATION_CALIBRATION_DERIVATION_MISMATCH",
+                    f"Stored quarterly derivation {index} does not recompute from raw rows.",
+                )
+            recomputed.append((growth, margin))
+    stored = tuple(
+        tuple(Decimal(str(value)) for value in vector)
+        for vector in stored_vectors
+        if isinstance(vector, list)
+    )
+    result = tuple(recomputed)
+    if len(stored) != len(stored_vectors) or len(stored) != len(result) or any(
+        len(saved) != 2
+        or any(abs(saved_value - derived_value) > Decimal("1e-48") for saved_value, derived_value in zip(saved, derived, strict=True))
+        for saved, derived in zip(stored, result, strict=True)
+    ):
+        raise SimulationInvariantError(
+            "SIMULATION_CALIBRATION_VECTOR_MISMATCH",
+            "Stored observation vectors do not match the recomputed derivation ledger.",
+        )
+    return stored  # validated, precision-stable values used by the simulation engine
 
 
 @dataclass(frozen=True)
@@ -186,6 +360,7 @@ class AffineSimulationModel:
     output_unit: str
     currency: str
     period: str
+    output_level: ValuationOutputLevel
     minimum_output: Decimal | None
     maximum_output: Decimal | None
 
@@ -197,6 +372,7 @@ class AffineSimulationModel:
             "output_unit": self.output_unit,
             "currency": self.currency,
             "period": self.period,
+            "output_level": self.output_level,
             "minimum_output": (
                 _text(self.minimum_output)
                 if self.minimum_output is not None
@@ -221,6 +397,7 @@ class DeterministicValueFallback:
     unit: str
     currency: str
     period: str
+    output_level: ValuationOutputLevel
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -233,6 +410,7 @@ class DeterministicValueFallback:
             "unit": self.unit,
             "currency": self.currency,
             "period": self.period,
+            "output_level": self.output_level,
         }
 
 
@@ -519,11 +697,11 @@ class ValuationSimulationEngine:
         constraint_path = ["all_assumptions_within_hard_bounds"]
         if request.valuation_model.minimum_output is not None:
             constraint_path.append(
-                f"per_share_value>={_text(request.valuation_model.minimum_output)}"
+                f"model_output>={_text(request.valuation_model.minimum_output)}"
             )
         if request.valuation_model.maximum_output is not None:
             constraint_path.append(
-                f"per_share_value<={_text(request.valuation_model.maximum_output)}"
+                f"model_output<={_text(request.valuation_model.maximum_output)}"
             )
         return ValuationSimulationResult(
             simulation_id=request.simulation_id,
@@ -602,6 +780,20 @@ class ValuationSimulationEngine:
             or fallback.unit != model.output_unit
             or fallback.currency != model.currency
             or fallback.period != model.period
+            or fallback.output_level != model.output_level
+            or model.output_level not in {
+                "basis_value",
+                "equity_value",
+                "per_share_value",
+            }
+            or (
+                model.output_level == "per_share_value"
+                and model.output_unit != f"{model.currency}/share"
+            )
+            or (
+                model.output_level in {"basis_value", "equity_value"}
+                and model.output_unit != model.currency
+            )
             or not model.formula_id.strip()
             or not model.output_unit.strip()
             or not model.currency.strip()
@@ -610,7 +802,7 @@ class ValuationSimulationEngine:
             raise SimulationInvariantError(
                 "SIMULATION_DETERMINISTIC_FALLBACK_INVALID",
                 "The deterministic fallback must identify an ordered parent "
-                "valuation range with matching dimensions.",
+                "valuation range with matching level and dimensions.",
             )
         assumption_ids = tuple(item.assumption_id for item in request.assumptions)
         if (

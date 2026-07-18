@@ -257,8 +257,8 @@ class EquityBridgeResult:
     balance_sheet_period: str
     valuation_as_of: str
     equity_value: Decimal
-    diluted_shares: Decimal
-    per_share_value: Decimal
+    diluted_shares: Decimal | None
+    per_share_value: Decimal | None
     trace: tuple[dict[str, Any], ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -269,8 +269,16 @@ class EquityBridgeResult:
             "balance_sheet_period": self.balance_sheet_period,
             "valuation_as_of": self.valuation_as_of,
             "equity_value": _decimal_text(self.equity_value),
-            "diluted_shares": _decimal_text(self.diluted_shares),
-            "per_share_value": _decimal_text(self.per_share_value),
+            "diluted_shares": (
+                _decimal_text(self.diluted_shares)
+                if self.diluted_shares is not None
+                else None
+            ),
+            "per_share_value": (
+                _decimal_text(self.per_share_value)
+                if self.per_share_value is not None
+                else None
+            ),
             "trace": [dict(step) for step in self.trace],
         }
 
@@ -292,7 +300,7 @@ class EquityBridge:
     pension_deficit: FinancialQuantity | None
     associates_jv_value: FinancialQuantity | None
     non_operating_assets: FinancialQuantity | None
-    diluted_shares: FinancialQuantity
+    diluted_shares: FinancialQuantity | None
     fx_rate: FinancialQuantity | None = None
 
     def _fail(self, code: str, message: str) -> None:
@@ -386,11 +394,30 @@ class EquityBridge:
                     f"{field_name} as-of does not match valuation_as_of.",
                 )
 
-        if self.diluted_shares.kind != "shares":
-            self._fail(
-                "FINANCIAL_SHARE_BASIS_INVALID",
-                "diluted_shares must be a shares quantity.",
-            )
+        if self.diluted_shares is not None:
+            if self.diluted_shares.kind != "shares":
+                self._fail(
+                    "FINANCIAL_SHARE_BASIS_INVALID",
+                    "diluted_shares must be a shares quantity.",
+                )
+            if self.diluted_shares.period != self.balance_sheet_period:
+                self._fail(
+                    "FINANCIAL_PERIOD_MISMATCH",
+                    "diluted_shares period does not match the balance-sheet period.",
+                )
+            if self.diluted_shares.as_of != self.valuation_as_of:
+                self._fail(
+                    "FINANCIAL_AS_OF_MISMATCH",
+                    "diluted_shares as-of does not match valuation_as_of.",
+                )
+            shares = self.diluted_shares.normalized_value
+            if shares <= 0:
+                self._fail(
+                    "FINANCIAL_SHARES_NON_POSITIVE",
+                    "Diluted shares must be positive.",
+                )
+        else:
+            shares = None
         if (
             self.value_basis == "equity_value"
             and self.basis_value.period != self.balance_sheet_period
@@ -398,22 +425,6 @@ class EquityBridge:
             self._fail(
                 "FINANCIAL_PERIOD_MISMATCH",
                 "Equity value and diluted shares must share one period basis.",
-            )
-        if self.diluted_shares.period != self.balance_sheet_period:
-            self._fail(
-                "FINANCIAL_PERIOD_MISMATCH",
-                "diluted_shares period does not match the balance-sheet period.",
-            )
-        if self.diluted_shares.as_of != self.valuation_as_of:
-            self._fail(
-                "FINANCIAL_AS_OF_MISMATCH",
-                "diluted_shares as-of does not match valuation_as_of.",
-            )
-        shares = self.diluted_shares.normalized_value
-        if shares <= 0:
-            self._fail(
-                "FINANCIAL_SHARES_NON_POSITIVE",
-                "Diluted shares must be positive.",
             )
 
         if self.output_currency == self.basis_value.currency and self.fx_rate is not None:
@@ -479,13 +490,14 @@ class EquityBridge:
                 }
             )
 
-        trace.append(
-            {
-                "operation": "divide_diluted_shares",
-                "amount": _decimal_text(shares),
-                "ref_ids": list(self.diluted_shares.provenance_refs),
-            }
-        )
+        if shares is not None and self.diluted_shares is not None:
+            trace.append(
+                {
+                    "operation": "divide_diluted_shares",
+                    "amount": _decimal_text(shares),
+                    "ref_ids": list(self.diluted_shares.provenance_refs),
+                }
+            )
         return EquityBridgeResult(
             value_basis=self.value_basis,
             input_currency=self.basis_value.currency,
@@ -494,6 +506,6 @@ class EquityBridge:
             valuation_as_of=self.valuation_as_of,
             equity_value=equity_value,
             diluted_shares=shares,
-            per_share_value=equity_value / shares,
+            per_share_value=(equity_value / shares if shares is not None else None),
             trace=tuple(trace),
         )
