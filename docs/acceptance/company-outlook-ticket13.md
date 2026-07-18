@@ -111,10 +111,23 @@ separate `published_at`, `available_at` and `retrieved_at` timestamps.
   initial visible hierarchy; scenario Drivers, financials and low/base/high
   ranges are present; secondary narrative and the complete audit ledger are
   progressively disclosed.
-- Final real-browser report verification passed at 390 x 844 and at a 240 px
-  equivalent double-zoom layout without document-level horizontal overflow.
-  All native summary controls were focusable; disclosure interactions retained
-  focus and exposed the expected typed audit groups.
+- Current-HEAD real-browser verification was refreshed on 2026-07-19 from the
+  public six-artifact journey, not from the older four-artifact report or the
+  enterprise-value label fixture. The report was reproduced with
+  `test_duofuduo_real_sources_degrade_without_inventing_dilution` and materialized
+  from the persisted `ResearchDecisionHtml@1` object at
+  `.scratch/ticket13-browser-current/report-current.html` (SHA-256
+  `F70DE0D390F4650C7F4AC38FFFCEDF3BFFCA171ED08FF66BCF854BC328C73554`).
+- The embedded `ResearchDecisionView@2` has `as_of=2026-07-18` and exactly six
+  audit records: `DataSnapshot`, `Forecast`, `Valuation`, `Simulation`,
+  `MarketDataSnapshot` and `MarketPathSimulation`; each record exposes a
+  64-character content hash. Valuation and market-path simulations are ready,
+  divergence is `not_comparable`, and formal per-share permission is false.
+- At the 390 x 844 mobile override, the current report had no document-level
+  horizontal overflow. It exposed nine native summary controls; clicking the
+  first retained focus on `SUMMARY`, opened exactly one disclosure and revealed
+  the expected secondary narrative. The default desktop viewport also had no
+  horizontal overflow. No forbidden action/rating term was present.
 - Final-code full Python suite: 374 passed, 3 skipped in 589.95 seconds.
 - Web decision-view suite: 18 passed, including an enterprise-value labeling
   regression.
