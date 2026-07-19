@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
-import subprocess
 import sqlite3
+import threading
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
@@ -25,6 +26,7 @@ from trading_platform.account_history import AccountHistoryImportService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.provider_config import load_sync_job
 from trading_platform.provider_qualification import ProviderQualificationService, register_job_security
+from trading_platform.verification import ProjectVerification, SubprocessVerificationExecutor
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -100,10 +102,36 @@ def main(argv: list[str] | None = None) -> int:
         elif operation in {"sync", "daily"}:
             result = _daily(args.data_root, args.job_file) if operation == "daily" else _sync(args.data_root, args.job_file)
         elif operation == "test":
-            python = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=args.repo_root, check=False, capture_output=True, text=True)
-            node = subprocess.run(["npm.cmd", "test"], cwd=args.repo_root / "web", check=False, capture_output=True, text=True)
-            if python.returncode or node.returncode: raise OperationError("TEST_FAILED", "One or more test suites failed.")
-            result = {"status": "passed", "python_exit_code": python.returncode, "npm_exit_code": node.returncode}
+            npm_executable = shutil.which("npm.cmd") or shutil.which("npm")
+            if npm_executable is None:
+                raise OperationError("NPM_UNAVAILABLE", "The Web test runtime is unavailable.")
+            event_lock = threading.Lock()
+
+            def emit(event: dict[str, object]) -> None:
+                with event_lock:
+                    print(
+                        json.dumps(event, ensure_ascii=True, sort_keys=True),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+            report = ProjectVerification(
+                executor=SubprocessVerificationExecutor(),
+                npm_executable=npm_executable,
+            ).run(args.repo_root, emit)
+            result = report.to_dict()
+            envelope: dict[str, object] = {
+                "ok": report.status == "passed",
+                "operation": operation,
+                "result": result,
+            }
+            if report.status != "passed":
+                envelope["error"] = {
+                    "code": "TEST_FAILED",
+                    "message": "One or more named test suites failed.",
+                }
+            print(json.dumps(envelope, ensure_ascii=True, sort_keys=True))
+            return 0 if report.status == "passed" else 2
         elif operation == "inventory": result = PlatformOperations.dependency_inventory(args.repo_root)
         elif operation == "provider-qualify":
             result = ProviderQualificationService(args.data_root).run(args.job_file)
@@ -130,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 with RuntimePresence(args.data_root, "server").acquire():
                     url = server.start(); print(json.dumps({"ok": True, "operation": operation, "result": {"status": "serving", "url": url}}, sort_keys=True), flush=True)
-                    import threading; threading.Event().wait()
+                    threading.Event().wait()
             except KeyboardInterrupt: pass
             finally: server.close(); root.close()
             return 0

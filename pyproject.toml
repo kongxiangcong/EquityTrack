@@ -23,3 +23,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not release_acceptance'"
+markers = [
+  "release_acceptance: explicit release gate that executes the acceptance suite ledger",
+]

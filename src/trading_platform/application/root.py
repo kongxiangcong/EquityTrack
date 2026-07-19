@@ -7,7 +7,7 @@ from trading_platform.data.repository import DataRepository
 from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import DataProvider, FixtureRights
 from trading_platform.persistence import PlatformStore
-from trading_platform.research import ResearchAdapter, SnapshotToResearchRequestAssembler
+from trading_platform.research import SnapshotToResearchRequestAssembler
 from trading_platform.workflows import ResearchWorkflowService
 from trading_platform.workflows.repository import WorkflowRepository
 from equity_research import ResearchEngine
@@ -47,7 +47,7 @@ class ProductionCompositionRoot:
             workflow_repository = WorkflowRepository(self._store.connection, self._store.objects, self._store.writer_lock)
             workflow_repository.fault_injector = workflow_fault_injector
             self._workflow_repository = workflow_repository
-            research_workflow = ResearchWorkflowService(workflow_repository, ResearchAdapter(research_engine or ResearchEngine()), SnapshotToResearchRequestAssembler(), root, workflow_fault_injector)
+            research_workflow = ResearchWorkflowService(workflow_repository, research_engine or ResearchEngine(), SnapshotToResearchRequestAssembler(), root, workflow_fault_injector)
             self._research_workflow = research_workflow
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))

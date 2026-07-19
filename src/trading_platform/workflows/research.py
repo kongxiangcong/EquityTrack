@@ -11,7 +11,7 @@ from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Protocol
 
 from trading_platform.application.contracts import CancelWorkflowCommand, ResumeWorkflowCommand
 from trading_platform.domain.workflow import (
@@ -26,7 +26,7 @@ from trading_platform.domain.workflow import (
     WorkflowHistory,
 )
 from trading_platform.identity.code import build_code_identity
-from trading_platform.research import ProjectionError, ResearchAdapter, SnapshotToResearchRequestAssembler
+from trading_platform.research import ProjectionError, SnapshotToResearchRequestAssembler
 from trading_platform.research_presentation import (
     render_research_decision_html,
 )
@@ -37,6 +37,8 @@ from .repository import WorkflowRepository
 from equity_research import (
     ForecastReviewEngine,
     ForecastReviewRequest,
+    ResearchRequest,
+    ResearchRun,
     validated_income_calibration_vectors,
     validate_source_manifest_runtime,
 )
@@ -55,10 +57,14 @@ def research_engine_identity(repo_root: Path) -> str:
     return json.dumps({name: structured[name] for name in ("source_hash", "lock_hash", "migration_hash", "workflow_hash", "package_build_hash", "model_policy_hash", "dependency_license_hash", "determinism_basis", "random_seed")}, sort_keys=True, separators=(",", ":"))
 
 
+class ResearchRunner(Protocol):
+    def run(self, request: ResearchRequest) -> ResearchRun: ...
+
+
 class ResearchWorkflowService:
-    def __init__(self, repository: WorkflowRepository, adapter: ResearchAdapter, assembler: SnapshotToResearchRequestAssembler, repo_root: Path, fault_injector: Callable[[str], None] | None = None) -> None:
+    def __init__(self, repository: WorkflowRepository, engine: ResearchRunner, assembler: SnapshotToResearchRequestAssembler, repo_root: Path, fault_injector: Callable[[str], None] | None = None) -> None:
         self.repository = repository
-        self.adapter = adapter
+        self.engine = engine
         self.assembler = assembler
         self.repo_root = repo_root.resolve()
         self.engine_identity = research_engine_identity(self.repo_root)
@@ -210,7 +216,7 @@ class ResearchWorkflowService:
               try:
                 assembled = self.assembler.assemble(request.projection)
                 with self._periodic_heartbeat(run_id, owner, lease_seconds):
-                    produced = self.adapter.run(assembled)
+                    produced = self.engine.run(assembled)
                 self.repository.heartbeat(run_id, owner, lease_seconds)
                 if not produced.html:
                     raise ValueError("RESEARCH_HTML_MISSING")

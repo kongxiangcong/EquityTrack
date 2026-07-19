@@ -1,6 +1,67 @@
-# Agent Rules for Equity Research Skill
+# Project-wide Agent Rules
 
-These rules apply to work under `skills/` and especially the `equity-researcher` skill.
+These rules apply to the entire repository. The financial and research rules
+apply especially to `skills/` and the `equity-researcher` skill.
+
+## Long-Term Project Baseline
+
+- `docs/prompts/trading_platform_codex_prompt_optimized.md` is the authoritative long-term task statement, scope boundary, and acceptance baseline for this repository.
+- Read that file before auditing, designing, planning, or implementing the personal research and trading-strategy platform. Do not weaken, bypass, or silently reinterpret its non-negotiable constraints.
+- Current platform work must evolve from the existing equity-research MVP through verified reuse seams; do not copy it into a parallel system or replace it with a big-bang rewrite.
+- Wayfinder work for the first vertical-slice Spec is tracked under `.scratch/trading-platform-first-vertical-slice-spec/`. Wayfinder sessions plan and resolve decisions one ticket at a time; they do not authorize large-scale platform implementation.
+- Product and UI work is design-driven. Follow the authoritative prompt's product/interaction principles: show only decision-relevant information by default, use progressive disclosure for process/provenance data, help the user understand changes and uncertainty without replacing their judgment, and apply an Apple-inspired clarity/deference/depth/consistency style without weakening accessibility or the financial-output boundary.
+
+## Repository-wide Engineering Policy
+
+### One Canonical Path
+
+- `AGENTS.md` is the sole project-wide Agent rule source. Do not create a second `agent.md`, nested replacement rule set, or conflicting operating guide.
+- `skills/SKILL.md` is the sole active Codex/Skill control-plane entry. Platform maintenance uses `python -m trading_platform.cli`; formal application use crosses task-level interfaces owned by `ApplicationFacade` and the typed domain contracts behind it.
+- Every capability has one canonical command path, one application path, one persistence path, and one presentation model. Do not add a second CLI, script wrapper, renderer, schema, database access route, or direct-call shortcut for the same behavior.
+- README, Skill instructions, examples, tests, and runtime code must name the same current path. Update or delete stale instructions in the same change that replaces an interface.
+
+### No Glue, Bypass, or Compatibility Code
+
+- **Glue code is forbidden.** Do not add a module, class, function, facade method, or script whose only job is to forward arguments, rename fields, repackage a result, mirror another interface, or choose between old and new implementations.
+- A module must own meaningful behavior behind a small interface: domain invariants, a transaction, lifecycle/state transitions, security or rights enforcement, deterministic calculation, retry/failure semantics, or protocol translation at a real external seam. The composition root may wire implementations, but it must not become a second business workflow.
+- **Bypass code is forbidden.** CLI, Web, scripts, tests, and adapters must not reach around the canonical application interface to call persistence internals, issue ad-hoc SQL, write artifact files directly, invoke private research functions, or duplicate domain decisions.
+- **Compatibility code is forbidden.** Do not add or extend shims, aliases, dual-read/dual-write paths, legacy key readers, fallback-to-old-implementation branches, version-dispatch wrappers, deprecated entrypoints, or parallel old/new renderers.
+- Replace callers and persisted data with an explicit, versioned, one-way migration, then delete the superseded runtime path in the same unit of work. A migration is not permission to retain runtime compatibility. If safe deletion is blocked by missing facts or data, stop and record the blocker; do not hide it behind a compatibility layer.
+- Domain degradation and provider fallback are allowed only when they are part of the current typed contract, evidence-constrained, fail-closed, and tested. They must never route execution into a retired implementation.
+
+### Deep Modules and Dependency Direction
+
+- Prefer deep modules: a small task-level interface that hides substantial implementation and gives callers leverage. Apply the deletion test: if deleting a module merely moves the same calls into its callers, the module is shallow and should not exist.
+- Do not expand `ApplicationFacade` by mirroring every method of each backing object. Add a facade operation only when it represents a complete user/application task and owns cross-module policy or orchestration.
+- Introduce a port only at a real seam with justified production and test adapters. Do not create speculative interfaces or one-implementation abstractions.
+- Keep dependencies pointing inward: CLI/Web/provider/filesystem adapters -> application interface -> domain modules. Persistence implements domain/application ports. Domain code must not import CLI, Web, concrete persistence, or presentation code.
+- Treat `equity_research` deterministic calculations as implementation behind the platform research task, not as an alternative application entry. Narrow its public exports to contracts genuinely required across the seam.
+- Split a large module only along cohesive domain behavior and move the behavior completely. Do not reduce file size by creating pass-through files. When new work touches an oversized multi-responsibility module, first identify and extract a complete deep module, then delete the old implementation and obsolete tests.
+- Tests and callers cross the same public interface. After replacement tests cover the new interface, delete tests that exercise retired private seams; do not layer old and new test suites indefinitely.
+
+### Mandatory Cleanup with Every Change
+
+- Before closing a change, search for superseded symbols, imports, commands, feature flags, schemas, fixtures, tests, documentation, generated assets, and dependencies. Remove all artifacts made obsolete by the change.
+- Delete dead, redundant, commented-out, temporary, deprecated, legacy, and unreachable code immediately. Git history is the archive; active source and docs must describe only the current system.
+- Do not leave `TODO`, `FIXME`, compatibility notes, or dormant branches as substitutes for cleanup. A genuinely blocked follow-up must be a named tracker item with evidence and an explicit removal target.
+- Remove unused dependencies from manifests and lock files, and regenerate third-party notices when dependency scope changes.
+- Existing violations are technical debt, not precedent. New work must not copy their shape or increase their surface area.
+
+### Verification and Diagnostics
+
+- Stable commands emit a typed result and typed failure code. Preserve redacted, actionable diagnostics at the failing substep; do not catch broad exceptions and replace all causes with an undifferentiated failure.
+- Long-running test and maintenance commands must expose substep progress, suite identity, duration, and the underlying redacted failure evidence while retaining one stable top-level command.
+- Verification is proportional to risk and runs through public interfaces. Report the exact commands, passing and failing counts, timeouts, skipped external checks, and any generated artifacts; never convert an incomplete or timed-out run into a pass.
+- Before completion, inspect `git status` and the final diff. Preserve unrelated user changes and never treat a dirty working tree as permission to rewrite or clean files outside the task.
+
+### Current Cleanup Priorities
+
+- Retire the legacy V3/file CLI route, legacy renderers, free-form context adapter, and duplicate `equity-research`/`scripts/research.py` entrypoints after migrating their remaining callers and fixtures. Do not add features to these paths.
+- Replace the broad, mostly delegating `ApplicationFacade` surface with cohesive task-level operations, and reduce the oversized `equity_research` package export surface.
+- Decompose the multi-responsibility forecast, scenario valuation, workflow repository, workflow execution, and research-view modules into deep domain modules without adding forwarding layers.
+- Separate persistence mechanics from artifact/domain validation currently concentrated in the workflow repository; keep transactions in persistence and invariants in the owning domain module.
+- Rewrite usage documentation around the formal platform route. Historical behavior belongs in Git history or migration fixtures, not the default README or active Skill flow.
+- Delete each cleanup-priority bullet when the underlying violation is actually removed; do not leave stale debt descriptions in this file.
 
 ## Financial Output Boundary
 
@@ -13,6 +74,9 @@ These rules apply to work under `skills/` and especially the `equity-researcher`
 ## Data Rules
 
 - Do not fabricate financial data, market data, consensus data, citations, or source metadata.
+- Use Tushare as the primary structured market-data provider for security master, trading calendar, OHLCV, adjustment factors, market cross-sections, and financial/disclosure indexes when configured and entitled. Use Kimi Datasource only as an auxiliary Codex/Skill control-plane source for discovery, candidate data, and cross-checking; do not make Kimi a business-runtime dependency.
+- Before using Tushare, read `.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/tushare_usage.md` and the companion `tushare-vs-kimi-datasource.md`, then use the preconfigured connection details exactly as documented there. Do not require the user to provide or configure a separate token for that gateway. Do not echo embedded connection parameters in user-facing output or logs.
+- The Tushare-compatible gateway documented there is not an official `tushare.pro` host. Preserve the actual gateway identity in provenance and do not treat it as an official disclosure authority.
 - Official disclosure is primary for critical financial data:
   - A-share: CNINFO, SSE/SZSE/BSE announcements, company IR reports.
   - HK: HKEXnews and company IR reports.

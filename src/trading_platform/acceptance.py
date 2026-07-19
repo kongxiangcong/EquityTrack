@@ -54,10 +54,10 @@ class AcceptanceEvidenceService:
         "adapter_financial_invariants": "passed",
     }
     SUITE_PLAN = {
-        "domain": ("tests/platform/test_runtime_skeleton.py", "tests/platform/test_market_evaluation.py", "tests/platform/test_trade_plans.py"),
+        "domain": ("tests/platform/test_market_evaluation.py", "tests/platform/test_trade_plans.py"),
         "provider_contract": ("tests/platform/test_data_sync_pit.py",),
         "persistence_migration": ("tests/platform/test_watchlist_persistence.py", "tests/platform/test_chart_annotations.py"),
-        "application_journey": ("tests/platform/test_research_workflow.py", "tests/platform/test_secure_workspace.py", "tests/platform/test_trade_plans.py", "tests/platform/test_market_evaluation.py"),
+        "application_journey": ("tests/platform/test_research_workflow.py", "tests/platform/test_secure_workspace.py"),
         "fault_recovery": ("tests/platform/test_workflow_recovery.py",),
         "windows_maintenance": ("tests/platform/test_operations_backup_restore.py",),
         "architecture_security": ("tests/platform/test_runtime_skeleton.py",),
@@ -65,14 +65,15 @@ class AcceptanceEvidenceService:
     }
     CRITERION_SUITE = {
         **{number: "provider_contract" for number in (4, 5, 6, 7, 17, 18, 19, 20, 21, 39, 41, 42, 51)},
-        **{number: "application_journey" for number in (3, 8, 11, 12, 13, 14, 15, 22, 23, 25, 26, 34, 40, 43, 49)},
+        **{number: "application_journey" for number in (3, 8, 15, 34, 40, 49)},
+        **{number: "domain" for number in (11, 12, 13, 14, 22, 23, 25, 26, 43)},
         **{number: "persistence_migration" for number in (2, 9, 10, 24)},
         **{number: "fault_recovery" for number in (27, 28)},
         **{number: "browser" for number in (31, 32, 37, 45)},
         **{number: "windows_maintenance" for number in (1, 16, 29, 30, 33, 46, 47, 48)},
         **{number: "architecture_security" for number in (35, 36, 38, 44, 50)},
     }
-    CRITERION_SUITE.update({1: "persistence_migration", 29: "persistence_migration", 34: "domain", 39: "application_journey"})
+    CRITERION_SUITE.update({1: "persistence_migration", 29: "persistence_migration", 34: "architecture_security", 39: "application_journey"})
     CRITERION_ASSERTION_PATTERN = {
         1: "test_bootstrap_watchlist_replay_restart_and_doctor", 2: "test_bootstrap_watchlist_replay_restart_and_doctor",
         3: "test_public_workflow_creates_canonical_research_artifacts", 4: "test_startup_and_unauthorized_http_provider_make_no_network_call",
@@ -101,9 +102,9 @@ class AcceptanceEvidenceService:
     }
     MULTI_ASSERTION_REQUIREMENTS = {
         15: (("application_journey", "test_connected_golden_journey_records_one_graph_on_one_data_root"),),
-        34: (("domain", "test_recorded_legacy_regression_baseline_is_executable_and_complete"), ("application_journey", "test_public_workflow_creates_canonical_research_artifacts")),
+        34: (("architecture_security", "test_recorded_legacy_regression_baseline_is_executable_and_complete"), ("application_journey", "test_public_workflow_creates_canonical_research_artifacts")),
         36: (("provider_contract", "test_startup_and_unauthorized_http_provider_make_no_network_call"), ("application_journey", "test_secret_and_personal_paths_never_reach_dom_logs_or_artifacts"), ("architecture_security", "test_platform_imports_only_public_research_package")),
-        50: (("application_journey", "test_typed_ast_references_account_applicability_and_adjusted_evidence"), ("domain", "test_recorded_legacy_regression_baseline_is_executable_and_complete"), ("provider_contract", "test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path")),
+        50: (("domain", "test_typed_ast_references_account_applicability_and_adjusted_evidence"), ("architecture_security", "test_recorded_legacy_regression_baseline_is_executable_and_complete"), ("provider_contract", "test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path")),
     }
 
     def __init__(self, data_root: Path, repo_root: Path) -> None:
@@ -191,7 +192,7 @@ class AcceptanceEvidenceService:
             "fixed_clock": "2026-07-11T09:30:00+08:00", "network_policy": "offline-deny-all", "fixture": fixture,
             "criteria": criteria, "suites": suites, "artifacts": artifacts,
             "golden_entities": golden_entities,
-            "applicability": [{"capability": "position_accounting", "status": "not_applicable", "rationale": "Watchlist slice has no account or Position model.", "counter_capability_test": next(assertion for assertion in all_assertions["application_journey"] if "test_typed_ast_references_account_applicability_and_adjusted_evidence" in assertion)}, {"capability": "full_trade_backtest", "status": "not_applicable", "rationale": "No execution, fee, slippage or T+1 simulator is in scope.", "counter_capability_test": next(assertion for assertion in all_assertions["architecture_security"] if "test_platform_imports_only_public_research_package" in assertion)}, {"capability": "valuation_formula_regression", "status": "passed", "rationale": "Legacy regression evidence.", "artifact_refs": ["legacy_regression"]}, {"capability": "adapter_financial_invariants", "status": "passed", "rationale": "Provider contract evidence.", "artifact_refs": ["provider_contract"]}],
+            "applicability": [{"capability": "position_accounting", "status": "not_applicable", "rationale": "Watchlist slice has no account or Position model.", "counter_capability_test": next(assertion for assertion in all_assertions["domain"] if "test_typed_ast_references_account_applicability_and_adjusted_evidence" in assertion)}, {"capability": "full_trade_backtest", "status": "not_applicable", "rationale": "No execution, fee, slippage or T+1 simulator is in scope.", "counter_capability_test": next(assertion for assertion in all_assertions["architecture_security"] if "test_platform_imports_only_public_research_package" in assertion)}, {"capability": "valuation_formula_regression", "status": "passed", "rationale": "Legacy regression evidence.", "artifact_refs": ["legacy_regression"]}, {"capability": "adapter_financial_invariants", "status": "passed", "rationale": "Provider contract evidence.", "artifact_refs": ["provider_contract"]}],
             "live_qualification": live_qualification or {"status": "external_blocked", "provider_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator_not_official_disclosure", "terms_profile": "qualification_pending@1", "attempts": [], "blockers": ["live_qualification_artifact_not_supplied"]},
             "credential_scope_ids": [live_qualification["credential_scope_id"]] if live_qualification and live_qualification.get("credential_scope_id") else [],
             "final_artifact_manifest_id": golden.get("final_artifact_manifest_id"),

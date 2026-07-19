@@ -6,9 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from trading_platform.acceptance import AcceptanceEvidenceService
 
 
+@pytest.mark.release_acceptance
 def test_acceptance_cli_executes_fixed_suites_and_freezes_evidence(tmp_path: Path) -> None:
     fixture = Path.cwd() / "tests/fixtures/platform_data/manifest.json"
     qualification = tmp_path / "qualification.json"
