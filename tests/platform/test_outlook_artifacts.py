@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 import threading
@@ -8,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from equity_research import ForecastEngine, ScenarioValuationEngine
+from equity_research import ScenarioValuationEngine
+from equity_research.forecast import ForecastEngine
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import ResumeWorkflowCommand
 from trading_platform.domain.workflow import ImmutableArtifactDraft
@@ -62,6 +64,23 @@ def _request(invocation: str, drafts=None):
         research_request(invocation),
         analysis_artifacts=_drafts() if drafts is None else drafts,
     )
+
+
+def test_legacy_forecast_bytes_remain_inspectable_without_regeneration() -> None:
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "legacy_forecast_graph_fg1.json"
+    immutable_bytes = fixture_path.read_bytes()
+
+    inspected = json.loads(immutable_bytes.decode("utf-8"))
+    replayed_bytes = json.dumps(
+        inspected,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert inspected["graph_id"] == "fg_9fe1b77610eb130d2e94aa78"
+    assert inspected["template_id"] == "financial_institution_valuation_shell@1"
+    assert replayed_bytes == immutable_bytes.rstrip(b"\r\n")
 
 
 def test_cyclical_methods_are_preserved_in_immutable_valuation_artifact() -> None:

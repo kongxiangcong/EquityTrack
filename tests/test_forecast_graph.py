@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from equity_research import (
+from equity_research import ResearchEngine, ResearchRequest
+from equity_research.forecast import (
     CompanyArchetype,
     CompanyOpeningBalanceSheet,
     DataSnapshot,
@@ -16,8 +17,6 @@ from equity_research import (
     ForecastNodeKind,
     ForecastQuantity,
     ForecastRequest,
-    ResearchEngine,
-    ResearchRequest,
     Security,
     SegmentBaseline,
     SegmentForecastOverride,
@@ -374,6 +373,94 @@ def test_forecast_graph_is_deterministic_and_links_prior_period_drivers() -> Non
         first.replay()["valuation.fcff.2027E"]
         == first.quantity("valuation.fcff.2027E").normalized_value
     )
+
+
+def test_forecast_graph_identity_v2_covers_archetype_semantics() -> None:
+    subject = request()
+    financial = replace(
+        subject,
+        security=replace(
+            subject.security,
+            archetype=CompanyArchetype.FINANCIAL_INSTITUTION,
+        ),
+    )
+    additional_assumption = ForecastAssumption(
+        assumption_id="financial_regulatory_capital_policy",
+        description="A distinct regulatory-capital policy assumption.",
+        available_at=AS_OF,
+        evidence_refs=(
+            f"Fact:{subject.data_snapshot.facts[0].fact_id}",
+        ),
+    )
+
+    baseline = ForecastEngine().build(financial)
+    changed = ForecastEngine().build(
+        replace(
+            financial,
+            assumptions=financial.assumptions + (additional_assumption,),
+        )
+    )
+
+    assert baseline.graph_id.startswith("fg2_")
+    assert changed.graph_id.startswith("fg2_")
+    assert baseline.graph_id != changed.graph_id
+    reviewed_later = ForecastEngine().build(
+        replace(financial, review_date="2026-08-08")
+    )
+    assert reviewed_later.graph_id != baseline.graph_id
+    general = ForecastEngine().build(
+        replace(
+            subject,
+            security=replace(
+                subject.security,
+                archetype=CompanyArchetype.GENERAL_MANUFACTURING,
+            ),
+        )
+    )
+    multi_segment = ForecastEngine().build(
+        replace(
+            subject,
+            security=replace(
+                subject.security,
+                archetype=CompanyArchetype.MULTI_SEGMENT_MANUFACTURING,
+            ),
+        )
+    )
+    assert general.graph_id != multi_segment.graph_id
+
+
+@pytest.mark.parametrize(
+    "archetype",
+    tuple(CompanyArchetype),
+)
+def test_every_supported_archetype_uses_graph_identity_v2(
+    archetype: CompanyArchetype,
+) -> None:
+    subject = request()
+
+    graph = ForecastEngine().build(
+        replace(subject, security=replace(subject.security, archetype=archetype))
+    )
+
+    assert graph.graph_id.startswith("fg2_")
+
+
+def test_archetype_semantics_have_pairwise_distinct_graph_identities() -> None:
+    subject = request()
+
+    identities = {
+        ForecastEngine()
+        .build(
+            replace(
+                subject,
+                security=replace(subject.security, archetype=archetype),
+            )
+        )
+        .graph_id
+        for archetype in CompanyArchetype
+    }
+
+    assert len(identities) == len(tuple(CompanyArchetype))
 
 
 def test_forecast_graph_validates_edge_dimensions() -> None:

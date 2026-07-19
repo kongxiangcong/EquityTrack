@@ -209,7 +209,7 @@ class ImmutableArtifactDraft:
         model_identity: str,
         policy_identity: str,
     ) -> ImmutableArtifactDraft:
-        from equity_research import DataSnapshot
+        from equity_research.forecast import DataSnapshot
 
         if not isinstance(snapshot, DataSnapshot):
             raise TypeError("from_data_snapshot requires a typed DataSnapshot.")
@@ -240,7 +240,7 @@ class ImmutableArtifactDraft:
         model_identity: str,
         policy_identity: str,
     ) -> ImmutableArtifactDraft:
-        from equity_research import ForecastGraph
+        from equity_research.forecast import ForecastGraph
 
         if not isinstance(graph, ForecastGraph):
             raise TypeError("from_forecast_graph requires a typed ForecastGraph.")
@@ -285,7 +285,8 @@ class ImmutableArtifactDraft:
         model_identity: str,
         policy_identity: str,
     ) -> ImmutableArtifactDraft:
-        from equity_research import DeterministicScenarioResult, ForecastGraph
+        from equity_research import DeterministicScenarioResult
+        from equity_research.forecast import ForecastGraph
 
         if not isinstance(result, DeterministicScenarioResult) or not isinstance(
             forecast_graph, ForecastGraph

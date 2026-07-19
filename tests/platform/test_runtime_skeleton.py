@@ -89,7 +89,10 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("equity_research"):
-                assert node.module == "equity_research", f"private research import in {path}: {node.module}"
+                assert node.module in {
+                    "equity_research",
+                    "equity_research.forecast",
+                }, f"private research import in {path}: {node.module}"
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name.startswith("equity_research"):
@@ -120,6 +123,64 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
             assert not any(token in lowered or token in resource.name.lower() for token in forbidden_tokens), resource
             compact = re.sub(r"[^a-z]", "", f"{resource.name} {lowered}")
             assert not any(token in compact for token in forbidden_execution_symbols), resource
+
+
+def test_forecast_package_has_one_canonical_seam_and_inward_dependencies() -> None:
+    import equity_research
+
+    retired_root_aliases = {
+        "CompanyArchetype",
+        "DataSnapshot",
+        "ForecastEngine",
+        "ForecastGraph",
+        "ForecastQuantity",
+        "ForecastRequest",
+    }
+    assert not retired_root_aliases & set(vars(equity_research))
+
+    forecast_root = ROOT / "src/equity_research/forecast"
+    forbidden_dependency_parts = {
+        "cli",
+        "persistence",
+        "presentation",
+        "trading_platform",
+        "web",
+    }
+    forbidden_runtime_paths = {
+        "compatibility",
+        "dual_read",
+        "dual_write",
+        "feature_flag",
+        "legacy_builder",
+        "old_new",
+    }
+    for path in forecast_root.glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_modules = {
+            node.module or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        } | {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        assert not any(
+            forbidden_dependency_parts & set(module.split("."))
+            for module in imported_modules
+        ), path
+        private_relative_imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level > 0
+            for alias in node.names
+            if alias.name.startswith("_")
+        }
+        assert not private_relative_imports, (path, private_relative_imports)
+        lowered = source.lower()
+        assert not any(token in lowered for token in forbidden_runtime_paths), path
 
 
 def test_recorded_legacy_regression_baseline_is_executable_and_complete() -> None:

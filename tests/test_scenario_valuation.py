@@ -14,7 +14,6 @@ from equity_research import (
     BiopharmaRunwayPeriodSpec,
     BiopharmaValuationSpec,
     CommodityCurvePoint,
-    CompanyArchetype,
     DcfApplicability,
     DcfValuationSpec,
     DeterministicScenarioRequest,
@@ -24,7 +23,6 @@ from equity_research import (
     FinancialInstitutionPeriodSpec,
     FinancialInstitutionValuationSpec,
     FinancialMetricRange,
-    ForecastQuantity,
     HistoricalCycleObservation,
     MethodResult,
     RelativeMultipleSpec,
@@ -37,11 +35,15 @@ from equity_research import (
     ScenarioProbabilityEvidence,
     ScenarioRole,
     ScenarioValuationEngine,
-    SegmentForecastOverride,
-    SnapshotFact,
     SotpComponentSpec,
     SotpValuationSpec,
     ValuationPlan,
+)
+from equity_research.forecast import (
+    CompanyArchetype,
+    ForecastQuantity,
+    SegmentForecastOverride,
+    SnapshotFact,
 )
 from test_forecast_graph import AS_OF, request as forecast_request_fixture
 
