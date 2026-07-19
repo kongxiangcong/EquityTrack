@@ -92,6 +92,7 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
                 assert node.module in {
                     "equity_research",
                     "equity_research.forecast",
+                    "equity_research.scenario_valuation",
                 }, f"private research import in {path}: {node.module}"
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -181,6 +182,108 @@ def test_forecast_package_has_one_canonical_seam_and_inward_dependencies() -> No
         assert not private_relative_imports, (path, private_relative_imports)
         lowered = source.lower()
         assert not any(token in lowered for token in forbidden_runtime_paths), path
+
+
+def test_scenario_valuation_has_one_canonical_package_seam() -> None:
+    import equity_research
+    from equity_research.scenario_valuation import ScenarioValuationEngine
+
+    package_root = ROOT / "src/equity_research/scenario_valuation"
+    assert {path.name for path in package_root.glob("*.py")} == {
+        "__init__.py",
+        "basis.py",
+        "biopharma.py",
+        "contracts.py",
+        "cyclical.py",
+        "engine.py",
+        "financial_institution.py",
+        "industrial.py",
+    }
+    assert (
+        ScenarioValuationEngine.__module__
+        == "equity_research.scenario_valuation.engine"
+    )
+    retired_root_aliases = {
+        "DeterministicScenarioRequest",
+        "DeterministicScenarioResult",
+        "ScenarioDefinition",
+        "ScenarioValuationEngine",
+        "ValuationPlan",
+    }
+    assert not retired_root_aliases & set(vars(equity_research))
+    assert not (ROOT / "src/equity_research/scenario.py").exists()
+
+    forbidden_dependencies = {
+        "cli",
+        "persistence",
+        "presentation",
+        "trading_platform",
+        "web",
+    }
+    forbidden_runtime_tokens = {
+        "compatibility",
+        "dual_read",
+        "dual_write",
+        "feature_flag",
+        "legacy_builder",
+        "old_new",
+    }
+    forbidden_private_helpers = {
+        "_discount_times",
+        "_financial_from_forecast",
+        "_financial_projections",
+    }
+    for path in package_root.glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_modules = {
+            node.module or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        } | {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        assert not any(
+            forbidden_dependencies & set(module.split("."))
+            for module in imported_modules
+        ), path
+        referenced_names = {
+            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+        }
+        assert not (forbidden_private_helpers & referenced_names), path
+        lowered = source.lower()
+        assert not any(token in lowered for token in forbidden_runtime_tokens), path
+        if path.name != "contracts.py":
+            assert "object.__new__" not in source, path
+            assert "._build(" not in source, path
+        if path.name not in {"engine.py", "__init__.py"}:
+            assert "ForecastEngine" not in source, path
+
+    allowed_imports = {
+        "equity_research.scenario_valuation",
+        "equity_research.scenario_valuation.basis",
+        "equity_research.scenario_valuation.industrial",
+    }
+    for search_root in (ROOT / "src", ROOT / "tests"):
+        for path in search_root.rglob("*.py"):
+            if package_root in path.parents:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            scenario_imports = {
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.module
+                and node.module.startswith("equity_research.scenario")
+            }
+            assert scenario_imports <= allowed_imports, (path, scenario_imports)
+            if "equity_research.scenario_valuation.basis" in scenario_imports:
+                assert path == ROOT / "tests/test_scenario_valuation.py"
+            if "equity_research.scenario_valuation.industrial" in scenario_imports:
+                assert path == ROOT / "tests/test_scenario_valuation.py"
 
 
 def test_recorded_legacy_regression_baseline_is_executable_and_complete() -> None:

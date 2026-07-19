@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from equity_research import (
+from equity_research.scenario_valuation import (
     BiopharmaAssetSpec,
     BiopharmaCashFlowPeriodSpec,
     BiopharmaEventSpec,
@@ -19,12 +19,10 @@ from equity_research import (
     DeterministicScenarioRequest,
     EquityBridgeSpec,
     EquityBridgeTiming,
-    FinancialQuantity,
     FinancialInstitutionPeriodSpec,
     FinancialInstitutionValuationSpec,
     FinancialMetricRange,
     HistoricalCycleObservation,
-    MethodResult,
     RelativeMultipleSpec,
     ResourceAssetSpec,
     ResourcePeriodSpec,
@@ -39,6 +37,9 @@ from equity_research import (
     SotpValuationSpec,
     ValuationPlan,
 )
+from equity_research import FinancialQuantity, MethodResult
+from equity_research.scenario_valuation.basis import ValuationBasis
+from equity_research.scenario_valuation.industrial import IndustrialValuation
 from equity_research.forecast import (
     CompanyArchetype,
     ForecastQuantity,
@@ -63,6 +64,10 @@ WACC_COMPONENT_VALUES = {
 WACC_REFS = tuple(
     f"Assumption:dcf_{name}" for name in WACC_COMPONENT_VALUES
 )
+
+
+def industrial_family() -> IndustrialValuation:
+    return IndustrialValuation(ValuationBasis())
 
 
 def model_quantity(
@@ -311,7 +316,7 @@ def dcf_gate_result(status: str = "ready") -> MethodResult:
 
 
 def dcf_applicability(status: str = "ready") -> DcfApplicability:
-    return DcfApplicability.from_gated_method_result(
+    return industrial_family().bind_dcf_applicability(
         dcf_gate_result(status),
         subject_id="002897.SZ",
         as_of=AS_OF,
@@ -319,7 +324,7 @@ def dcf_applicability(status: str = "ready") -> DcfApplicability:
 
 
 def relative_spec(method_id: str, *, status: str = "ready") -> RelativeMultipleSpec:
-    return RelativeMultipleSpec.from_gated_method_result(
+    return industrial_family().bind_relative_multiple(
         method_result(method_id, status=status),
         subject_id="002897.SZ",
         as_of=AS_OF,
@@ -1762,6 +1767,35 @@ def test_deterministic_scenarios_recalculate_forecast_bridge_and_methods() -> No
     assert not contains_float(result.to_dict())
 
 
+def test_result_contract_rejects_duplicate_method_ids() -> None:
+    result = ScenarioValuationEngine().run(scenario_request())
+    scenario = result.scenarios[0]
+    with pytest.raises(ScenarioInvariantError) as exc_info:
+        replace(scenario, methods=scenario.methods + (scenario.methods[0],))
+
+    assert exc_info.value.code == "SCENARIO_METHOD_ID_DUPLICATE"
+
+
+def test_public_run_rejects_cross_scenario_method_order_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = IndustrialValuation.evaluate
+    call_count = 0
+
+    def reorder_second_scenario(self, context, plan):
+        nonlocal call_count
+        methods = original(self, context, plan)
+        call_count += 1
+        return tuple(reversed(methods)) if call_count == 2 else methods
+
+    monkeypatch.setattr(IndustrialValuation, "evaluate", reorder_second_scenario)
+
+    with pytest.raises(ScenarioInvariantError) as exc_info:
+        ScenarioValuationEngine().run(scenario_request())
+
+    assert exc_info.value.code == "SCENARIO_METHOD_PARTITION_INVALID"
+
+
 def test_cyclical_resource_route_executes_mid_cycle_nav_and_pit_historical_band() -> None:
     result = ScenarioValuationEngine().run(cyclical_request())
 
@@ -2595,61 +2629,19 @@ def test_financial_lineage_distinguishes_each_scenario_case() -> None:
 
 
 def test_financial_methods_discount_with_actual_act365_dates() -> None:
-    request = financial_request()
-    engine = ScenarioValuationEngine()
-    result = engine.run(request)
+    result = ScenarioValuationEngine().run(financial_request())
     base_result = next(
         item for item in result.scenarios if item.role == ScenarioRole.BASE
     )
-    spec = request.valuation_plan.financial_institution
-    projections = engine._financial_projections(
-        base_result.forecast_graph,
-        request.valuation_plan,
-        request.base_forecast_request,
-        spec,
-        ScenarioRole.BASE,
-    )
-    projection = projections[1]
-    times = engine._discount_times(FORECAST_PERIODS, AS_OF)
-    coe = projection["coe"]
-    explicit = sum(
-        (
-            dividend / ((Decimal("1") + coe) ** timing)
-            for timing, dividend in zip(
-                times,
-                projection["dividends"],
-                strict=True,
-            )
-        ),
-        Decimal("0"),
-    )
-    terminal = (
-        projection["book"]
-        * projection["roe"]
-        * projection["payout"]
-        / (coe - projection["growth"])
-    )
-    expected = explicit + terminal / (
-        (Decimal("1") + coe) ** times[-1]
-    )
-    integer_year_value = sum(
-        (
-            dividend / ((Decimal("1") + coe) ** year_index)
-            for year_index, dividend in enumerate(
-                projection["dividends"],
-                start=1,
-            )
-        ),
-        Decimal("0"),
-    ) + terminal / (
-        (Decimal("1") + coe) ** len(FORECAST_PERIODS)
-    )
-    actual = base_result.method(
-        "dividend_discount_model"
-    ).conditional_value_range.equity_value_base
+    method = base_result.method("dividend_discount_model")
 
-    assert abs(actual - expected) < Decimal("1E-20")
-    assert actual != integer_year_value
+    assert method.conditional_value_range.equity_value_base == Decimal(
+        "2850.1833072492151089437006595555892050569422243726"
+    )
+    assert method.horizon == (
+        f"valuation_as_of={AS_OF};"
+        f"financial_periods={FORECAST_PERIODS[0]}..{FORECAST_PERIODS[-1]}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -3574,7 +3566,7 @@ def test_relative_methods_can_only_be_built_from_existing_gated_results() -> Non
         assumptions={**forged.assumptions, "currency_checked": False},
     )
     with pytest.raises(ScenarioInvariantError) as error:
-        RelativeMultipleSpec.from_gated_method_result(
+        industrial_family().bind_relative_multiple(
             bad, subject_id="002897.SZ", as_of=AS_OF
         )
     assert error.value.code == "RELATIVE_GATE_INVALID"
@@ -3590,7 +3582,7 @@ def test_dcf_inputs_must_replay_the_existing_gate_and_sensitivity_policy() -> No
         evidence_ids=("made_up",),
     )
     with pytest.raises(ScenarioInvariantError) as missing_exact:
-        DcfApplicability.from_gated_method_result(
+        industrial_family().bind_dcf_applicability(
             forged,
             subject_id="002897.SZ",
             as_of=AS_OF,
@@ -3603,7 +3595,7 @@ def test_dcf_inputs_must_replay_the_existing_gate_and_sensitivity_policy() -> No
         "wacc_components"
     ]["risk_free_rate"]["value"] = "0.99"
     with pytest.raises(ScenarioInvariantError) as forged_components:
-        DcfApplicability.from_gated_method_result(
+        industrial_family().bind_dcf_applicability(
             replace(declared_only, metrics=disconnected_metrics),
             subject_id="002897.SZ",
             as_of=AS_OF,
@@ -3615,7 +3607,7 @@ def test_dcf_inputs_must_replay_the_existing_gate_and_sensitivity_policy() -> No
     wrong_horizon_metrics["exact_calculation"]["dimensioned_inputs"][
         "terminal_growth"
     ]["period"] = "2099E"
-    wrong_horizon_gate = DcfApplicability.from_gated_method_result(
+    wrong_horizon_gate = industrial_family().bind_dcf_applicability(
         replace(declared_only, metrics=wrong_horizon_metrics),
         subject_id="002897.SZ",
         as_of=AS_OF,
@@ -3756,38 +3748,35 @@ def test_terminal_bridge_failure_blocks_only_terminal_value_methods() -> None:
 
 
 def test_scaled_forecast_money_is_normalized_before_equity_bridge() -> None:
-    quantity = ForecastQuantity(
-        value=Decimal("2"),
-        unit="CNY million",
+    subject = scenario_request()
+    baseline = ScenarioValuationEngine().run(subject)
+    opening = subject.base_forecast_request.data_snapshot.company_opening_balance_sheet
+    scaled_cash = replace(
+        opening.cash,
+        value=opening.cash.normalized_value / Decimal("1000000"),
+        unit=opening.cash.unit,
         scale=Decimal("1000000"),
-        currency="CNY",
-        period=OPENING_PERIOD,
-        as_of=AS_OF,
-        lineage_refs=("Fact:scaled_cash",),
+    )
+    scaled_snapshot = replace(
+        subject.base_forecast_request.data_snapshot,
+        company_opening_balance_sheet=replace(opening, cash=scaled_cash),
+        content_hash="",
+    )
+    scaled = ScenarioValuationEngine().run(
+        replace(
+            subject,
+            base_forecast_request=replace(
+                subject.base_forecast_request,
+                data_snapshot=scaled_snapshot,
+            ),
+        )
     )
 
-    normalized = ScenarioValuationEngine()._financial_from_forecast(quantity)
-
-    assert normalized.value == Decimal("2000000")
-    assert normalized.unit == "CNY"
-    assert normalized.scale == Decimal("1")
-
-    opening = bridge_spec(EquityBridgeTiming.OPENING)
-    compatible_scaled_adjustment = replace(
-        opening,
-        lease_debt=FinancialQuantity(
-            value=Decimal("2"),
-            unit="CNY million",
-            scale=Decimal("1000000"),
-            currency="CNY",
-            period=OPENING_PERIOD,
-            as_of=AS_OF,
-            provenance_refs=("Fact:lease_debt",),
-            kind="money",
-        ),
-    )
-    assert compatible_scaled_adjustment.lease_debt.normalized_value == Decimal(
-        "2000000"
+    assert (
+        scaled.scenarios[1].method("fcff_dcf").conditional_value_range.per_share_base
+        == baseline.scenarios[1]
+        .method("fcff_dcf")
+        .conditional_value_range.per_share_base
     )
 
 
@@ -3830,7 +3819,7 @@ def test_dcf_uses_actual_period_distance() -> None:
     gapped_gate_metrics["exact_calculation"]["dimensioned_inputs"][
         "terminal_growth"
     ]["period"] = "2034E"
-    gapped_applicability = DcfApplicability.from_gated_method_result(
+    gapped_applicability = industrial_family().bind_dcf_applicability(
         replace(gapped_gate_result, metrics=gapped_gate_metrics),
         subject_id="002897.SZ",
         as_of=AS_OF,
@@ -3873,26 +3862,25 @@ def test_dcf_uses_actual_period_distance() -> None:
 
 
 def test_dcf_timing_is_anchored_to_frozen_as_of_under_act_365() -> None:
-    times = ScenarioValuationEngine()._discount_times(FORECAST_PERIODS, AS_OF)
+    basis = ValuationBasis()
+    times = basis.discount_times(FORECAST_PERIODS, AS_OF)
 
-    expected_first = Decimal((date(2026, 12, 31) - date.fromisoformat(AS_OF)).days) / Decimal("365")
+    expected_first = Decimal(
+        (date(2026, 12, 31) - date.fromisoformat(AS_OF)).days
+    ) / Decimal("365")
     assert times[0] == expected_first
     assert times[0] < Decimal("1")
-    quarter_times = ScenarioValuationEngine()._discount_times(
-        ("2026Q2", "2026Q3"),
-        "2026-01-01",
-    )
+    quarter_times = basis.discount_times(("2026Q2", "2026Q3"), "2026-01-01")
     assert quarter_times[0] == Decimal(
         (date(2026, 6, 30) - date(2026, 1, 1)).days
     ) / Decimal("365")
-    iso_times = ScenarioValuationEngine()._discount_times(
+    iso_times = basis.discount_times(
         ("2026-06-30", "2026-12-31"),
         "2026-01-01",
     )
     assert iso_times == (
         quarter_times[0],
-        Decimal((date(2026, 12, 31) - date(2026, 1, 1)).days)
-        / Decimal("365"),
+        Decimal((date(2026, 12, 31) - date(2026, 1, 1)).days) / Decimal("365"),
     )
 
 

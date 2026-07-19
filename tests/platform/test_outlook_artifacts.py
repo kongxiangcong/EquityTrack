@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from equity_research import ScenarioValuationEngine
+from equity_research.scenario_valuation import ScenarioValuationEngine
 from equity_research.forecast import ForecastEngine
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import ResumeWorkflowCommand

@@ -285,7 +285,7 @@ class ImmutableArtifactDraft:
         model_identity: str,
         policy_identity: str,
     ) -> ImmutableArtifactDraft:
-        from equity_research import DeterministicScenarioResult
+        from equity_research.scenario_valuation import DeterministicScenarioResult
         from equity_research.forecast import ForecastGraph
 
         if not isinstance(result, DeterministicScenarioResult) or not isinstance(

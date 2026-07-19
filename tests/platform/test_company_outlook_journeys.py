@@ -10,20 +10,22 @@ import pytest
 
 from equity_research import (
     CalibrationEvidence,
-    CommodityCurvePoint,
     DependencyCalibrationEvidence,
     DeterministicValueFallback,
-    EquityBridgeSpec,
-    EquityBridgeTiming,
     FinancialQuantity,
     MarketPathEngine,
     MarketPathObservation,
-    ScenarioDefinition,
-    ScenarioRole,
-    ScenarioValuationEngine,
     SimulationInvariantError,
     ValuationSimulationEngine,
     validated_income_calibration_vectors,
+)
+from equity_research.scenario_valuation import (
+    CommodityCurvePoint,
+    EquityBridgeSpec,
+    EquityBridgeTiming,
+    ScenarioDefinition,
+    ScenarioRole,
+    ScenarioValuationEngine,
 )
 from equity_research.forecast import (
     CompanyArchetype,
