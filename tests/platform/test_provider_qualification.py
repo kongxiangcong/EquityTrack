@@ -9,7 +9,10 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from trading_platform.provider_qualification import ProviderQualificationService
+from trading_platform.application import (
+    open_platform_operations,
+    open_provider_qualification,
+)
 
 
 class _CredentialAdapter:
@@ -76,23 +79,38 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
             },
         }), encoding="utf-8")
 
-        result = ProviderQualificationService(tmp_path / "data", _CredentialAdapter()).run(job_path)
+        assert open_platform_operations(tmp_path / "data").bootstrap()["status"] == "passed"
+        with open_provider_qualification(
+            tmp_path / "data", job_path, credential_adapter=_CredentialAdapter()
+        ) as qualification:
+            result = qualification.run()
         artifact_path = tmp_path / "qualification.json"
         environment = os.environ.copy()
         environment["TUSHARE_TOKEN"] = "secret-not-for-artifacts"
+        cli_data = tmp_path / "cli-data"
+        bootstrap = subprocess.run(
+            [sys.executable, "-m", "trading_platform.cli", "bootstrap", "--data-root", str(cli_data)],
+            cwd=Path(__file__).resolve().parents[2],
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        assert bootstrap.returncode == 0, bootstrap.stdout + bootstrap.stderr
         completed = subprocess.run(
-            [sys.executable, "-m", "trading_platform.cli", "provider-qualify", "--data-root", str(tmp_path / "cli-data"), "--job-file", str(job_path), "--output", str(artifact_path)],
+            [sys.executable, "-m", "trading_platform.cli", "provider-qualify", "--data-root", str(cli_data), "--job-file", str(job_path), "--output", str(artifact_path)],
             cwd=Path(__file__).resolve().parents[2], env=environment, capture_output=True, text=True, encoding="utf-8", check=False,
         )
     finally:
         server.shutdown()
         server.server_close()
 
-    assert result["status"] == "qualified"
-    assert result["provider_identity"] == "preconfigured_tushare_compatible_non_official"
-    assert {item["dataset"] for item in result["attempts"]} == {"trade_cal", "market_universe", "daily"}
-    assert all(item["status"] == "complete" and len(item["raw_sha256"]) == 64 for item in result["attempts"])
-    assert "secret-not-for-artifacts" not in json.dumps(result)
+    assert result.status == "qualified"
+    assert result.provider_identity == "preconfigured_tushare_compatible_non_official"
+    assert {item["dataset"] for item in result.attempts} == {"trade_cal", "market_universe", "daily"}
+    assert all(item["status"] == "complete" and len(item["raw_sha256"]) == 64 for item in result.attempts)
+    assert "secret-not-for-artifacts" not in json.dumps(result.to_dict())
     envelope = json.loads(completed.stdout)
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert completed.returncode == 0 and envelope["result"]["status"] == "qualified"

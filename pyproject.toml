@@ -15,7 +15,6 @@ browser-test = [
 ]
 
 [project.scripts]
-equity-research = "equity_research.cli:main"
 trading-platform = "trading_platform.cli:main"
 
 [tool.setuptools]

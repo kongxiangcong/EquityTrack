@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from equity_research import ResearchEngine, ResearchRequest
+from trading_platform.domain.research_inputs import ResearchInputs
 from equity_research.forecast import (
     CompanyArchetype,
     CompanyOpeningBalanceSheet,
@@ -1117,7 +1118,7 @@ def test_lineage_is_metric_specific_and_propagates_declared_inputs() -> None:
     assert any("opex" in ref for ref in tax.lineage_refs)
 
 
-def test_research_engine_accepts_legacy_context_through_explicit_adapter() -> None:
+def test_research_engine_uses_typed_inputs_with_forecast_graph() -> None:
     manifest = json.loads(
         (
             Path(__file__).resolve().parents[1]
@@ -1132,8 +1133,7 @@ def test_research_engine_accepts_legacy_context_through_explicit_adapter() -> No
         ResearchRequest(
             manifest=manifest,
             as_of_date=AS_OF,
-            context={"report_version": 0, "analyses": {"legacy": "accepted"}},
-            render_html=False,
+            research_inputs=ResearchInputs.from_mapping({"report_version": 0, "analyses": {"baseline": "accepted"}}),
             forecast_request=typed_request,
         )
     )
@@ -1141,13 +1141,12 @@ def test_research_engine_accepts_legacy_context_through_explicit_adapter() -> No
         ResearchRequest(
             manifest=manifest,
             as_of_date=AS_OF,
-            context={
+            research_inputs=ResearchInputs.from_mapping({
                 "report_version": 0,
-                "analyses": {"different_legacy_payload": True},
-                "debate": {"legacy": True},
-                "synthesis": {"legacy": True},
-            },
-            render_html=False,
+                "analyses": {"different_payload": True},
+                "debate": {"case": True},
+                "synthesis": {"case": True},
+            }),
             forecast_request=typed_request,
         )
     )
@@ -1176,8 +1175,7 @@ def test_research_engine_rejects_cross_security_forecast() -> None:
             ResearchRequest(
                 manifest=manifest,
                 as_of_date=AS_OF,
-                context={},
-                render_html=False,
+                research_inputs=ResearchInputs(),
                 forecast_request=request(),
             )
         )
@@ -1203,8 +1201,7 @@ def test_research_engine_rejects_fact_not_exactly_bound_to_manifest() -> None:
             ResearchRequest(
                 manifest=enriched,
                 as_of_date=AS_OF,
-                context={},
-                render_html=False,
+                research_inputs=ResearchInputs(),
                 forecast_request=typed_request,
             )
         )

@@ -6,9 +6,10 @@ from datetime import date, datetime, time, timezone
 from dataclasses import asdict
 from typing import Any, Mapping
 
-from equity_research import LegacyResearchContextAdapter, ResearchRequest
+from equity_research import ResearchRequest
 
 from trading_platform.domain.workflow import ResearchProjection
+from trading_platform.domain.research_inputs import ResearchInputs
 
 
 class ProjectionError(ValueError):
@@ -27,26 +28,22 @@ class SnapshotToResearchRequestAssembler:
 
     def assemble(self, projection: ResearchProjection) -> ResearchRequest:
         self._validate(projection)
-        frozen = json.loads(json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "context": projection.context}, ensure_ascii=False, allow_nan=False))
-        migration = LegacyResearchContextAdapter.adapt(frozen["context"])
+        frozen = json.loads(json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "research_inputs": projection.research_inputs.identity_payload()}, ensure_ascii=False, allow_nan=False))
         return ResearchRequest(
             manifest=frozen["manifest"],
             estimates=frozen["estimates"],
-            context=None,
-            research_inputs=migration.inputs,
+            research_inputs=ResearchInputs.from_mapping(frozen["research_inputs"]),
             as_of_date=projection.as_of_date,
             profile=projection.profile,
-            render_html=True,
         )
 
     def fingerprint(self, projection: ResearchProjection) -> str:
         self._validate(projection)
-        migration = LegacyResearchContextAdapter.adapt(projection.context)
         return canonical_mapping_hash({
             "policy_version": self.POLICY_VERSION,
             "manifest": projection.manifest,
             "estimates": projection.estimates,
-            "research_inputs": migration.inputs.identity_payload(),
+            "research_inputs": projection.research_inputs.identity_payload(),
             "as_of_date": projection.as_of_date,
             "profile": projection.profile,
             "field_semantics": [asdict(item) for item in projection.field_semantics],

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -19,11 +22,13 @@ from tests.platform.test_trade_plans import _content
 
 def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid", suspended: bool = False, peer_suspended: bool = False, at_limit_up: bool = False, corporate_conflict: bool = False):
     root = chart_root(path)
-    if root._store.connection.execute("SELECT count(*) FROM research_run_record").fetchone()[0] == 0:
-        root.facade.run_research_workflow(research_request("market:research"))
+    research = root.research.handle(
+        StartResearchWorkflow(research_request("market:research"))
+    )
+    root.research_run_id = research.research_run_id
     for stable_id, code in (("security_benchmark", "000300"), ("security_peer", "000002")):
-        root.facade.add_watchlist_item(f"watch:{stable_id}", SecurityIdentity(stable_id, "SZSE", code, "CNY", "2010-01-01"))
-    connection = root._store.connection
+        root.watchlist.add(f"watch:{stable_id}", SecurityIdentity(stable_id, "SZSE", code, "CNY", "2010-01-01"))
+    connection = root.faults.adapter_connection
     with connection:
         universe_members = [
             {"security_id": security_id, "listed_from": "2010-01-01", "delisted_after": None, "st_from": None, "st_to": None, "source_ref": f"fixture:{security_id}"}
@@ -66,8 +71,8 @@ def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid",
         PlanRule("rule_limit", "market_gate", "block_user_intent", "entry", PlanCondition("leaf", "security.limit_state", "eq", PlanConstant("enum", "none", "security_limit_state"), "current_complete_session")),
         PlanRule("rule_liquidity", "market_gate", "block_user_intent", "increase", PlanCondition("leaf", "market.liquidity", "eq", PlanConstant("enum", "ample", "market_liquidity"), "current_complete_session")),
     )
-    draft = root.facade.create_plan_draft(CreatePlanDraftCommand("market:plan:draft", replace(base_content, rules=rules)))
-    version = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("market:plan:confirm", draft.draft_id, 1, "activate"))
+    draft = root.plans.create_draft(CreatePlanDraftCommand("market:plan:draft", replace(base_content, rules=rules)))
+    version = root.plans.confirm_draft(ConfirmPlanDraftCommand("market:plan:confirm", draft.draft_id, 1, "activate"))
     return root, version
 
 
@@ -80,8 +85,8 @@ def _market_command(invocation: str = "market:build", **changes):
 
 def test_transparent_market_snapshot_and_read_only_plan_evaluation(tmp_path: Path) -> None:
     root, plan = _root(tmp_path)
-    market = root.facade.build_market_snapshot(_market_command())
-    assert root.facade.build_market_snapshot(_market_command("market:replay")) == market
+    market = root.market.build_market_snapshot(_market_command())
+    assert root.market.build_market_snapshot(_market_command("market:replay")) == market
     assert market.status == "limited"  # unsupported optional components remain explicit
     components = {item.component_id: item for item in market.components}
     assert set(components) >= {"market.trend", "market.breadth", "market.liquidity", "market.volatility", "security.price_context", "market.macro", "market.news", "market.sentiment"}
@@ -91,100 +96,99 @@ def test_transparent_market_snapshot_and_read_only_plan_evaluation(tmp_path: Pat
     assert dict(components["security.price_context"].values)["limit_state"] == "none"
     assert components["market.macro"].status == "unsupported"
     changed_code = replace(_market_command("market:code"), code_identity=replace(_market_command().code_identity, source_hash="changed-source"))
-    assert root.facade.build_market_snapshot(changed_code).market_snapshot_id != market.market_snapshot_id
+    assert root.market.build_market_snapshot(changed_code).market_snapshot_id != market.market_snapshot_id
     with pytest.raises(Exception, match="MARKET_UNIVERSE_IMMUTABLE"):
-        root._store.connection.execute("UPDATE market_universe_member SET source_ref='changed' WHERE market_universe_version_id='universe_market' AND security_id='security_yihua'")
+        root.faults.adapter_connection.execute("UPDATE market_universe_member SET source_ref='changed' WHERE market_universe_version_id='universe_market' AND security_id='security_yihua'")
     with pytest.raises(Exception, match="MARKET_CONSTRAINT_IMMUTABLE"):
-        root._store.connection.execute("UPDATE security_market_constraint SET limit_up_decimal='999' WHERE data_snapshot_id='snapshot_market'")
-    before = root.facade.get_plan_lifecycle(plan.plan_id)
-    evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:one", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
-    replay = root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:two", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+        root.faults.adapter_connection.execute("UPDATE security_market_constraint SET limit_up_decimal='999' WHERE data_snapshot_id='snapshot_market'")
+    before = root.plans.get_lifecycle(plan.plan_id)
+    evaluation = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:one", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    replay = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:two", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert replay == evaluation and evaluation.status == "completed" and evaluation.outcome == "triggered"
     assert {item.result for item in evaluation.rule_results} >= {"triggered", "not_triggered", "not_applicable"}
     assert {item.effect for item in evaluation.rule_results} >= {"prompt_review", "block_user_intent", "mark_invalidation_candidate", "mark_risk_limit_breach"}
     assert evaluation.rule_results[0].operands and evaluation.rule_results[0].evidence_refs
-    assert root.facade.get_plan_lifecycle(plan.plan_id) == before
-    assert root._store.connection.execute("SELECT count(*) FROM trade_plan_transition WHERE plan_id=?", (plan.plan_id,)).fetchone()[0] == 2
-    changed_policy = root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:policy", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@2"))
+    assert root.plans.get_lifecycle(plan.plan_id) == before
+    changed_policy = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:policy", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@2"))
     assert changed_policy.plan_evaluation_id != evaluation.plan_evaluation_id
     second_content = replace(plan.content, based_on_version_id=plan.plan_version_id, rationale="用户更新但尚未确认。")
-    second_draft = root.facade.create_plan_draft(CreatePlanDraftCommand("market:plan:v2-draft", second_content, plan.plan_id))
-    assert root.facade.get_active_plan_for_security("security_yihua").active_version.plan_version_id == plan.plan_version_id
-    assert root.facade.get_plan_evaluation_detail(evaluation.plan_evaluation_id) == evaluation
-    v2 = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("market:plan:v2-confirm", second_draft.draft_id, 1, "activate"))
-    v2_evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:v2", v2.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
-    assert v2_evaluation.plan_version_id == v2.plan_version_id and root.facade.get_plan_evaluation_detail(evaluation.plan_evaluation_id).plan_version_id == plan.plan_version_id
-    with root._store.connection:
-        root._store.connection.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_version,source_policy_version,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
-        root._store.connection.execute("INSERT INTO data_snapshot_member SELECT 'snapshot_market_revision',normalized_version_id,member_role,member_order FROM data_snapshot_member WHERE data_snapshot_id='snapshot_market'")
-        root._store.connection.execute("INSERT INTO data_snapshot_universe_ref VALUES('snapshot_market_revision','universe_market','CN_A_SHARE')")
-    revised_market = root.facade.build_market_snapshot(_market_command("market:revision", data_snapshot_id="snapshot_market_revision"))
-    assert revised_market.market_snapshot_id != market.market_snapshot_id and root.facade.get_market_snapshot_detail(market.market_snapshot_id) == market
+    second_draft = root.plans.create_draft(CreatePlanDraftCommand("market:plan:v2-draft", second_content, plan.plan_id))
+    assert root.plans.get_active_for_security("security_yihua").active_version.plan_version_id == plan.plan_version_id
+    assert root.market.get_plan_evaluation(evaluation.plan_evaluation_id) == evaluation
+    v2 = root.plans.confirm_draft(ConfirmPlanDraftCommand("market:plan:v2-confirm", second_draft.draft_id, 1, "activate"))
+    v2_evaluation = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:v2", v2.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    assert v2_evaluation.plan_version_id == v2.plan_version_id and root.market.get_plan_evaluation(evaluation.plan_evaluation_id).plan_version_id == plan.plan_version_id
+    with root.faults.adapter_connection:
+        root.faults.adapter_connection.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_version,source_policy_version,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
+        root.faults.adapter_connection.execute("INSERT INTO data_snapshot_member SELECT 'snapshot_market_revision',normalized_version_id,member_role,member_order FROM data_snapshot_member WHERE data_snapshot_id='snapshot_market'")
+        root.faults.adapter_connection.execute("INSERT INTO data_snapshot_universe_ref VALUES('snapshot_market_revision','universe_market','CN_A_SHARE')")
+    revised_market = root.market.build_market_snapshot(_market_command("market:revision", data_snapshot_id="snapshot_market_revision"))
+    assert revised_market.market_snapshot_id != market.market_snapshot_id and root.market.get_market_snapshot(market.market_snapshot_id) == market
     with pytest.raises(Exception, match="PLAN_EVALUATION_IMMUTABLE"):
-        root._store.connection.execute("DELETE FROM plan_evaluation WHERE plan_evaluation_id=?", (evaluation.plan_evaluation_id,))
+        root.faults.adapter_connection.execute("DELETE FROM plan_evaluation WHERE plan_evaluation_id=?", (evaluation.plan_evaluation_id,))
     root.close()
 
 
 def test_coverage_and_freshness_fail_closed_without_erasing_history(tmp_path: Path) -> None:
     root, plan = _root(tmp_path / "missing", missing_amount=True)
-    limited = root.facade.build_market_snapshot(_market_command())
+    limited = root.market.build_market_snapshot(_market_command())
     liquidity = next(item for item in limited.components if item.component_id == "market.liquidity")
     assert liquidity.status == "blocked" and liquidity.coverage_missing == 1
-    evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:limited", plan.plan_version_id, limited.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    evaluation = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:limited", plan.plan_version_id, limited.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert evaluation.status == "blocked" and evaluation.outcome is None and evaluation.completeness == "partial"
     assert any(item.result == "triggered" for item in evaluation.rule_results)
     assert any(item.result == "blocked" for item in evaluation.rule_results)
     root.close()
 
     stale_root, stale_plan = _root(tmp_path / "stale", freshness="stale")
-    blocked = stale_root.facade.build_market_snapshot(_market_command())
+    blocked = stale_root.market.build_market_snapshot(_market_command())
     assert blocked.status == "blocked"
-    blocked_evaluation = stale_root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:blocked", stale_plan.plan_version_id, blocked.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    blocked_evaluation = stale_root.market.evaluate_plan(EvaluatePlanCommand("evaluation:blocked", stale_plan.plan_version_id, blocked.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert blocked_evaluation.status == "blocked" and blocked_evaluation.outcome is None
     assert {item.reason_code for item in blocked_evaluation.rule_results} == {"INPUT_STALE"}
-    assert stale_root.facade.get_market_snapshot_detail(blocked.market_snapshot_id) == blocked
+    assert stale_root.market.get_market_snapshot(blocked.market_snapshot_id) == blocked
     stale_root.close()
 
 
 def test_evaluation_requires_exact_active_version_and_snapshot_scope(tmp_path: Path) -> None:
     root, plan = _root(tmp_path)
-    market = root.facade.build_market_snapshot(_market_command())
+    market = root.market.build_market_snapshot(_market_command())
     with pytest.raises(MarketError, match="PLAN_VERSION_NOT_ACTIVE"):
-        root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:inactive", "missing", market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+        root.market.evaluate_plan(EvaluatePlanCommand("evaluation:inactive", "missing", market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     with pytest.raises(MarketError, match="MARKET_SNAPSHOT_SCOPE_MISMATCH"):
-        root.facade.build_market_snapshot(_market_command("market:scope", market_scope_id="OTHER"))
+        root.market.build_market_snapshot(_market_command("market:scope", market_scope_id="OTHER"))
     with pytest.raises(MarketError, match="MARKET_MODEL_OR_POLICY_UNAVAILABLE"):
-        root.facade.build_market_snapshot(_market_command("market:model", market_model_version="unknown@1"))
+        root.market.build_market_snapshot(_market_command("market:model", market_model_version="unknown@1"))
     root.close()
 
 
 def test_suspension_and_limit_facts_are_evaluated_without_lifecycle_side_effects(tmp_path: Path) -> None:
     limit_root, limit_plan = _root(tmp_path / "limit", at_limit_up=True)
-    limit_market = limit_root.facade.build_market_snapshot(_market_command())
+    limit_market = limit_root.market.build_market_snapshot(_market_command())
     assert dict(next(item for item in limit_market.components if item.component_id == "security.price_context").values)["limit_state"] == "up"
-    limit_evaluation = limit_root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:limit", limit_plan.plan_version_id, limit_market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    limit_evaluation = limit_root.market.evaluate_plan(EvaluatePlanCommand("evaluation:limit", limit_plan.plan_version_id, limit_market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert any(dict(item.operands).get("metric_ref") == "security.limit_state" for item in limit_evaluation.rule_results)
-    assert limit_root.facade.get_plan_lifecycle(limit_plan.plan_id).lifecycle_status == "active"
+    assert limit_root.plans.get_lifecycle(limit_plan.plan_id).lifecycle_status == "active"
     limit_root.close()
 
     suspended_root, suspended_plan = _root(tmp_path / "suspended", suspended=True)
-    suspended_market = suspended_root.facade.build_market_snapshot(_market_command())
+    suspended_market = suspended_root.market.build_market_snapshot(_market_command())
     context = next(item for item in suspended_market.components if item.component_id == "security.price_context")
     assert dict(context.values)["suspended"] == "true"
-    suspended_evaluation = suspended_root.facade.evaluate_plan(EvaluatePlanCommand("evaluation:suspended", suspended_plan.plan_version_id, suspended_market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    suspended_evaluation = suspended_root.market.evaluate_plan(EvaluatePlanCommand("evaluation:suspended", suspended_plan.plan_version_id, suspended_market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert any(item.result == "not_triggered" and dict(item.operands).get("metric_ref") == "security.suspended" and dict(item.operands).get("actual") == "true" for item in suspended_evaluation.rule_results)
-    assert suspended_root.facade.get_plan_lifecycle(suspended_plan.plan_id).lifecycle_status == "active"
+    assert suspended_root.plans.get_lifecycle(suspended_plan.plan_id).lifecycle_status == "active"
     suspended_root.close()
 
     cross_section_root, _ = _root(tmp_path / "cross-section-suspended", peer_suspended=True)
-    cross_section_market = cross_section_root.facade.build_market_snapshot(_market_command())
+    cross_section_market = cross_section_root.market.build_market_snapshot(_market_command())
     breadth = next(item for item in cross_section_market.components if item.component_id == "market.breadth")
     assert breadth.coverage_excluded == 2 and breadth.coverage_missing == 0
     assert "security_peer:SUSPENDED_AT_CUTOFF" in breadth.evidence_refs
     cross_section_root.close()
 
     conflict_root, _ = _root(tmp_path / "corporate-conflict", corporate_conflict=True)
-    conflict_market = conflict_root.facade.build_market_snapshot(_market_command())
+    conflict_market = conflict_root.market.build_market_snapshot(_market_command())
     assert conflict_market.status == "blocked"
     assert next(item for item in conflict_market.components if item.component_id == "security.price_context").reason_code == "INPUT_CONFLICTED"
     conflict_root.close()

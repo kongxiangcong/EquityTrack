@@ -28,9 +28,11 @@ class SkillEntrypointTests(unittest.TestCase):
         ):
             self.assertNotIn(retired, content)
 
-        self.assertIn("ResearchEngine.run(ResearchRequest) -> ResearchRun", content)
+        self.assertIn("ResearchWorkflow.handle(StartResearchWorkflow(request))", content)
+        self.assertIn("trading_platform.cli research", content)
         self.assertIn("Evidence Ledger", content)
-        self.assertIn("ResearchSynthesis", content)
+        self.assertNotIn("scripts\\research.py", content)
+        self.assertNotIn("ApplicationFacade", content)
 
     def test_active_skill_tree_does_not_reference_retired_entrypoints(self) -> None:
         retired_names = (

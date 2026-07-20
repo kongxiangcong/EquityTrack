@@ -620,7 +620,9 @@ HTML/CSS flex layout ──→ generate .chain-wrapper ──→ done
 - Prohibit using pure text description replacing value chain diagram
 - Prohibit embedding raw Mermaid code (`<pre class="mermaid">`) in PDF-destined HTML
 - Prohibit including `<script src="mermaid.min.js">` in PDF-destined HTML
-- `report_validator.py` check #10 will detect `.chain-wrapper`, `.mermaid-container`, or inline `<img>` existence; pure table causes validation failure
+- Canonical DecisionView renderer and browser tests must verify a real diagram
+  (`.chain-wrapper`, `.mermaid-container`, inline SVG, or local image); a pure
+  table is not an equivalent value-chain visualization.
 
 ### Post-Render Verification Checklist
 

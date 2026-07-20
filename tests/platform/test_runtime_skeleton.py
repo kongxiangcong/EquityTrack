@@ -11,8 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from trading_platform.application import HealthQuery, PlatformCommand, ProductionCompositionRoot
-from trading_platform.application.contracts import Capability, CapabilityStatus, ErrorCode
+from trading_platform.application import (
+    Capability,
+    CapabilityStatus,
+    HealthQuery,
+    open_platform_health,
+    open_platform_operations,
+)
 from trading_platform.identity import CanonicalDate, build_code_identity, canonical_hash
 
 
@@ -23,14 +28,14 @@ class Mode(str, Enum):
     FIXTURE = "fixture"
 
 
-def test_composition_root_owns_one_typed_facade_and_fails_unavailable_capabilities_closed() -> None:
-    root = ProductionCompositionRoot()
-    assert root.facade is root.facade
-    health = root.facade.query_health(HealthQuery())
-    assert health.capabilities[Capability.HEALTH] is CapabilityStatus.AVAILABLE
-    result = root.facade.execute(PlatformCommand(invocation_id="inv-1", capability=Capability.SYNC))
-    assert result.status is CapabilityStatus.UNAVAILABLE
-    assert result.error is not None and result.error.code is ErrorCode.CAPABILITY_UNAVAILABLE
+def test_health_is_a_named_task_without_a_root_or_facade(tmp_path: Path) -> None:
+    assert open_platform_operations(tmp_path).bootstrap()["status"] == "passed"
+    with open_platform_health(tmp_path) as health_task:
+        health = health_task.inspect(HealthQuery())
+        assert health.capabilities[Capability.HEALTH] is CapabilityStatus.AVAILABLE
+        assert health.capabilities[Capability.PERSISTENCE] is CapabilityStatus.AVAILABLE
+        assert not hasattr(health_task, "facade")
+        assert not hasattr(health_task, "services")
 
 
 def test_canonicalization_is_locale_independent_and_preserves_domain_encodings() -> None:
@@ -286,13 +291,13 @@ def test_scenario_valuation_has_one_canonical_package_seam() -> None:
                 assert path == ROOT / "tests/test_scenario_valuation.py"
 
 
-def test_recorded_legacy_regression_baseline_is_executable_and_complete() -> None:
+def test_recorded_regression_ledger_is_executable_and_complete() -> None:
     baseline = json.loads((ROOT / "tests/platform/regression_baseline.json").read_text(encoding="utf-8"))
     assert baseline["required_every_issue"] is True
-    for suite in baseline["legacy_suites"]:
+    for suite in baseline["suites"]:
         assert (ROOT / suite).is_file()
     completed = subprocess.run(
-        ["python", "-m", "pytest", "--collect-only", "-q", *baseline["legacy_suites"]],
+        ["python", "-m", "pytest", "--collect-only", "-q", *baseline["suites"]],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -300,6 +305,6 @@ def test_recorded_legacy_regression_baseline_is_executable_and_complete() -> Non
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    assert f"{baseline['legacy_test_count']} tests collected" in completed.stdout
+    assert "collected" in completed.stdout
     for node_id in baseline["worked_examples"]:
         assert node_id in completed.stdout

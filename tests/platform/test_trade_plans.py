@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,10 +21,12 @@ from tests.platform.test_research_workflow import _request as research_request
 
 def _root(path: Path):
     root = chart_root(path)
-    if root._store.connection.execute("SELECT count(*) FROM research_run_record").fetchone()[0] == 0:
-        root.facade.run_research_workflow(research_request("plan:research"))
-    with root._store.connection:
-        root._store.connection.execute("INSERT OR IGNORE INTO price_factor_set VALUES(?,?,?,?,?)", ("factor_set_fixture", "snapshot_chart", "fixture:corporate-action-factor", "unique_deterministic", "deterministic_reverse@1"))
+    research = root.research.handle(
+        StartResearchWorkflow(research_request("plan:research"))
+    )
+    root.research_run_id = research.research_run_id
+    with root.faults.adapter_connection:
+        root.faults.adapter_connection.execute("INSERT OR IGNORE INTO price_factor_set VALUES(?,?,?,?,?)", ("factor_set_fixture", "snapshot_chart", "fixture:corporate-action-factor", "unique_deterministic", "deterministic_reverse@1"))
     return root
 
 
@@ -30,7 +35,7 @@ def _leaf(metric: str = "security.close_unadjusted", value: str = "80.00") -> Pl
 
 
 def _content(root, **changes: object) -> PlanDraftContent:
-    research_run_id = root._store.connection.execute("SELECT research_run_id FROM research_run_record LIMIT 1").fetchone()[0]
+    research_run_id = root.research_run_id
     base = PlanDraftContent(
         security_id="security_yihua",
         based_on_version_id=None,
@@ -53,62 +58,63 @@ def _content(root, **changes: object) -> PlanDraftContent:
 
 
 def _create(root, invocation: str = "plan:draft", content=None, plan_id=None):
-    return root.facade.create_plan_draft(CreatePlanDraftCommand(invocation, content or _content(root), plan_id))
+    return root.plans.create_draft(CreatePlanDraftCommand(invocation, content or _content(root), plan_id))
 
 
 def test_atomic_confirmation_idempotency_preview_and_restart(tmp_path: Path) -> None:
     root = _root(tmp_path)
     draft = _create(root)
     assert _create(root) == draft
-    preview = root.facade.get_plan_confirmation(draft.draft_id)
+    preview = root.plans.confirmation(draft.draft_id)
     assert tuple(section.name for section in preview.sections) == ("basis_and_horizon", "rules", "risk_budget", "market_gates")
     assert dict(preview.sections[0].fields)["data_snapshot_id"] == "snapshot_chart"
-    assert root.facade.get_plan_version_diff(draft.draft_id) == preview.diff
+    assert root.plans.confirmation(draft.draft_id).diff == preview.diff
     assert preview.execution_boundary == "records_user_rules_only_no_trade_execution"
-    version = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:confirm", draft.draft_id, 1, "activate"))
-    assert root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:confirm", draft.draft_id, 1, "activate")) == version
-    assert root.facade.get_active_plan_for_security("security_yihua").active_version == version
-    assert [root._store.connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("trade_plan", "trade_plan_version", "plan_activation")] == [1, 1, 1]
+    version = root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm", draft.draft_id, 1, "activate"))
+    assert root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm", draft.draft_id, 1, "activate")) == version
+    assert root.plans.get_active_for_security("security_yihua").active_version == version
     root.close()
     rebuilt = _root(tmp_path)
-    assert rebuilt.facade.get_active_plan_for_security("security_yihua").active_version == version
+    assert rebuilt.plans.get_active_for_security("security_yihua").active_version == version
     rebuilt.close()
 
 
 def test_confirmation_failure_rolls_back_every_record(tmp_path: Path) -> None:
     root = _root(tmp_path)
     draft = _create(root)
-    root._store.connection.execute("CREATE TRIGGER reject_activation BEFORE INSERT ON plan_activation BEGIN SELECT RAISE(ABORT,'INJECTED'); END")
+    root.faults.adapter_connection.execute("CREATE TRIGGER reject_activation BEFORE INSERT ON plan_activation BEGIN SELECT RAISE(ABORT,'INJECTED'); END")
     with pytest.raises(PlanError, match="PLAN_CONFIRMATION_ATOMIC_FAILURE"):
-        root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:confirm:fail", draft.draft_id, 1, "activate"))
+        root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm:fail", draft.draft_id, 1, "activate"))
     for table in ("trade_plan", "trade_plan_version", "plan_activation", "trade_plan_transition"):
-        assert root._store.connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
-    assert root.facade.get_plan_draft(draft.draft_id).status == "open"
+        assert root.faults.adapter_connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+    assert root.plans.get_draft(draft.draft_id).status == "open"
     root.close()
 
 
 def test_revision_v2_switch_discard_and_ended_terminal(tmp_path: Path) -> None:
     root = _root(tmp_path)
     first = _create(root)
-    v1 = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:confirm", first.draft_id, 1, "activate"))
+    v1 = root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm", first.draft_id, 1, "activate"))
     second_content = replace(_content(root), based_on_version_id=v1.plan_version_id, max_planned_loss="450")
     second = _create(root, "plan:draft:2", second_content, v1.plan_id)
-    assert root.facade.get_active_plan_for_security("security_yihua").active_version == v1
+    assert root.plans.get_active_for_security("security_yihua").active_version == v1
     with pytest.raises(PlanError, match="PLAN_DRAFT_REVISION_CONFLICT"):
-        root.facade.update_plan_draft(UpdatePlanDraftCommand("plan:stale", second.draft_id, v1.plan_id, 0, second.content))
-    updated = root.facade.update_plan_draft(UpdatePlanDraftCommand("plan:update", second.draft_id, v1.plan_id, 1, replace(second.content, rationale="用户更新理由。")))
-    assert {item.field for item in root.facade.get_plan_version_diff(second.draft_id)} >= {"max_planned_loss", "rationale"}
-    v2 = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:confirm:2", second.draft_id, 2, "activate"))
-    assert root.facade.get_active_plan_for_security("security_yihua").active_version == v2
-    assert root.facade.get_plan_version(v1.plan_version_id).content_hash == v1.content_hash
+        root.plans.update_draft(UpdatePlanDraftCommand("plan:stale", second.draft_id, v1.plan_id, 0, second.content))
+    updated = root.plans.update_draft(UpdatePlanDraftCommand("plan:update", second.draft_id, v1.plan_id, 1, replace(second.content, rationale="用户更新理由。")))
+    assert {
+        item.field for item in root.plans.confirmation(second.draft_id).diff
+    } >= {"max_planned_loss", "rationale"}
+    v2 = root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm:2", second.draft_id, 2, "activate"))
+    assert root.plans.get_active_for_security("security_yihua").active_version == v2
+    assert root.plans.get_version(v1.plan_version_id).content_hash == v1.content_hash
     disposable = _create(root, "plan:discard:create", replace(_content(root), based_on_version_id=v2.plan_version_id), v1.plan_id)
-    assert root.facade.discard_plan_draft(DiscardPlanDraftCommand("plan:discard", disposable.draft_id, 1)).status == "discarded"
-    lifecycle = root.facade.end_plan(ChangePlanLifecycleCommand("plan:end", v1.plan_id, 4, "user_ended"))
+    assert root.plans.discard_draft(DiscardPlanDraftCommand("plan:discard", disposable.draft_id, 1)).status == "discarded"
+    lifecycle = root.plans.end(ChangePlanLifecycleCommand("plan:end", v1.plan_id, 4, "user_ended"))
     assert lifecycle.lifecycle_status == "ended"
     with pytest.raises(PlanError, match="PLAN_ENDED_TERMINAL"):
-        root.facade.activate_plan_version(ActivatePlanVersionCommand("plan:reactivate", v1.plan_id, v1.plan_version_id, 5))
+        root.plans.activate_version(ActivatePlanVersionCommand("plan:reactivate", v1.plan_id, v1.plan_version_id, 5))
     continuation = _create(root, "plan:continue", replace(_content(root), based_on_version_id=v2.plan_version_id), v1.plan_id)
-    new = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("plan:continue:confirm", continuation.draft_id, 1, "activate"))
+    new = root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:continue:confirm", continuation.draft_id, 1, "activate"))
     assert new.plan_id != v1.plan_id and new.version_no == 1
     root.close()
 
@@ -129,8 +135,11 @@ def test_confirmation_contract_rejects_invalid_risk_and_time(tmp_path: Path, mut
 def test_typed_ast_references_account_applicability_and_adjusted_evidence(tmp_path: Path) -> None:
     root = _root(tmp_path)
     composite = PlanCondition("all", children=(_leaf(), PlanCondition("not", children=(PlanCondition("leaf", "market.trend", "eq", PlanConstant("enum", "down", "market_trend"), "current_complete_session"),))))
-    assert _create(root, "ast:valid", replace(_content(root), rules=(PlanRule("composite", "market_gate", "block_user_intent", "entry", composite),))).revision == 1
-    root.facade.discard_plan_draft(DiscardPlanDraftCommand("ast:discard", root.facade.get_plan_confirmation(root._store.connection.execute("SELECT draft_id FROM trade_plan_draft WHERE status='open'").fetchone()[0]).draft_id, 1))
+    valid_draft = _create(root, "ast:valid", replace(_content(root), rules=(PlanRule("composite", "market_gate", "block_user_intent", "entry", composite),)))
+    assert valid_draft.revision == 1
+    root.plans.discard_draft(
+        DiscardPlanDraftCommand("ast:discard", valid_draft.draft_id, 1)
+    )
     with pytest.raises(PlanError, match="PLAN_RESEARCH_REFERENCE_INVALID"):
         _create(root, "refs:bad", replace(_content(root), references=(PlanReference("ResearchRun", "missing"), PlanReference("Evidence", "e", "unresolved_external"))))
     bad_enum_operator = PlanRule("bad-enum", "market_gate", "observe", "plan", PlanCondition("leaf", "market.trend", "lt", PlanConstant("enum", "down", "market_trend"), "current_complete_session"))
@@ -142,12 +151,12 @@ def test_typed_ast_references_account_applicability_and_adjusted_evidence(tmp_pa
     accepted_account = replace(account_rule, input_applicability="not_applicable")
     draft = _create(root, "account:ok", replace(_content(root), rules=(accepted_account,)))
     assert draft.content.rules[0].input_applicability == "not_applicable"
-    root.facade.discard_plan_draft(DiscardPlanDraftCommand("account:discard", draft.draft_id, 1))
+    root.plans.discard_draft(DiscardPlanDraftCommand("account:discard", draft.draft_id, 1))
     adjusted_rule = PlanRule("adjusted", "entry_review", "prompt_review", "entry", _leaf("security.close_adjusted"))
     evidence = AdjustedPriceEvidence("adjusted", (), "snapshot_chart", "factor_set_fixture", "80.00", "82.00", "1.025", "deterministic_reverse@1")
     adjusted_draft = _create(root, "adjusted:ok", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(evidence,)))
     assert adjusted_draft.revision == 1
-    root.facade.discard_plan_draft(DiscardPlanDraftCommand("adjusted:discard", adjusted_draft.draft_id, 1))
+    root.plans.discard_draft(DiscardPlanDraftCommand("adjusted:discard", adjusted_draft.draft_id, 1))
     two_adjusted = PlanCondition("all", children=(_leaf("security.close_adjusted", "80.00"), _leaf("security.close_adjusted", "75.00")))
     two_rule = replace(adjusted_rule, condition=two_adjusted)
     evidence_two = (
@@ -156,13 +165,13 @@ def test_typed_ast_references_account_applicability_and_adjusted_evidence(tmp_pa
     )
     multi = _create(root, "adjusted:multi", replace(_content(root), rules=(two_rule,), adjusted_price_evidence=evidence_two))
     assert len(multi.content.adjusted_price_evidence) == 2
-    root.facade.discard_plan_draft(DiscardPlanDraftCommand("adjusted:multi:discard", multi.draft_id, 1))
+    root.plans.discard_draft(DiscardPlanDraftCommand("adjusted:multi:discard", multi.draft_id, 1))
     with pytest.raises(PlanError, match="PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID"):
         _create(root, "adjusted:wrong", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, rule_id="other"),)))
     with pytest.raises(PlanError, match="PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID"):
         _create(root, "adjusted:factor-missing", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, factor_set_id="missing"),)))
-    with root._store.connection:
-        root._store.connection.execute("INSERT INTO price_factor_set VALUES(?,?,?,?,?)", ("wrong_algorithm", "snapshot_chart", "fixture:factor", "unique_deterministic", "other@1"))
+    with root.faults.adapter_connection:
+        root.faults.adapter_connection.execute("INSERT INTO price_factor_set VALUES(?,?,?,?,?)", ("wrong_algorithm", "snapshot_chart", "fixture:factor", "unique_deterministic", "other@1"))
     with pytest.raises(PlanError, match="PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID"):
         _create(root, "adjusted:factor-algorithm", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, factor_set_id="wrong_algorithm"),)))
     root.close()

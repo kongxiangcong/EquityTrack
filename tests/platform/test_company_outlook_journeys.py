@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
 import hashlib
 import json
 from dataclasses import replace
@@ -52,7 +54,7 @@ from tests.platform.test_research_workflow import CountingEngine, _root
 from tests.test_market_path_simulation import request as market_path_request
 from tests.test_scenario_valuation import cyclical_request, cyclical_resource_spec
 from tests.test_valuation_simulation import distribution, request as simulation_request
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.domain.workflow import (
     FieldSemantics,
@@ -60,6 +62,7 @@ from trading_platform.domain.workflow import (
     ResearchProjection,
     ResearchWorkflowRequest,
 )
+from trading_platform.domain.research_inputs import ResearchInputs
 from trading_platform.workflows.research import WorkflowError
 
 
@@ -101,7 +104,7 @@ def _dfd_projection() -> ResearchProjection:
     return ResearchProjection(
         manifest=manifest,
         estimates=None,
-        context=_load_dfd("research_context.json"),
+        research_inputs=ResearchInputs.from_mapping(_load_dfd("research_context.json")),
         as_of_date="2026-07-18",
         profile="standard",
         field_semantics=semantics,
@@ -1030,11 +1033,11 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
         candidate_member_ids=market_member_ids,
         market_only_member_ids=market_member_ids,
     )
-    first = root.facade.run_research_workflow(request)
-    research_run = root.facade.get_research_run_payload(first.research_run_id)
+    first = root.research.handle(StartResearchWorkflow(request))
+    research_run = root.archive.source_payload(first.research_run_id)
     assert research_run["status"] != "blocked"
     artifacts = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in first.artifact_record_ids
     )
     assert [item.artifact_kind for item in artifacts] == [
@@ -1046,12 +1049,12 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
         "MarketPathSimulation",
     ]
     assert all(item.content_hash for item in artifacts)
-    manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
+    manifest = root.archive.manifest(first.final_manifest_id)
     assert [member["member_role"] for member in manifest.members] == [
         "decision_view_json",
         "decision_view_html",
     ]
-    view = root.facade.get_workspace(
+    view = root.workspace.build(
         "security_yihua",
         first.research_snapshot_id,
     )["research_views"][0]
@@ -1078,17 +1081,17 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     hashes = tuple(item.content_hash for item in artifacts)
     root.close()
 
-    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    replay = rebuilt.facade.run_research_workflow(replace(request, invocation_id="journey:yihua:replay"))
+    rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
+    replay = rebuilt.research.handle(StartResearchWorkflow(replace(request, invocation_id="journey:yihua:replay")))
     replayed = tuple(
-        rebuilt.facade.get_research_artifact(record_id)
+        rebuilt.archive.artifact(record_id)
         for record_id in replay.artifact_record_ids
     )
     assert replay.research_run_id == first.research_run_id
     assert replay.research_snapshot_id == first.research_snapshot_id
     assert replay.artifact_record_ids == first.artifact_record_ids
     assert tuple(item.content_hash for item in replayed) == hashes
-    replay_manifest = rebuilt.facade.get_artifact_manifest(replay.final_manifest_id)
+    replay_manifest = rebuilt.archive.manifest(replay.final_manifest_id)
     assert [item["member_role"] for item in replay_manifest.members] == [
         item["member_role"] for item in manifest.members
     ]
@@ -1099,7 +1102,7 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     assert replay.json_artifact_id != first.json_artifact_id
     assert replay.html_artifact_id != first.html_artifact_id
     assert (
-        rebuilt.facade.get_workflow_history(replay.workflow_run_id).final_manifest_id
+        rebuilt.inspection.inspect(replay.workflow_run_id).final_manifest_id
         == replay.final_manifest_id
     )
     rebuilt.close()
@@ -1170,8 +1173,8 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
     assert simulation.payload["contributions"]
 
     engine = CountingEngine()
-    root = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    root.facade.add_watchlist_item(
+    root = PlatformTaskFixture(tmp_path, research_engine=engine)
+    root.watchlist.add(
         "watch:security_duofuduo",
         SecurityIdentity("security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"),
     )
@@ -1193,9 +1196,9 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
         candidate_member_ids=market_member_ids,
         market_only_member_ids=market_member_ids,
     )
-    first = root.facade.run_research_workflow(request)
+    first = root.research.handle(StartResearchWorkflow(request))
     published = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in first.artifact_record_ids
     )
     assert [item.artifact_kind for item in published] == [
@@ -1207,9 +1210,9 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
         "MarketPathSimulation",
     ]
     assert all(item.content_hash for item in published)
-    research_run = root.facade.get_research_run_payload(first.research_run_id)
+    research_run = root.archive.source_payload(first.research_run_id)
     assert research_run["status"] != "blocked"
-    view = root.facade.get_workspace(
+    view = root.workspace.build(
         "security_duofuduo",
         first.research_snapshot_id,
     )["research_views"][0]
@@ -1220,23 +1223,21 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
     assert view["value_market_divergence"]["status"] == "not_comparable"
     assert view["audit"]["permissions"]["formal_per_share_valuation"] is False
     assert not any(term in json.dumps(view, ensure_ascii=False) for term in FORBIDDEN)
-    manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
+    manifest = root.archive.manifest(first.final_manifest_id)
     hashes = tuple(item.content_hash for item in published)
     root.close()
 
-    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    replay = rebuilt.facade.run_research_workflow(
-        replace(request, invocation_id="journey:dfd:replay")
-    )
+    rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
+    replay = rebuilt.research.handle(StartResearchWorkflow(replace(request, invocation_id="journey:dfd:replay")))
     replayed = tuple(
-        rebuilt.facade.get_research_artifact(record_id)
+        rebuilt.archive.artifact(record_id)
         for record_id in replay.artifact_record_ids
     )
     assert replay.research_run_id == first.research_run_id
     assert replay.research_snapshot_id == first.research_snapshot_id
     assert replay.artifact_record_ids == first.artifact_record_ids
     assert tuple(item.content_hash for item in replayed) == hashes
-    replay_manifest = rebuilt.facade.get_artifact_manifest(
+    replay_manifest = rebuilt.archive.manifest(
         replay.final_manifest_id
     )
     assert [item["member_role"] for item in replay_manifest.members] == [
@@ -1275,8 +1276,8 @@ def test_duofuduo_calibration_vectors_are_recomputed_from_raw_rows() -> None:
 def test_public_facade_does_not_trust_artifact_calibration_tolerance(
     tmp_path: Path,
 ) -> None:
-    root = ProductionCompositionRoot(tmp_path, research_engine=CountingEngine())
-    root.facade.add_watchlist_item(
+    root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
+    root.watchlist.add(
         "watch:security_duofuduo",
         SecurityIdentity(
             "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
@@ -1306,7 +1307,7 @@ def test_public_facade_does_not_trust_artifact_calibration_tolerance(
         analysis_artifacts=(*drafts[:-1], tampered),
     )
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
+        root.research.handle(StartResearchWorkflow(request))
     assert caught.value.code == "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED"
     root.close()
 
@@ -1315,8 +1316,8 @@ def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
     tmp_path: Path,
 ) -> None:
     engine = CountingEngine()
-    root = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    root.facade.add_watchlist_item(
+    root = PlatformTaskFixture(tmp_path, research_engine=engine)
+    root.watchlist.add(
         "watch:security_duofuduo",
         SecurityIdentity(
             "security_duofuduo",
@@ -1341,7 +1342,7 @@ def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
         analysis_artifacts=_market_path_drafts()[:4],
     )
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
+        root.research.handle(StartResearchWorkflow(request))
     assert caught.value.code == "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED"
     root.close()
 
@@ -1371,7 +1372,7 @@ def test_public_facade_rejects_deleted_calibration_kind(tmp_path: Path) -> None:
         (*drafts[:-1], tampered),
     )
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
+        root.research.handle(StartResearchWorkflow(request))
     assert caught.value.code == "RESEARCH_ANALYSIS_SOURCE_GATE_FAILED"
     root.close()
 
@@ -1379,8 +1380,8 @@ def test_public_facade_rejects_deleted_calibration_kind(tmp_path: Path) -> None:
 def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
     tmp_path: Path,
 ) -> None:
-    root = ProductionCompositionRoot(tmp_path, research_engine=CountingEngine())
-    root.facade.add_watchlist_item(
+    root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
+    root.watchlist.add(
         "watch:security_duofuduo",
         SecurityIdentity(
             "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
@@ -1411,7 +1412,7 @@ def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
         analysis_artifacts=(*drafts[:-1], tampered),
     )
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(request)
+        root.research.handle(StartResearchWorkflow(request))
     assert caught.value.code == "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED"
     root.close()
 
@@ -1419,8 +1420,8 @@ def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
 def test_public_facade_revalidates_forged_sufficient_result(
     tmp_path: Path,
 ) -> None:
-    root = ProductionCompositionRoot(tmp_path, research_engine=CountingEngine())
-    root.facade.add_watchlist_item(
+    root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
+    root.watchlist.add(
         "watch:security_duofuduo",
         SecurityIdentity(
             "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
@@ -1437,8 +1438,8 @@ def test_public_facade_revalidates_forged_sufficient_result(
         projection=replace(base, source_manifest_validation_result=forged),
         analysis_artifacts=_dfd_analysis_drafts()[:3],
     )
-    result = root.facade.run_research_workflow(request)
-    view = root.facade.get_workspace(
+    result = root.research.handle(StartResearchWorkflow(request))
+    view = root.workspace.build(
         "security_duofuduo",
         result.research_snapshot_id,
     )["research_views"][0]

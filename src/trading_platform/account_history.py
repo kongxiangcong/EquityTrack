@@ -110,7 +110,6 @@ class AccountHistoryImportService:
         )
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
-            self._migrate(store)
             if (
                 store.connection.execute(
                     "SELECT 1 FROM account WHERE account_id=?", (account_id,)
@@ -748,17 +747,5 @@ class AccountHistoryImportService:
                 time.sleep(0.05)
         if actual != expected:
             raise HistoryImportError("SOURCE_OBJECT_PUBLISH_MISMATCH")
-
-    @staticmethod
-    def _migrate(store):
-        for retry in range(40):
-            try:
-                store.migrate()
-                return
-            except PersistenceError as error:
-                if error.code != "RUNTIME_BUSY" or retry == 39:
-                    raise
-                time.sleep(0.05)
-
 
 __all__ = ["AccountHistoryImportService", "HistoryImportError", "HistoryImportResult"]

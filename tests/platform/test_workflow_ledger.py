@@ -1,3 +1,5 @@
+from trading_platform.application.contracts import StartResearchWorkflow
+
 import hashlib
 import ast
 from pathlib import Path
@@ -179,17 +181,17 @@ def test_concurrent_writer_fails_closed_with_stable_busy_code(tmp_path) -> None:
 
 def test_scoped_audit_detects_corrupt_workflow_object(tmp_path) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("ledger:audit"))
-    row = root._store.connection.execute(
+    result = root.research.handle(StartResearchWorkflow(_request("ledger:audit")))
+    row = root.faults.adapter_connection.execute(
         "SELECT o.relative_path FROM workflow_run_ref r "
         "JOIN artifact_manifest_member m ON m.artifact_manifest_id=r.ref_id "
         "JOIN artifact a USING(artifact_id) JOIN object_blob o ON o.sha256=a.object_sha256 "
         "WHERE r.workflow_run_id=? AND r.ref_role='final_manifest' LIMIT 1",
         (result.workflow_run_id,),
     ).fetchone()
-    (root._store.data_root / row["relative_path"]).write_bytes(b"corrupt")
+    root.faults.corrupt_object(row["relative_path"], b"corrupt")
 
-    report = root._store.workflow_ledger.audit_integrity(
+    report = root.faults.workflow_ledger.audit_integrity(
         IntegrityScope(result.workflow_run_id)
     )
 

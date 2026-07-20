@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.chart import AnnotationError
 from trading_platform.domain.chart import AnnotationAnchor, AnnotationCommand, AnnotationDraft, AnnotationLink, CoordinateMigration
@@ -17,10 +17,10 @@ from trading_platform.web_server import LocalChartWorkspaceServer
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _root(path: Path) -> ProductionCompositionRoot:
-    root = ProductionCompositionRoot(path)
-    root.facade.add_watchlist_item("watch:yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
-    connection = root._store.connection
+def _root(path: Path) -> PlatformTaskFixture:
+    root = PlatformTaskFixture(path)
+    root.watchlist.add("watch:yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
+    connection = root.faults.adapter_connection
     if connection.execute("SELECT count(*) FROM data_snapshot WHERE data_snapshot_id='snapshot_chart'").fetchone()[0] == 0:
         with connection:
             connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_chart", "chart-fixture", "fixture", "fixture@1", "daily", "derived-fact-fixture", "fixture", "urn:test:chart", "{}", "{}", "timestamp", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"))
@@ -42,45 +42,45 @@ def _draft(price: str = "82.3300") -> AnnotationDraft:
 
 def test_chart_query_exposes_versioned_unadjusted_series_and_freshness(tmp_path: Path) -> None:
     root = sync_root(tmp_path)
-    snapshot = root.facade.sync_data(sync_request())
-    series = root.facade.get_chart_series("security_yihua", snapshot.snapshot_id)
+    snapshot = root.data.sync(sync_request())
+    series = root.chart.get_series("security_yihua", snapshot.snapshot_id)
     assert series.adjustment_mode == "none" and series.factor_snapshot_id is None
     assert series.data_snapshot_id == snapshot.snapshot_id and series.effective_session_date == "2026-07-10"
     assert series.freshness == "valid" and [bar.close_decimal for bar in series.bars] == ["82.33"]
     with pytest.raises(AnnotationError, match="CHART_MAPPING_UNAVAILABLE"):
-        root.facade.get_chart_series("security_yihua", snapshot.snapshot_id, "1w")
+        root.chart.get_series("security_yihua", snapshot.snapshot_id, "1w")
     root.close()
 
 
 def test_annotation_append_only_lifecycle_idempotency_and_restart(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    v1 = root.facade.create_annotation(AnnotationCommand("annotation:create", None, 0, _draft()))
-    assert root.facade.create_annotation(AnnotationCommand("annotation:create", None, 0, _draft())) == v1
+    v1 = root.chart.create(AnnotationCommand("annotation:create", None, 0, _draft()))
+    assert root.chart.create(AnnotationCommand("annotation:create", None, 0, _draft())) == v1
     equivalent = replace(_draft("82.33"), anchors=(AnnotationAnchor("2026-07-10T07:00:00Z", "82.33"),))
-    assert root.facade.create_annotation(AnnotationCommand("annotation:create", None, 0, equivalent)) == v1
-    v2 = root.facade.revise_annotation(AnnotationCommand("annotation:revise", v1.annotation_id, 1, _draft("83.1250")))
-    v3 = root.facade.delete_annotation(AnnotationCommand("annotation:delete", v1.annotation_id, 2))
-    v4 = root.facade.restore_annotation(AnnotationCommand("annotation:restore", v1.annotation_id, 3))
-    assert root.facade.revise_annotation(AnnotationCommand("annotation:revise", v1.annotation_id, 1, _draft("83.1250"))) == v2
+    assert root.chart.create(AnnotationCommand("annotation:create", None, 0, equivalent)) == v1
+    v2 = root.chart.revise(AnnotationCommand("annotation:revise", v1.annotation_id, 1, _draft("83.1250")))
+    v3 = root.chart.delete(AnnotationCommand("annotation:delete", v1.annotation_id, 2))
+    v4 = root.chart.restore(AnnotationCommand("annotation:restore", v1.annotation_id, 3))
+    assert root.chart.revise(AnnotationCommand("annotation:revise", v1.annotation_id, 1, _draft("83.1250"))) == v2
     with pytest.raises(AnnotationError, match="INVOCATION_CONFLICT"):
-        root.facade.delete_annotation(AnnotationCommand("annotation:revise", v1.annotation_id, 4))
-    assert [item.status for item in root.facade.get_annotation_history(v1.annotation_id)] == ["active", "active", "deleted", "active"]
-    assert [item.version_no for item in root.facade.get_annotation_history(v1.annotation_id)] == [1, 2, 3, 4]
+        root.chart.delete(AnnotationCommand("annotation:revise", v1.annotation_id, 4))
+    assert [item.status for item in root.chart.get_history(v1.annotation_id)] == ["active", "active", "deleted", "active"]
+    assert [item.version_no for item in root.chart.get_history(v1.annotation_id)] == [1, 2, 3, 4]
     assert v2.supersedes_version_id == v1.annotation_version_id and v4.draft.anchors[0].exact_price_decimal == "83.1250"
     with pytest.raises(Exception, match="ANNOTATION_HISTORY_IMMUTABLE"):
-        root._store.connection.execute("DELETE FROM chart_annotation_version WHERE annotation_version_id=?", (v1.annotation_version_id,))
+        root.faults.adapter_connection.execute("DELETE FROM chart_annotation_version WHERE annotation_version_id=?", (v1.annotation_version_id,))
     with pytest.raises(Exception, match="ANNOTATION_IDENTITY_IMMUTABLE"):
-        root._store.connection.execute("UPDATE chart_annotation SET security_id='other' WHERE annotation_id=?", (v1.annotation_id,))
+        root.faults.adapter_connection.execute("UPDATE chart_annotation SET security_id='other' WHERE annotation_id=?", (v1.annotation_id,))
     with pytest.raises(Exception, match="ANNOTATION_IDENTITY_IMMUTABLE"):
-        root._store.connection.execute("DELETE FROM chart_annotation WHERE annotation_id=?", (v1.annotation_id,))
+        root.faults.adapter_connection.execute("DELETE FROM chart_annotation WHERE annotation_id=?", (v1.annotation_id,))
     with pytest.raises(Exception, match="ANNOTATION_HISTORY_IMMUTABLE"):
-        root._store.connection.execute("INSERT INTO chart_annotation_anchor VALUES(?,?,?,?)", (v1.annotation_version_id, 7, "2026-07-10T15:00:00+08:00", "90"))
+        root.faults.adapter_connection.execute("INSERT INTO chart_annotation_anchor VALUES(?,?,?,?)", (v1.annotation_version_id, 7, "2026-07-10T15:00:00+08:00", "90"))
     with pytest.raises(Exception, match="ANNOTATION_LINEAGE_INVALID"):
-        root._store.connection.execute("INSERT INTO chart_annotation_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("invalid_lineage", v1.annotation_id, 5, v1.annotation_version_id, "active", "1d", "none", "snapshot_chart", None, "horizontal_line", "accent", "local-user", "2026-07-10T00:00:00Z", "invalid"))
+        root.faults.adapter_connection.execute("INSERT INTO chart_annotation_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("invalid_lineage", v1.annotation_id, 5, v1.annotation_version_id, "active", "1d", "none", "snapshot_chart", None, "horizontal_line", "accent", "local-user", "2026-07-10T00:00:00Z", "invalid"))
     root.close()
 
     rebuilt = _root(tmp_path)
-    restored = rebuilt.facade.get_annotation_history(v1.annotation_id)
+    restored = rebuilt.chart.get_history(v1.annotation_id)
     assert restored[-1] == v4
     assert restored[0].draft.interval == "1d" and restored[0].draft.adjustment_mode == "none"
     assert restored[0].draft.data_snapshot_id == "snapshot_chart" and restored[0].draft.links[0].link_id == "rr_fixture"
@@ -89,29 +89,29 @@ def test_annotation_append_only_lifecycle_idempotency_and_restart(tmp_path: Path
 
 def test_concurrency_validation_and_coordinate_migration_fail_closed(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    v1 = root.facade.create_annotation(AnnotationCommand("annotation:create", None, 0, _draft()))
+    v1 = root.chart.create(AnnotationCommand("annotation:create", None, 0, _draft()))
     with pytest.raises(AnnotationError, match="ANNOTATION_VERSION_CONFLICT"):
-        root.facade.revise_annotation(AnnotationCommand("annotation:stale", v1.annotation_id, 0, _draft("90")))
+        root.chart.revise(AnnotationCommand("annotation:stale", v1.annotation_id, 0, _draft("90")))
     with pytest.raises(AnnotationError):
-        root.facade.revise_annotation(AnnotationCommand("annotation:frame-change", v1.annotation_id, 1, replace(_draft("90"), interval="1w")))
+        root.chart.revise(AnnotationCommand("annotation:frame-change", v1.annotation_id, 1, replace(_draft("90"), interval="1w")))
     with pytest.raises(AnnotationError, match="ANNOTATION_NON_TRADING_ANCHOR"):
-        root.facade.revise_annotation(AnnotationCommand("annotation:non-trading", v1.annotation_id, 1, replace(_draft("90"), anchors=(AnnotationAnchor("2026-07-11T15:00:00+08:00", "90"),))))
+        root.chart.revise(AnnotationCommand("annotation:non-trading", v1.annotation_id, 1, replace(_draft("90"), anchors=(AnnotationAnchor("2026-07-11T15:00:00+08:00", "90"),))))
     with pytest.raises(AnnotationError):
-        root.facade.revise_annotation(AnnotationCommand("annotation:cross-security", v1.annotation_id, 1, replace(_draft("90"), security_id="security_other")))
-    unresolved = root.facade.migrate_annotation_coordinates(CoordinateMigration("annotation:migrate-bad", v1.annotation_id, 1, "1w", "none", "snapshot_chart", None, {}))
+        root.chart.revise(AnnotationCommand("annotation:cross-security", v1.annotation_id, 1, replace(_draft("90"), security_id="security_other")))
+    unresolved = root.chart.migrate(CoordinateMigration("annotation:migrate-bad", v1.annotation_id, 1, "1w", "none", "snapshot_chart", None, {}))
     assert unresolved.status == "unresolved_requires_confirmation"
-    assert root.facade.get_annotation_history(v1.annotation_id) == (v1,)
-    cross_period = root.facade.migrate_annotation_coordinates(CoordinateMigration("annotation:migrate", v1.annotation_id, 1, "1w", "none", "snapshot_chart", None, {"2026-07-10T15:00:00+08:00": AnnotationAnchor("2026-07-06T00:00:00+08:00", "82.3300")}))
+    assert root.chart.get_history(v1.annotation_id) == (v1,)
+    cross_period = root.chart.migrate(CoordinateMigration("annotation:migrate", v1.annotation_id, 1, "1w", "none", "snapshot_chart", None, {"2026-07-10T15:00:00+08:00": AnnotationAnchor("2026-07-06T00:00:00+08:00", "82.3300")}))
     assert cross_period.status == "unresolved_requires_confirmation"
-    assert root.facade.get_annotation_history(v1.annotation_id) == (v1,)
-    altered = root.facade.migrate_annotation_coordinates(CoordinateMigration("annotation:migrate-altered", v1.annotation_id, 1, "1d", "none", "snapshot_chart", None, {"2026-07-10T15:00:00+08:00": AnnotationAnchor("2026-07-10T15:00:00+08:00", "99.00")}))
-    assert altered.status == "unresolved_requires_confirmation" and root.facade.get_annotation_history(v1.annotation_id) == (v1,)
+    assert root.chart.get_history(v1.annotation_id) == (v1,)
+    altered = root.chart.migrate(CoordinateMigration("annotation:migrate-altered", v1.annotation_id, 1, "1d", "none", "snapshot_chart", None, {"2026-07-10T15:00:00+08:00": AnnotationAnchor("2026-07-10T15:00:00+08:00", "99.00")}))
+    assert altered.status == "unresolved_requires_confirmation" and root.chart.get_history(v1.annotation_id) == (v1,)
     root.close()
 
 
 def test_local_workspace_http_reload_and_server_restart_restore_sqlite_state(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    server = LocalChartWorkspaceServer(root.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+    server = LocalChartWorkspaceServer(root.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
     base = server.start()
     html = urlopen(base).read().decode()
     token = html.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
@@ -132,7 +132,7 @@ def test_local_workspace_http_reload_and_server_restart_restore_sqlite_state(tmp
     server.close(); root.close()
 
     rebuilt = _root(tmp_path)
-    restarted = LocalChartWorkspaceServer(rebuilt.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+    restarted = LocalChartWorkspaceServer(rebuilt.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
     second_base = restarted.start()
     restored = json.loads(urlopen(second_base + "/api/annotations").read())
     assert restored[-1]["annotation_id"] == created["annotation_id"] and restored[-1]["draft"]["anchors"][0]["exact_price_decimal"] == "83.1250"
@@ -152,6 +152,6 @@ def test_local_workspace_http_reload_and_server_restart_restore_sqlite_state(tmp
 def test_annotation_rejects_library_private_or_invalid_domain_state(tmp_path: Path, draft: AnnotationDraft) -> None:
     root = _root(tmp_path)
     with pytest.raises(AnnotationError):
-        root.facade.create_annotation(AnnotationCommand("invalid:" + draft.kind + draft.adjustment_mode + draft.anchors[0].market_timestamp, None, 0, draft))
-    assert root._store.connection.execute("SELECT count(*) FROM chart_annotation_version").fetchone()[0] == 0
+        root.chart.create(AnnotationCommand("invalid:" + draft.kind + draft.adjustment_mode + draft.anchors[0].market_timestamp, None, 0, draft))
+    assert root.faults.adapter_connection.execute("SELECT count(*) FROM chart_annotation_version").fetchone()[0] == 0
     root.close()

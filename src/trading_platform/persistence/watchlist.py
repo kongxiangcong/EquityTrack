@@ -9,7 +9,7 @@ from trading_platform.identity import canonical_hash
 from .locking import DataRootWriterLock, PersistenceError
 
 
-class WatchlistRepository:
+class SQLiteWatchlist:
     def __init__(self, connection: sqlite3.Connection, writer_lock: DataRootWriterLock) -> None:
         self.connection = connection
         self.writer_lock = writer_lock

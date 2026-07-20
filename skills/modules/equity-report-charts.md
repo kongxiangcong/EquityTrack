@@ -331,7 +331,7 @@ After the HTML is assembled, run:
 python scripts/embed_charts.py count --html outputs/report.html
 ```
 
-It counts `data:image/svg+xml;base64,` occurrences. Required minimum for Equity Report: **≥ 3** (this is enforced by QA check A23 in `report-qa.md`). Charts that failed to generate must be logged, not silently dropped.
+It counts `data:image/svg+xml;base64,` occurrences. Required minimum for Equity Report: **≥ 3**. Charts that failed to generate must be logged, not silently dropped. Formal platform output acceptance uses the canonical DecisionView and project verification command; this legacy chart helper is not a runtime validator.
 
 ### Placement — Which chart goes where
 

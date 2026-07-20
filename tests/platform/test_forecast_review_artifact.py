@@ -1,3 +1,5 @@
+from trading_platform.application.contracts import StartResearchWorkflow
+
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -16,7 +18,7 @@ from tests.platform.test_outlook_artifacts import _request
 from tests.platform.test_research_workflow import CountingEngine, _root
 from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash
 from tests.platform.test_valuation_simulation_artifact import _simulation_drafts
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 
 
 def review_request(artifacts) -> ForecastReviewRequest:
@@ -121,8 +123,8 @@ def review_request(artifacts) -> ForecastReviewRequest:
 
 def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
     actual = request.actual_evidence[0]
-    with root._store.connection:
-        root._store.connection.execute(
+    with root.faults.adapter_connection:
+        root.faults.adapter_connection.execute(
             "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 request.review_data_snapshot_id,
@@ -148,7 +150,7 @@ def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
                 "2027-03-20T09:00:00+08:00",
             ),
         )
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "attempt_forecast_actual_2026",
@@ -173,7 +175,7 @@ def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
                 "not_applicable",
             ),
         )
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "INSERT INTO normalized_record VALUES(?,?,?)",
             (
                 "record_forecast_actual_revenue_2026",
@@ -181,7 +183,7 @@ def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
                 "security_yihua:components.volume.2026E:2026FY",
             ),
         )
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 actual.normalized_version_id,
@@ -199,7 +201,7 @@ def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
                 None,
             ),
         )
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "INSERT INTO data_snapshot_member VALUES(?,?,?,?)",
             (
                 request.review_data_snapshot_id,
@@ -215,18 +217,16 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
 ) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
-    run = root.facade.run_research_workflow(
-        _request("forecast-review:parents", _simulation_drafts())
-    )
+    run = root.research.handle(StartResearchWorkflow(_request("forecast-review:parents", _simulation_drafts())))
     parents = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in run.artifact_record_ids
     )
     request = review_request(parents)
     persist_review_snapshot(root, request)
 
-    first = root.facade.review_forecast(request)
-    replay = root.facade.review_forecast(request)
+    first = root.forecast_review.review(request)
+    replay = root.forecast_review.review(request)
 
     assert replay.artifact_record_id == first.artifact_record_id
     assert first.artifact_kind == "ForecastReview"
@@ -242,11 +242,11 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     assert first.payload["calibration_version"]["new_model_identity"] == (
         request.new_model_identity
     )
-    assert root.facade.get_research_artifact(first.artifact_record_id) == first
-    assert root.facade.get_research_artifact(
+    assert root.archive.artifact(first.artifact_record_id) == first
+    assert root.archive.artifact(
         run.artifact_record_ids[-1]
     ).content_hash == parents[-1].content_hash
-    history = root.facade.get_workflow_history(run.workflow_run_id)
+    history = root.inspection.inspect(run.workflow_run_id)
     review_manifest = next(
         item["ref_id"]
         for item in history.refs
@@ -254,9 +254,9 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     )
     assert [
         item["member_role"]
-        for item in root.facade.get_artifact_manifest(review_manifest).members
+        for item in root.archive.manifest(review_manifest).members
     ] == ["forecast", "valuation", "simulation", "forecast_review"]
-    workspace = root.facade.get_workspace(
+    workspace = root.workspace.build(
         "security_yihua",
         run.research_snapshot_id,
     )
@@ -269,11 +269,11 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     )
     root.close()
 
-    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    restored = rebuilt.facade.get_research_artifact(first.artifact_record_id)
+    rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
+    restored = rebuilt.archive.artifact(first.artifact_record_id)
     assert restored.content_hash == first.content_hash
     assert (
-        rebuilt.facade.get_workspace(
+        rebuilt.workspace.build(
             "security_yihua",
             run.research_snapshot_id,
         )["forecast_reviews"][0]["artifact_record_id"]
@@ -290,28 +290,26 @@ def test_review_database_failure_leaves_no_partial_graph_or_manifest(
         CountingEngine(),
         CrashAt("forecast_review.before_commit"),
     )
-    result = root.facade.run_research_workflow(
-        _request("forecast-review:rollback", _simulation_drafts())
-    )
+    result = root.research.handle(StartResearchWorkflow(_request("forecast-review:rollback", _simulation_drafts())))
     parents = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in result.artifact_record_ids
     )
     request = review_request(parents)
     persist_review_snapshot(root, request)
 
     with pytest.raises(InjectedCrash):
-        root.facade.review_forecast(request)
+        root.forecast_review.review(request)
 
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM research_artifact_record "
         "WHERE artifact_kind='ForecastReview'"
     ).fetchone()[0] == 0
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM artifact_manifest "
         "WHERE manifest_role='forecast_review_append'"
     ).fetchone()[0] == 0
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM workflow_run_ref "
         "WHERE ref_role LIKE 'forecast_review_%'"
     ).fetchone()[0] == 0
@@ -319,22 +317,20 @@ def test_review_database_failure_leaves_no_partial_graph_or_manifest(
 
 def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
-    run = root.facade.run_research_workflow(
-        _request("forecast-review:invalid", _simulation_drafts())
-    )
+    run = root.research.handle(StartResearchWorkflow(_request("forecast-review:invalid", _simulation_drafts())))
     parents = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in run.artifact_record_ids
     )
     valid = review_request(parents)
     persist_review_snapshot(root, valid)
 
     with pytest.raises(ValueError, match="FORECAST_REVIEW_PARENT_LINEAGE_INVALID"):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(valid, forecast_source_identity="forged-forecast")
         )
     with pytest.raises(ValueError, match="FORECAST_REVIEW_TARGET_LINEAGE_INVALID"):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 numeric_targets=(
@@ -349,7 +345,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         ValueError,
         match="FORECAST_REVIEW_EVIDENCE_LINEAGE_INVALID",
     ):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 actual_evidence=(
@@ -361,7 +357,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         ValueError,
         match="FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID",
     ):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 previous_model_identity="fabricated-model@0",
@@ -390,7 +386,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         ValueError,
         match="FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID",
     ):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 calibration_changes=(fabricated_assumption,),
@@ -417,7 +413,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         ValueError,
         match="FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID",
     ):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 calibration_changes=(wrong_unit,),
@@ -444,7 +440,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         ValueError,
         match="FORECAST_REVIEW_CALIBRATION_LINEAGE_INVALID",
     ):
-        root.facade.review_forecast(
+        root.forecast_review.review(
             replace(
                 valid,
                 calibration_changes=(out_of_bounds,),

@@ -13,7 +13,7 @@ from .models import (
     EvidenceClaim,
     ResearchSynthesis,
 )
-from .research_inputs import ResearchInputs
+from trading_platform.domain.research_inputs import ResearchInputs
 
 
 DIMENSION_SPECS = (
@@ -49,7 +49,6 @@ class NarrativeInputs:
         )
 
 
-LegacyNarrativeInputs = NarrativeInputs
 
 
 def _has_unbound_number(text: str) -> bool:
@@ -229,7 +228,7 @@ def _resolve_evidence(
 
 def _analysis_bundle(
     book: EvidenceBook,
-    inputs: LegacyNarrativeInputs,
+    inputs: NarrativeInputs,
 ) -> AnalysisBundle:
     raw_dimensions = inputs.analyses
     dimensions: dict[str, AnalysisResult] = {}
@@ -449,7 +448,7 @@ def _synthesis(
 
 def build_professional_narrative(
     book: EvidenceBook,
-    inputs: LegacyNarrativeInputs,
+    inputs: NarrativeInputs,
 ) -> tuple[AnalysisBundle, DebateResult | None, ResearchSynthesis | None, str]:
     bundle = _analysis_bundle(book, inputs)
     if bundle.completeness == "legacy":

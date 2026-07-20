@@ -1,11 +1,7 @@
 # Source Manifest Schema
 
-> The manifest format remains useful for legacy ingestion and evidence
-> collection. Formal platform authority is the frozen ResearchProjection /
-> DataSnapshot plus typed artifact invariants; the standalone validator is a
-> compatibility utility.
-
-The active research workflow uses `source_manifest_version: 2`. Version 1 remains supported for legacy report gates.
+> The active manifest contract is version 2. Formal platform authority is the
+> frozen ResearchProjection / DataSnapshot plus typed artifact invariants.
 
 This file defines the minimum source manifest required before an equity research output can contain valuation conclusions.
 
@@ -16,7 +12,7 @@ The manifest may be written as Markdown, YAML, or JSON, but it must preserve the
 ## Manifest Schema
 
 ```yaml
-source_manifest_version: 1
+source_manifest_version: 2
 company:
   name:
   ticker:
@@ -108,20 +104,6 @@ The following must be `source_id` covered or explicitly `missing`:
 For version 2, declared or uncovered critical fields limit only the capabilities and methods that depend on them. The standalone validator returns `passed: true` with `source_manifest_status: valid_with_limits`; `limitations.missing_critical_fields` records the exact gaps. ResearchEngine then determines `completed_with_limits`, method blocks, and output permissions.
 
 Integrity failures remain global failures: invalid identity or time metadata, malformed numeric evidence, broken raw hashes when supplied, unresolved source conflicts, or provenance classification conflicts return `passed: false` and fail closed.
-
-## Version 1 Data Insufficient Memo Trigger
-
-For version 1 legacy gates, set `source_manifest_status = insufficient` and produce `data_insufficient_memo` when:
-
-- Latest critical financial statements lack official-source coverage.
-- Per-share valuation bridge fields are missing.
-- Selected valuation method inputs are missing.
-- Required tool/API access fails and no official fallback is available.
-- Source conflicts remain unresolved for critical fields.
-
-When this trigger fires, the skill must not output target price, rating, buy/sell advice, or probability-weighted target.
-
----
 
 ## Executable Validation
 

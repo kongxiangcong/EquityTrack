@@ -1,6 +1,6 @@
 # Equity Report — Phase 4: Visual Design + Report Generation
 
-> Historical pre-V3 layout reference. The current workflow renders HTML through `src/equity_research/professional_report.py` and does not load this file.
+> Historical layout reference only. The current workflow projects persisted `ResearchDecisionView@2` bytes through `trading_platform.research_presentation` and does not load this file.
 > All paths are relative to the skill root directory.
 >
 > **Task 3 Note**: All analytical content comes from the Task 1 Research Document and Task 2 Valuation Analysis.

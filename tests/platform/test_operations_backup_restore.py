@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 import hashlib
 import json
 import os
@@ -28,7 +31,7 @@ from trading_platform.application.workflow_ledger import GenericObjectCommit, In
 from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.persistence.presence import RuntimePresence
-from trading_platform.cli import _load_sync_job
+from trading_platform.provider_config import load_sync_job
 
 
 def test_backup_restore_new_root_preserves_database_objects_and_history(
@@ -36,7 +39,7 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    before = root.facade.get_workspace("security_yihua", "snapshot_chart")
+    before = root.workspace.build("security_yihua", "snapshot_chart")
     root.close()
     archive = tmp_path / "backups" / "platform-backup.zip"
     backup = PlatformOperations(live).backup(archive)
@@ -46,10 +49,10 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
     assert report["status"] == "succeeded" and report["doctor_status"] == "passed"
     rebuilt = _root(restored)
     assert (
-        rebuilt.facade.get_workspace("security_yihua", "snapshot_chart")["task"]
+        rebuilt.workspace.build("security_yihua", "snapshot_chart")["task"]
         == before["task"]
     )
-    assert rebuilt._store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
+    assert rebuilt.faults.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
     rebuilt.close()
     assert (restored / "restore-report.json").is_file()
 
@@ -67,7 +70,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    root._store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"backup-object"))
+    root.faults.workflow_ledger.commit_artifacts(GenericObjectCommit(b"backup-object"))
     root.close()
     operations = PlatformOperations(live)
     archive = tmp_path / "immutable.zip"
@@ -113,15 +116,15 @@ def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruptio
         live, CountingEngine(), CrashAt("workflow.final_manifest_committed")
     )
     with pytest.raises(InjectedCrash):
-        root.facade.run_research_workflow(research_request("operations:maintenance"))
-    run_id = root._store.connection.execute(
+        root.research.handle(StartResearchWorkflow(research_request("operations:maintenance")))
+    run_id = root.faults.adapter_connection.execute(
         "SELECT workflow_run_id FROM workflow_run LIMIT 1"
     ).fetchone()[0]
-    root._store.connection.execute(
+    root.faults.adapter_connection.execute(
         "UPDATE workflow_run SET status=?,completed_at=NULL,lease_expires_at='2999-01-01T00:00:00+00:00' WHERE workflow_run_id=?",
         (nonterminal_status, run_id),
     )
-    root._store.connection.commit()
+    root.faults.adapter_connection.commit()
     root.close()
     with pytest.raises(OperationError, match="MIGRATION_WORKFLOW_NOT_TERMINAL"):
         PlatformOperations(live).migrate()
@@ -354,7 +357,19 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
                     "source_identity": "configured-provider",
                     "terms_profile": "configured",
                 },
-                "request": {},
+                "request": {
+                    "invocation_id": "missing-credential",
+                    "security_id": "security-test",
+                    "provider_security_code": "000001.SZ",
+                    "requested_date": "2026-01-01",
+                    "as_of_at": "2026-01-01T00:00:00+00:00",
+                    "market_timezone": "Asia/Shanghai",
+                    "market": "SZSE",
+                    "snapshot_purpose": "workflow",
+                    "datasets": ["daily"],
+                    "network_authorized": False,
+                    "offline": True,
+                },
             }
         ),
         encoding="utf-8",
@@ -388,7 +403,7 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
     repo = Path(__file__).resolve().parents[2]
     live = tmp_path / "live"
     root = _root(live)
-    workflow = root.facade.run_research_workflow(research_request("operations:e2e"))
+    workflow = root.research.handle(StartResearchWorkflow(research_request("operations:e2e")))
     root.close()
     secret = "secret-value-that-must-never-leak"
     monkeypatch.setenv("TUSHARE_TOKEN", secret)
@@ -502,8 +517,8 @@ def test_windows_cli_resume_executes_recovery_and_returns_refs(tmp_path: Path) -
         data_root, CountingEngine(), CrashAt("workflow.freeze_checkpoint_committed")
     )
     with pytest.raises(InjectedCrash):
-        root.facade.run_research_workflow(research_request("operations:resume"))
-    run_id = root._store.connection.execute(
+        root.research.handle(StartResearchWorkflow(research_request("operations:resume")))
+    run_id = root.faults.adapter_connection.execute(
         "SELECT workflow_run_id FROM workflow_run LIMIT 1"
     ).fetchone()[0]
     _expire(root, run_id)
@@ -574,7 +589,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
             ),
             encoding="utf-8",
         )
-        _, provider, _ = _load_sync_job(job_path, adapter)
+        _, provider, _ = load_sync_job(job_path, adapter)
         from trading_platform.data.providers import TushareCompatibleProvider
 
         assert isinstance(provider, TushareCompatibleProvider)

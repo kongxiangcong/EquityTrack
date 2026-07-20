@@ -14,7 +14,7 @@ from .financial import (
     valuation_decimal_context,
 )
 from .models import CapabilityResult, EvidenceItem, MethodResult
-from .research_inputs import ResearchInputs
+from trading_platform.domain.research_inputs import ResearchInputs
 
 
 FINANCIAL_TYPES = {"financial", "bank", "insurance", "broker"}

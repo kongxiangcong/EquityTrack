@@ -4,11 +4,12 @@ from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Mapping
 
+from trading_platform.domain.research_inputs import ResearchInputs
+
 from .output_policy import normalize_action_language
 
 if TYPE_CHECKING:
     from .forecast import ForecastRequest
-    from .research_inputs import ResearchInputs
 
 
 POLICY_IDENTIFIER_KEYS = {
@@ -84,11 +85,9 @@ class ResearchRequest:
 
     manifest: Mapping[str, Any]
     as_of_date: str
+    research_inputs: ResearchInputs
     estimates: Mapping[str, Any] | None = None
-    context: Mapping[str, Any] | None = None
-    research_inputs: ResearchInputs | None = None
     profile: str = "standard"
-    render_html: bool = True
     forecast_request: ForecastRequest | None = None
 
 
@@ -358,9 +357,7 @@ class ResearchRun:
     report_mode: str
     conditional_plan: tuple[Mapping[str, Any], ...]
     diagnostics: tuple[str, ...]
-    html: str = ""
-
-    def to_dict(self, *, include_html: bool = False) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         method_payload = {key: value.to_dict() for key, value in self.methods.items()}
         if not self.permissions.get("research_report", False):
             for method in method_payload.values():
@@ -400,6 +397,4 @@ class ResearchRun:
             "conditional_plan": [dict(item) for item in self.conditional_plan],
             "diagnostics": list(self.diagnostics),
         }
-        if include_html:
-            payload["html"] = self.html
         return _sanitize_output_payload(payload)

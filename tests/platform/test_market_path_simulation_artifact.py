@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -101,7 +104,7 @@ def _install_market_snapshot(
             series_evidence_refs=series_ids,
         ),
     )
-    connection = root._store.connection
+    connection = root.faults.adapter_connection
     with connection:
         connection.execute(
             "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -398,8 +401,7 @@ def test_market_path_is_an_independent_simulation_child_and_workspace_view(
         root,
         market_path_request(),
     )
-    result = root.facade.run_research_workflow(
-        replace(
+    result = root.research.handle(StartResearchWorkflow(replace(
             _request(
                 "market-path:first",
                 _market_path_drafts(bound_request),
@@ -407,10 +409,9 @@ def test_market_path_is_an_independent_simulation_child_and_workspace_view(
             workflow_snapshot_id=bound_request.calibration.platform_snapshot_id,
             candidate_member_ids=market_member_ids,
             market_only_member_ids=market_member_ids,
-        )
-    )
+        )))
     artifacts = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in result.artifact_record_ids
     )
     assert [item.artifact_kind for item in artifacts] == [
@@ -430,7 +431,7 @@ def test_market_path_is_an_independent_simulation_child_and_workspace_view(
         "MarketPathSimulation models state-conditional traded-price paths"
     )
     assert "intrinsic value" in market_path.payload["interpretation"]
-    view = root.facade.get_workspace(
+    view = root.workspace.build(
         "security_yihua",
         result.research_snapshot_id,
     )["research_views"][0]
@@ -543,8 +544,7 @@ def test_formal_persistence_rejects_a_self_declared_weekly_calendar(
         policy_identity="company-outlook-policy@1",
     )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:fabricated-calendar",
                     (*deterministic, market_data, market_path),
@@ -554,10 +554,9 @@ def test_formal_persistence_rejects_a_self_declared_weekly_calendar(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -573,15 +572,15 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
         root,
         market_path_request(),
     )
-    with root._store.connection:
-        root._store.connection.execute(
+    with root.faults.adapter_connection:
+        root.faults.adapter_connection.execute(
             "UPDATE data_snapshot SET as_of_at=? WHERE data_snapshot_id=?",
             (
                 "2026-07-07T14:00:00+08:00",
                 bound_request.calibration.platform_snapshot_id,
             ),
         )
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "UPDATE normalized_version SET available_at=? "
             "WHERE normalized_version_id=?",
             (
@@ -590,8 +589,7 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
             ),
         )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:snapshot-cutoff",
                     _market_path_drafts(bound_request),
@@ -601,10 +599,9 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -653,8 +650,7 @@ def test_formal_persistence_rejects_unbound_starting_price_and_state(
         policy_identity="company-outlook-policy@1",
     )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:fabricated-state",
                     (*deterministic, market_data, market_path),
@@ -664,10 +660,9 @@ def test_formal_persistence_rejects_unbound_starting_price_and_state(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -736,8 +731,7 @@ def test_formal_persistence_rejects_a_non_adjacent_current_state(
         policy_identity="company-outlook-policy@1",
     )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:non-adjacent-state",
                     (*deterministic, market_data, market_path),
@@ -747,10 +741,9 @@ def test_formal_persistence_rejects_a_non_adjacent_current_state(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -795,8 +788,7 @@ def test_formal_persistence_rejects_declared_start_availability_before_member(
         policy_identity="company-outlook-policy@1",
     )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:early-start-availability",
                     (*deterministic, market_data, market_path),
@@ -806,10 +798,9 @@ def test_formal_persistence_rejects_declared_start_availability_before_member(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -866,8 +857,7 @@ def test_formal_persistence_rejects_false_historical_availability(
         policy_identity="company-outlook-policy@1",
     )
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            replace(
+        root.research.handle(StartResearchWorkflow(replace(
                 _request(
                     "market-path:false-history-availability",
                     (*deterministic, market_data, market_path),
@@ -877,10 +867,9 @@ def test_formal_persistence_rejects_false_historical_availability(
                 ),
                 candidate_member_ids=market_member_ids,
                 market_only_member_ids=market_member_ids,
-            )
-        )
+            )))
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0

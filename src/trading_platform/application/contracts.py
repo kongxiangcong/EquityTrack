@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Optional, TypeAlias
+from typing import Mapping, TypeAlias
 
 from trading_platform.domain.workflow import ResearchWorkflowRequest
 
@@ -24,19 +24,7 @@ class Capability(str, Enum):
     SERVE = "serve"
 
 
-class ErrorCode(str, Enum):
-    CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
-
-
 CONTRACT_VERSION = "application-contract@1"
-
-
-@dataclass(frozen=True)
-class ApplicationError:
-    code: ErrorCode
-    message: str
-    retryable: bool = False
-    schema_version: str = CONTRACT_VERSION
 
 
 @dataclass(frozen=True)
@@ -50,20 +38,6 @@ class HealthResult:
     status: ApplicationStatus
     application_version: str
     capabilities: Mapping[Capability, CapabilityStatus]
-    schema_version: str = CONTRACT_VERSION
-
-
-@dataclass(frozen=True)
-class PlatformCommand:
-    invocation_id: str
-    capability: Capability
-    schema_version: str = CONTRACT_VERSION
-
-
-@dataclass(frozen=True)
-class CapabilityResult:
-    status: CapabilityStatus
-    error: Optional[ApplicationError]
     schema_version: str = CONTRACT_VERSION
 
 

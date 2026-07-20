@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 import json
 import os
 import re
@@ -26,9 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _canonical_view(tmp_path: Path) -> ResearchDecisionView:
     root = _root(tmp_path / "store", CountingEngine())
-    result = root.facade.run_research_workflow(
-        _request("valuation-workbook:canonical")
-    )
+    result = root.research.handle(StartResearchWorkflow(_request("valuation-workbook:canonical")))
     payload = json.loads(_artifact_bytes(root, result.json_artifact_id))
     root.close()
     return ResearchDecisionView.from_dict(payload)
@@ -46,7 +47,7 @@ def test_workbook_adapter_rejects_noncanonical_input(
         ValuationWorkbookError,
         match="VALUATION_WORKBOOK_VIEW_INVALID",
     ):
-        adapter.export({"schema_version": "ResearchRun@3"}, tmp_path / "x.xlsx")
+        adapter.export({"schema_version": "SourceRun@3"}, tmp_path / "x.xlsx")
 
 
 @pytest.mark.skipif(

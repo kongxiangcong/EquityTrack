@@ -12,11 +12,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from equity_research import (  # noqa: E402
-    LegacyResearchContextAdapter,
     ResearchEngine,
-    ResearchInputs,
     ResearchRequest,
 )
+from trading_platform.domain.research_inputs import ResearchInputs  # noqa: E402
 
 
 EXAMPLE = ROOT / "examples" / "yihua-002897"
@@ -61,14 +60,14 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = read_json(EXAMPLE / "source_manifest.json")
         self.estimates = read_json(EXAMPLE / "estimate_overlay.json")
-        self.context = read_json(EXAMPLE / "research_context.json")
+        self.inputs_payload = read_json(EXAMPLE / "research_context.json")
 
     def test_yihua_completes_with_method_level_limits(self) -> None:
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -82,14 +81,13 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertTrue(run.permissions["conditional_research_plan"])
         self.assertFalse(run.permissions["formal_per_share_valuation"])
 
-    def test_v3_yihua_report_is_company_research_not_an_audit_dashboard(self) -> None:
+    def test_v3_yihua_builds_evidence_constrained_company_research(self) -> None:
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
@@ -120,26 +118,8 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
                 self.assertTrue(dimension.counterpoints, dimension.dimension_id)
                 self.assertTrue(dimension.uncertainties, dimension.dimension_id)
 
-        for section_id in (
-            "company",
-            "industry",
-            "fundamentals",
-            "technical",
-            "sentiment-events",
-            "valuation",
-            "debate",
-            "synthesis",
-            "monitoring",
-            "audit-appendix",
-        ):
-            self.assertIn(f'id="{section_id}"', run.html)
-        self.assertNotIn("<h2>能力级门禁</h2>", run.html)
-        self.assertNotIn("<h2>证据台账</h2>", run.html)
-        self.assertNotIn("<h2>运行诊断</h2>", run.html)
-        self.assertIn("论点—证据映射", run.html)
-
     def test_v3_downgrades_partial_or_estimate_only_narrative_support(self) -> None:
-        partial_context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        partial_context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         partial_context["analyses"]["business"]["evidence_fields"].append(
             "unknown_professional_field"
         )
@@ -150,7 +130,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=partial_context,
+                research_inputs=ResearchInputs.from_mapping(partial_context),
                 as_of_date="2026-07-07",
             )
         )
@@ -161,46 +141,45 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             {item["label"] for item in partial_run.analysis.dimensions["business"].key_metrics},
         )
 
-        estimate_context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        estimate_context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         estimate_context["analyses"]["business"]["evidence_fields"] = ["d_and_a"]
         estimate_run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=estimate_context,
+                research_inputs=ResearchInputs.from_mapping(estimate_context),
                 as_of_date="2026-07-07",
             )
         )
         self.assertEqual("limited", estimate_run.analysis.dimensions["business"].status)
 
     def test_v3_metrics_are_computed_and_free_form_numeric_claims_are_rejected(self) -> None:
-        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         context["analyses"]["business"]["key_metrics"][0]["value"] = "9999 亿元"
         context["analyses"]["business"]["key_findings"].append("收入 8888 亿元")
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
         metrics = run.analysis.dimensions["business"].key_metrics
         self.assertEqual("64.01 亿元", metrics[0]["value"])
-        self.assertNotIn("9999", run.html)
-        self.assertNotIn("8888", run.html)
+        self.assertNotIn("9999", json.dumps(run.to_dict(), ensure_ascii=False))
+        self.assertNotIn("8888", json.dumps(run.to_dict(), ensure_ascii=False))
         self.assertTrue(all(claim.evidence_ids for claim in run.analysis.dimensions["business"].key_findings))
 
     def test_v3_rejects_dangling_debate_responses(self) -> None:
-        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         context["debate"]["bull"]["arguments"][2]["response_to"] = "BOGUS"
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -209,7 +188,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual("professional_limited", run.report_mode)
 
     def test_v3_rejects_unbound_numbers_across_all_narrative_paths(self) -> None:
-        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         context["analyses"]["business"]["conclusion"] = "收入 9999 亿元"
         context["debate"]["bull"]["arguments"][0]["claim"] = "收入 8888 亿元"
         context["synthesis"]["core_thesis"] = "利润 7777 亿元"
@@ -217,20 +196,20 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
         self.assertEqual("blocked", run.analysis.dimensions["business"].status)
         self.assertIsNone(run.debate)
         self.assertIsNone(run.synthesis)
+        payload = json.dumps(run.to_dict(), ensure_ascii=False)
         for value in ("9999", "8888", "7777"):
-            self.assertNotIn(value, run.html)
+            self.assertNotIn(value, payload)
 
     def test_v3_metric_refs_require_exact_sources_and_compatible_units(self) -> None:
-        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         invalid_source_metric = context["analyses"]["business"]["key_metrics"][0]
         invalid_source_metric["evidence_refs"][0]["source_id"] = "SRC_CNINFO_2026Q1"
         incompatible_metric = context["analyses"]["business"]["key_metrics"][1]
@@ -239,7 +218,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -251,24 +230,21 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context={"report_version": 3, "company_type": "cyclical_manufacturing"},
+                research_inputs=ResearchInputs.from_mapping({"report_version": 3, "company_type": "cyclical_manufacturing"}),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
         self.assertEqual("blocked", run.capabilities["research_report"].status)
         self.assertFalse(run.permissions["research_report"])
         self.assertEqual("professional_limited", run.report_mode)
-        self.assertIn("数据不足备忘录", run.html)
 
     def test_v3_duofuduo_runs_end_to_end_with_a_professional_narrative(self) -> None:
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=read_json(DFD_EXAMPLE / "source_manifest.json"),
-                context=read_json(DFD_EXAMPLE / "research_context.json"),
+                research_inputs=ResearchInputs.from_mapping(read_json(DFD_EXAMPLE / "research_context.json")),
                 as_of_date="2026-07-17",
-                render_html=True,
             )
         )
 
@@ -278,16 +254,13 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertTrue(run.permissions["research_report"])
         self.assertIn("氟基新材料", run.analysis.dimensions["business"].conclusion)
         self.assertIn("经营现金流", run.analysis.dimensions["fundamentals"].conclusion)
-        self.assertIn("id=\"debate\"", run.html)
-        self.assertIn("id=\"audit-appendix\"", run.html)
-        self.assertNotIn("<h2>能力级门禁</h2>", run.html)
 
     def test_estimates_never_become_official_facts(self) -> None:
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -334,7 +307,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -350,7 +323,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -389,7 +362,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -401,6 +374,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest={"source_manifest_version": 2, "company": {}, "sources": []},
+                research_inputs=ResearchInputs(),
                 as_of_date="2026-07-07",
             )
         )
@@ -534,7 +508,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=manifest,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-01-01",
             )
         )
@@ -577,7 +551,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         mismatched = ResearchEngine().run(
             ResearchRequest(
                 manifest=mismatched_manifest,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-01-01",
             )
         )
@@ -590,7 +564,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         cross_period = ResearchEngine().run(
             ResearchRequest(
                 manifest=cross_period_manifest,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-01-01",
             )
         )
@@ -608,7 +582,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         invalid_share_unit = ResearchEngine().run(
             ResearchRequest(
                 manifest=invalid_share_unit_manifest,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-01-01",
             )
         )
@@ -641,7 +615,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         scaled = ResearchEngine().run(
             ResearchRequest(
                 manifest=scaled_manifest,
-                context=scaled_context,
+                research_inputs=ResearchInputs.from_mapping(scaled_context),
                 as_of_date="2026-01-01",
             )
         )
@@ -663,7 +637,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         )
 
     def test_dcf_missing_equity_bridge_is_method_blocking_not_zero(self) -> None:
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context["company_type"] = "general"
         context["dcf_case"] = {
             "forecast_fcff": [100_000_000.0, 110_000_000.0],
@@ -693,7 +667,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -701,28 +675,6 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual("blocked", run.methods["dcf"].status)
         self.assertIn("minority_interest", run.capabilities["dcf"].missing_fields)
         self.assertFalse(run.methods["dcf"].metrics)
-
-    def test_html_is_self_contained_and_embeds_the_canonical_run(self) -> None:
-        run = ResearchEngine().run(
-            ResearchRequest(
-                manifest=self.manifest,
-                estimates=self.estimates,
-                context=self.context,
-                as_of_date="2026-07-07",
-                render_html=True,
-            )
-        )
-
-        html = run.html
-        self.assertIn("<!doctype html>", html.lower())
-        self.assertIn('id="research-run-data"', html)
-        self.assertIn('id="company"', html)
-        self.assertIn('id="fundamentals"', html)
-        self.assertIn('id="debate"', html)
-        self.assertIn('id="audit-appendix"', html)
-        self.assertGreaterEqual(html.count("<svg"), 2)
-        for prohibited in ("BUY", "HOLD", "SELL", "买入", "卖出", "持有", "目标价"):
-            self.assertNotIn(prohibited, html)
 
     def test_peer_and_historical_methods_use_explicit_structured_cases(self) -> None:
         peer_values = {
@@ -831,7 +783,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
             for index in range(1, 4)
         )
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context["peer_count"] = 3
         context["peer_case"] = {
             "metric": "pe",
@@ -851,7 +803,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -901,7 +853,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=duplicated_context,
+                research_inputs=ResearchInputs.from_mapping(duplicated_context),
                 as_of_date="2026-07-07",
             )
         )
@@ -915,7 +867,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=invalid_dimension_manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -926,7 +878,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
         )
 
-        ps_context = dict(self.context)
+        ps_context = dict(self.inputs_payload)
         ps_context["peer_count"] = 3
         ps_context["peer_case"] = {
             "metric": "ps",
@@ -951,7 +903,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=ps_context,
+                research_inputs=ResearchInputs.from_mapping(ps_context),
                 as_of_date="2026-07-07",
             )
         )
@@ -962,7 +914,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
         )
 
-        ev_context = dict(self.context)
+        ev_context = dict(self.inputs_payload)
         ev_context["peer_count"] = 3
         ev_context["peer_case"] = {
             "metric": "ev_ebitda",
@@ -987,7 +939,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=ev_context,
+                research_inputs=ResearchInputs.from_mapping(ev_context),
                 as_of_date="2026-07-07",
             )
         )
@@ -1011,7 +963,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         )
 
     def test_context_numbers_cannot_use_unknown_source_ids(self) -> None:
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context["peer_case"] = {
             "metric": "pe",
             "company_metric_field": "eps",
@@ -1029,7 +981,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -1074,14 +1026,14 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
                     },
                 }
             )
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context["peer_case"] = {"metric": "pe", "peers": peers}
 
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -1094,7 +1046,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2020-01-01",
             )
         )
@@ -1109,7 +1061,7 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
@@ -1126,22 +1078,21 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
         self.assertEqual("completed_with_limits", historical_download.status)
 
     def test_integrity_errors_fail_closed_before_valuation_rendering(self) -> None:
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         self.manifest["sources"].append(dict(self.manifest["sources"][0]))
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
@@ -1152,11 +1103,9 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual({}, run.analysis.dimensions)
         self.assertIsNone(run.debate)
         self.assertIsNone(run.synthesis)
-        self.assertNotIn("DCF 敏感性", run.html)
-        self.assertNotIn("中位每股映射", run.html)
 
     def test_default_output_normalizes_prohibited_action_language(self) -> None:
-        context = json.loads(json.dumps(self.context, ensure_ascii=False))
+        context = json.loads(json.dumps(self.inputs_payload, ensure_ascii=False))
         context["executive_summary"] = "ADD评级，建议增仓；BUY评级 / 买入 / 目标价 100"
         context["theses"] = [
             {
@@ -1179,9 +1128,8 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
@@ -1204,17 +1152,16 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             "目标价",
         ):
             self.assertNotIn(prohibited, payload)
-            self.assertNotIn(prohibited, run.html)
         self.assertIn("OUTPUT_LANGUAGE_NORMALIZED", {issue.code for issue in run.integrity_issues})
 
     def test_conditional_plan_capability_matches_auto_generated_plan(self) -> None:
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context.pop("conditional_plan", None)
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -1224,14 +1171,14 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertGreater(len(run.conditional_plan), 0)
 
     def test_mid_cycle_placeholder_never_reports_ready(self) -> None:
-        context = dict(self.context)
+        context = dict(self.inputs_payload)
         context["company_type"] = "cyclical_manufacturing"
         context["mid_cycle_case"] = {"revenue": 100.0}
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=context,
+                research_inputs=ResearchInputs.from_mapping(context),
                 as_of_date="2026-07-07",
             )
         )
@@ -1242,39 +1189,30 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
-                render_html=True,
             )
         )
 
         self.assertFalse(run.permissions["scenario_analysis"])
         self.assertEqual([], run.summary["scenarios"])
-        self.assertNotIn("验证改善", run.html)
 
-    def test_legacy_context_is_migrated_once_with_versioned_diagnostic(
+    def test_typed_input_schema_is_canonical(
         self,
     ) -> None:
-        migration = LegacyResearchContextAdapter.adapt(self.context)
+        inputs = ResearchInputs.from_mapping(self.inputs_payload)
         run = ResearchEngine().run(
             ResearchRequest(
                 manifest=self.manifest,
                 estimates=self.estimates,
-                context=self.context,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )
         )
 
-        self.assertEqual("ResearchInputs@1", migration.inputs.schema_version)
-        self.assertEqual(
-            1,
-            sum(
-                item.startswith("LEGACY_RESEARCH_CONTEXT_MIGRATED:")
-                for item in run.diagnostics
-            ),
-        )
+        self.assertEqual("ResearchInputs@1", inputs.schema_version)
 
-    def test_typed_research_inputs_bypass_legacy_magic_key_path(
+    def test_typed_research_inputs_normalize_action_language(
         self,
     ) -> None:
         run = ResearchEngine().run(
@@ -1288,12 +1226,6 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
             )
         )
 
-        self.assertFalse(
-            any(
-                item.startswith("LEGACY_RESEARCH_CONTEXT_")
-                for item in run.diagnostics
-            )
-        )
         self.assertNotIn("BUY", run.summary["executive_summary"])
         self.assertNotIn("买入", run.summary["executive_summary"])
         self.assertNotIn("目标价", run.summary["executive_summary"])

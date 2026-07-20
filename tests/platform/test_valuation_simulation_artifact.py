@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
 from dataclasses import replace
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -10,7 +12,7 @@ from equity_research import DeterministicValueFallback, ValuationSimulationEngin
 from tests.platform.test_outlook_artifacts import _drafts, _request
 from tests.platform.test_research_workflow import CountingEngine, _root
 from tests.test_valuation_simulation import distribution, request
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.domain.workflow import ImmutableArtifactDraft
 
 
@@ -87,11 +89,9 @@ def test_simulation_artifact_persists_as_valuation_child_and_replays(
     engine = CountingEngine()
     root = _root(tmp_path, engine)
     drafts = _simulation_drafts()
-    first = root.facade.run_research_workflow(
-        _request("simulation-artifact:first", drafts)
-    )
+    first = root.research.handle(StartResearchWorkflow(_request("simulation-artifact:first", drafts)))
     artifacts = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in first.artifact_record_ids
     )
 
@@ -107,7 +107,7 @@ def test_simulation_artifact_persists_as_valuation_child_and_replays(
     assert simulation.payload["converged"] is True
     assert simulation.payload["quantiles"]["p50"]
     assert simulation.summary["valuation_input_fingerprint"] == drafts[-2].content_hash
-    workspace = root.facade.get_workspace(
+    workspace = root.workspace.build(
         "security_yihua",
         first.research_snapshot_id,
     )
@@ -115,13 +115,11 @@ def test_simulation_artifact_persists_as_valuation_child_and_replays(
     assert simulation_view is None
     root.close()
 
-    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
-    replay = rebuilt.facade.run_research_workflow(
-        _request("simulation-artifact:replay", _simulation_drafts())
-    )
+    rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
+    replay = rebuilt.research.handle(StartResearchWorkflow(_request("simulation-artifact:replay", _simulation_drafts())))
     assert replay.artifact_record_ids == first.artifact_record_ids
     assert (
-        rebuilt.facade.get_research_artifact(replay.artifact_record_ids[-1]).content_hash
+        rebuilt.archive.artifact(replay.artifact_record_ids[-1]).content_hash
         == simulation.content_hash
     )
     rebuilt.close()

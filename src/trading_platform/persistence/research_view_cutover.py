@@ -415,7 +415,8 @@ class ResearchDecisionViewCutover:
         html_candidates = [
             str(row[0])
             for row in self._connection.execute(
-                "SELECT artifact_id FROM artifact WHERE schema_version='ResearchReportHtml@1'"
+                "SELECT artifact_id FROM artifact WHERE schema_version IN "
+                "('ResearchReportHtml@1','ResearchSourceIdentityHtml@1')"
             )
             for _, payload in (self._artifact_payload(str(row[0])),)
             if self._matches_source_html(

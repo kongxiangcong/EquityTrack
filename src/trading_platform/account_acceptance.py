@@ -21,7 +21,6 @@ class AccountAcceptanceService:
     ) -> Path:
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
-            store.migrate()
             opening = store.connection.execute(
                 "SELECT b.import_batch_id,b.confirmed_as_of,p.portfolio_snapshot_id,p.reconciliation_status FROM account_import_batch b JOIN portfolio_snapshot p USING(account_id) WHERE b.account_id=?",
                 (account_id,),

@@ -1,6 +1,5 @@
 """Deterministic local trading-platform application boundary."""
 
-from .application import ApplicationFacade, ProductionCompositionRoot
 from .research_presentation import render_research_decision_html
 from .research_view import (
     ResearchDecisionInput,
@@ -15,8 +14,6 @@ from .valuation_workbook import (
 )
 
 __all__ = [
-    "ApplicationFacade",
-    "ProductionCompositionRoot",
     "ResearchDecisionInput",
     "ResearchDecisionView",
     "ResearchDecisionViewBuilder",

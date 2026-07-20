@@ -11,10 +11,12 @@ For initialization, maintenance, recovery, or local service requests, use the si
 
 ```powershell
 python -m trading_platform.cli bootstrap --data-root <root>
+python -m trading_platform.cli health --data-root <root>
 python -m trading_platform.cli doctor --data-root <root>
 python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
+python -m trading_platform.cli research --data-root <root> --request-file <request.json>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json> --output <qualification.json>
 python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --security-id <id> --snapshot-id <id>
 python -m trading_platform.cli test --repo-root <repo>
@@ -24,6 +26,7 @@ python -m trading_platform.cli restore --archive <backup.zip> --target-root <new
 python -m trading_platform.cli switch-restored-root --restored-root <validated-new-root> --pointer-file <active-root.json>
 python -m trading_platform.cli resume --data-root <root> --workflow-run-id <id> --owner-token <token>
 python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
+python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
 ```
 
 Use `provider_type = tushare_compatible` for the preconfigured Tushare-compatible HTTP surface. Keep only `credential_env = TUSHARE_TOKEN` in the job; the token value must remain in the process environment or an approved credential adapter. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync` and writes redacted attempt evidence that can be supplied to `acceptance --live-qualification-file`.
@@ -45,22 +48,16 @@ Frozen DataSnapshot
   -> canonical JSON + decision-first HTML + reconciled XLSX
 ```
 
-The public interface is:
+The formal CLI invokes the named lifecycle task:
 
 ```python
-ApplicationFacade.run_research_workflow(request) -> ResearchWorkflowResult
+ResearchWorkflow.handle(StartResearchWorkflow(request)) -> ResearchWorkflowResult
 ```
 
-The retained deterministic compatibility seam is
-`ResearchEngine.run(ResearchRequest) -> ResearchRun`; it does not define the
-formal platform presentation model. Historical `ResearchSynthesis` remains a
-read-compatible part of that legacy contract.
-
-New execution must use typed request/artifact contracts. Free-form legacy
-`context` is accepted only by `LegacyResearchContextAdapter`, which converts it
-to `ResearchInputs@1` and emits a versioned migration diagnostic. No formal
-renderer reads `analyses`, `debate`, `synthesis`, `scenarios`, or `dcf_case`
-magic keys.
+`WorkflowInspection`, `ResearchArchive`, and `ForecastReview` are separate
+query/task seams. New execution uses typed request and artifact contracts; no
+formal renderer reads source narrative magic keys or reconstructs valuation
+semantics.
 
 Python owns identity and date checks, evidence resolution, capability
 readiness, method routing, calculations, simulation, immutable artifact
@@ -142,136 +139,6 @@ facts, formulas, diluted shares, equity bridges, identities, and source refs.
 Formal JSON and HTML must serialize this exact view. XLSX must import the same
 view, recompute every bridge step with formulas, and fail when canonical values
 are hardcoded or links are broken.
-
-## Legacy V3 narrative compatibility
-
-The following seven-dimension/debate/synthesis contract is retained only for
-historical `research_context.json` input and legacy `ResearchRun@3` reading.
-Do not use it as the new platform execution contract.
-
-### Build the seven legacy research dimensions
-
-Set `report_version = 3` and provide all dimensions under `analyses`:
-
-1. `business` — products, customers, business model, segment economics, capital intensity;
-2. `industry` — cycle, supply chain, competition, barriers, relative position;
-3. `fundamentals` — growth, margins, cash conversion, balance sheet, earnings quality;
-4. `technical` — price, volume, momentum, volatility, and market structure when supported;
-5. `sentiment_events` — verified events, expectations, narrative, and sentiment limits;
-6. `valuation` — method-routed market context and scenarios;
-7. `governance_risk` — capital allocation, governance, structural risks, thesis breakers.
-
-Each non-blocked dimension must contain:
-
-- a company-specific conclusion;
-- at least one evidence-bound finding;
-- at least one evidence-bound counterpoint;
-- at least one evidence-bound uncertainty;
-- deterministic metrics where numeric evidence exists.
-
-Use explicit qualitative claims:
-
-```json
-{
-  "text": "Latest reported profit improved while cash conversion remained weak.",
-  "evidence_fields": ["net_income", "cfo"]
-}
-```
-
-String-only claims are not accepted. Put numeric facts in deterministic metrics, not prose.
-
-Use exact metric references:
-
-```json
-{
-  "label": "Annual net margin",
-  "calculation": "ratio",
-  "display": "percent",
-  "evidence_refs": [
-    {"source_id": "SRC_ANNUAL", "field_name": "net_income", "period": "2025FY"},
-    {"source_id": "SRC_ANNUAL", "field_name": "revenue", "period": "2025FY"}
-  ]
-}
-```
-
-The engine supports `direct`, `ratio`, and `difference` calculations only after exact source, subject, semantic-role, unit, and currency checks.
-
-Missing price history limits the technical dimension to a market snapshot. Missing sentiment samples limits sentiment analysis. Neither blocks supported fundamental research.
-
-Completion criterion: every non-blocked dimension has conclusion, finding, counterpoint, uncertainty, and resolved evidence IDs.
-
-### Run legacy evidence-constrained debate
-
-Build positive and negative cases. Every argument needs:
-
-- a unique `argument_id`;
-- a qualitative `claim` without unbound numbers;
-- explicit `evidence_fields`;
-- `response_to` when challenging an argument on the opposite side.
-
-Require both sides to respond to the opposing case. Record:
-
-- `manager_summary`;
-- `key_disagreements`;
-- `resolved_disagreements`;
-- `unresolved_questions`.
-
-Reject missing, same-side, or dangling response links.
-
-Completion criterion: both cases have sourced arguments and a valid cross-side challenge-response chain.
-
-### Produce legacy Research Synthesis
-
-Synthesis must include:
-
-- `core_thesis`;
-- `variant_view`;
-- `business_quality`;
-- `earnings_outlook`;
-- `market_view`;
-- `valuation_view`;
-- `risk_reward_summary`;
-- `key_uncertainties`;
-- `what_would_change_the_view`;
-- `evidence_fields`.
-
-Use research language. Keep all numeric facts in deterministic metric or method outputs.
-
-Completion criterion: synthesis resolves all declared evidence fields and remains consistent with dimension and debate results.
-
-### Render and validate legacy file outputs
-
-Run the CLI through `scripts/research.py`:
-
-```powershell
-python scripts\research.py run `
-  --manifest <source_manifest.json> `
-  --context <research_context.json> `
-  --as-of-date <YYYY-MM-DD> `
-  --output-dir <output-directory>
-```
-
-Add `--estimates <estimate_overlay.json>` only when an explicit estimate overlay exists.
-
-Legacy compatibility artifacts:
-
-- `research_run.json` — canonical evidence, dimensions, debate, synthesis, capabilities, methods, permissions, and diagnostics;
-- `research_report.html` — self-contained professional company-research report.
-
-The HTML body leads with the company research narrative. Put capability states, method diagnostics, source registry, and claim-to-evidence mapping in a collapsed audit appendix.
-
-Run:
-
-```powershell
-python -B -m unittest discover -s tests -v
-```
-
-The standalone `source_manifest_validator.py`, `model_validator.py`, and
-`report_validator.py` are compatibility utilities only. Formal platform
-authority lives in frozen projection validation, typed artifact factories,
-forecast/valuation invariants, and canonical presentation reconciliation.
-
-Completion criterion: JSON and HTML come from the same `ResearchRun`, validation passes, and the report contains no unsupported numeric or action language.
 
 ## Financial boundary
 

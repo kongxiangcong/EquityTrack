@@ -22,6 +22,7 @@ from trading_platform.application.contracts import (
 from trading_platform.application.research_request_codec import (
     decode_research_workflow_request,
 )
+from trading_platform.application.research_source_codec import encode_research_source_html
 from trading_platform.domain.workflow import (
     ReferenceDisposition,
     ResearchProjection,
@@ -221,7 +222,7 @@ class ResearchExecution:
                 request.workflow_snapshot_id,
                 request.candidate_member_ids,
                 request.market_only_member_ids,
-                request.projection.context,
+                request.projection.research_inputs.workflow_research_member_ids,
             )
         return preview
 
@@ -261,7 +262,7 @@ class ResearchExecution:
                 request.workflow_snapshot_id,
                 request.candidate_member_ids,
                 request.market_only_member_ids,
-                request.projection.context,
+                request.projection.research_inputs.workflow_research_member_ids,
             )
 
     def _validate_workflow_snapshot(
@@ -278,7 +279,7 @@ class ResearchExecution:
         snapshot_id: str,
         candidates: tuple[str, ...],
         market_only: tuple[str, ...],
-        context: object,
+        declared_research_members: tuple[str, ...],
     ) -> None:
         actual = dict(self._repository.load(SnapshotEvidenceQuery(snapshot_id)).members)
         if set(candidates) != set(actual):
@@ -294,11 +295,7 @@ class ResearchExecution:
             raise ProjectionError(
                 "SNAPSHOT_MARKET_CLASSIFICATION_INVALID", "market mismatch"
             )
-        declared = (
-            set(context.get("workflow_research_member_ids", ()))
-            if isinstance(context, dict)
-            else set()
-        )
+        declared = set(declared_research_members)
         if set(actual) - market != declared:
             raise ProjectionError(
                 "RESEARCH_RELEVANT_SNAPSHOT_CHANGE", "relevant mismatch"
@@ -361,6 +358,7 @@ class ResearchExecution:
                     **asdict(projection),
                     "manifest": manifest,
                     "field_semantics": projection.field_semantics,
+                    "research_inputs": projection.research_inputs,
                 }
             )
         ) != self.assembler.fingerprint(projection):
@@ -699,25 +697,17 @@ class ResearchWorkflow:
                     assert isinstance(executed, ResearchRun)
                     produced = executed
                 self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
-                if not produced.html:
-                    raise ValueError("RESEARCH_HTML_MISSING")
                 source_json_write = ArtifactPayload(
                     json.dumps(produced.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(),
                     "application/json",
                     f"ResearchRun@{produced.schema_version}",
                 )
-                source_html_write = ArtifactPayload(
-                    produced.html.encode(), "text/html", "ResearchReportHtml@1"
-                )
+                source_html_write = None
                 request_fp = self._hash(
                     {
                         "manifest": assembled.manifest,
                         "estimates": assembled.estimates,
-                        "research_inputs": (
-                            assembled.research_inputs.identity_payload()
-                        )
-                        if assembled.research_inputs is not None
-                        else None,
+                        "research_inputs": assembled.research_inputs.identity_payload(),
                         "as_of_date": assembled.as_of_date,
                         "profile": assembled.profile,
                     }
@@ -850,6 +840,14 @@ class ResearchWorkflow:
             "text/html",
             "ResearchDecisionHtml@1",
         )
+        if disposition is ReferenceDisposition.CREATED:
+            source_html_write = ArtifactPayload(
+                encode_research_source_html(
+                    record.research_run_id, record.engine_schema_version
+                ),
+                "text/html",
+                "ResearchSourceIdentityHtml@1",
+            )
         self._fault("workflow.research_artifacts_persisted")
         self._fault("workflow.before_node_success:run_or_link_research")
         checkpoint = self.repository.commit_checkpoint(

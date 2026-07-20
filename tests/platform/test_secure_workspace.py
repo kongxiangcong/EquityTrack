@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 import json
 import os
 from dataclasses import replace
@@ -29,7 +32,7 @@ from trading_platform.application.contracts import SecurityIdentity
 
 def _server(tmp_path: Path):
     root = _root(tmp_path)
-    server = LocalChartWorkspaceServer(root.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+    server = LocalChartWorkspaceServer(root.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
     return root, server, server.start()
 
 
@@ -84,18 +87,17 @@ def test_update_authorization_is_csrf_protected_immutable_and_replay_safe(tmp_pa
     first = json.loads(urlopen(Request(base + "/api/update-authorizations", data=body, method="POST", headers=headers)).read())
     replay = json.loads(urlopen(Request(base + "/api/update-authorizations", data=body, method="POST", headers=headers)).read())
     assert replay["update_authorization_id"] == first["update_authorization_id"]
-    assert root._store.connection.execute("SELECT count(*) FROM update_authorization").fetchone()[0] == 1
     with pytest.raises(Exception, match="UPDATE_AUTHORIZATION_IMMUTABLE"):
-        root._store.connection.execute("DELETE FROM update_authorization")
+        root.faults.delete_update_authorizations()
     server.close(); root.close()
 
 
 def test_frozen_timeline_traverses_plan_market_evaluation_and_policy_versions(tmp_path: Path) -> None:
     root, plan = market_root(tmp_path)
-    market = root.facade.build_market_snapshot(_market_command())
-    evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("workspace:evaluate", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
-    upgraded = root.facade.evaluate_plan(EvaluatePlanCommand("workspace:evaluate:v2", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@2"))
-    projected = root.facade.get_workspace("security_yihua", "snapshot_market")
+    market = root.market.build_market_snapshot(_market_command())
+    evaluation = root.market.evaluate_plan(EvaluatePlanCommand("workspace:evaluate", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    upgraded = root.market.evaluate_plan(EvaluatePlanCommand("workspace:evaluate:v2", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@2"))
+    projected = root.workspace.build("security_yihua", "snapshot_market")
     assert projected["history"]["plans"][0]["user_input_source"] == "user_fixture_input"
     assert projected["history"]["market_snapshots"][0]["market_snapshot_id"] == market.market_snapshot_id
     assert [item["plan_evaluation_id"] for item in projected["history"]["evaluations"]] == [evaluation.plan_evaluation_id, upgraded.plan_evaluation_id]
@@ -109,39 +111,39 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(tmp_path: P
     assert PlatformOperations(tmp_path).bootstrap()["status"] == "passed"
     assert PlatformOperations(tmp_path).bootstrap()["status"] == "passed"
     root = sync_root(tmp_path)
-    root.facade.add_watchlist_item("golden:benchmark", SecurityIdentity("security_benchmark", "SZSE", "000300", "CNY", "2010-01-01"))
-    original = root.facade.run_research_workflow(research_request("golden:research:2026-07-07"))
+    root.watchlist.add("golden:benchmark", SecurityIdentity("security_benchmark", "SZSE", "000300", "CNY", "2010-01-01"))
+    original = root.research.handle(StartResearchWorkflow(research_request("golden:research:2026-07-07")))
     root.close()
 
     root = sync_root(tmp_path)
-    sync = root.facade.sync_data(sync_request("golden:sync:2026-07-11"))
-    member_ids = tuple(item.normalized_version_id for item in root.facade.get_data_snapshot_members(sync.snapshot_id))
-    research = root.facade.run_research_workflow(research_request("golden:outer-workflow:2026-07-11", requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id=sync.snapshot_id, candidate_member_ids=member_ids, market_only_member_ids=member_ids))
+    sync = root.data.sync(sync_request("golden:sync:2026-07-11"))
+    member_ids = tuple(item.normalized_version_id for item in root.data.snapshot_members(sync.snapshot_id))
+    research = root.research.handle(StartResearchWorkflow(research_request("golden:outer-workflow:2026-07-11", requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id=sync.snapshot_id, candidate_member_ids=member_ids, market_only_member_ids=member_ids)))
     assert research.research_run_id == original.research_run_id
     assert research.research_snapshot_id == original.research_snapshot_id
     assert research.json_artifact_id != original.json_artifact_id
     assert research.html_artifact_id != original.html_artifact_id
     assert research.disposition.value == "reused" and research.reason_code == "ROUTINE_MARKET_ONLY_INPUTS" and research.stale_by_days == 3
     annotation_input = replace(annotation_draft(), data_snapshot_id=sync.snapshot_id, links=(AnnotationLink("ResearchRun", research.research_run_id, "resolved"),))
-    annotation = root.facade.create_annotation(AnnotationCommand("golden:annotation", None, 0, annotation_input))
+    annotation = root.chart.create(AnnotationCommand("golden:annotation", None, 0, annotation_input))
     content = PlanDraftContent("security_yihua", None, (PlanReference("ResearchRun", research.research_run_id), PlanReference("Evidence", "golden:fixture", "unresolved_external")), sync.snapshot_id, "2026-07-11", "2026-10-11", "2026-08-11", (PlanRule("golden:price", "entry_review", "prompt_review", "entry", PlanCondition("leaf", "security.close_unadjusted", "lte", PlanConstant("decimal", "80", "CNY_per_share", "CNY"), "current_complete_session")),), "10000", "500", "CNY", "market-gate@1", "metric-catalog@1", "plan-evaluator@1", "user_fixture_input", "用户明确输入的验收规则，不构成平台建议。")
-    draft = root.facade.create_plan_draft(CreatePlanDraftCommand("golden:plan-draft", content))
-    plan = root.facade.confirm_plan_draft(ConfirmPlanDraftCommand("golden:plan-confirm", draft.draft_id, 1, "activate"))
+    draft = root.plans.create_draft(CreatePlanDraftCommand("golden:plan-draft", content))
+    plan = root.plans.confirm_draft(ConfirmPlanDraftCommand("golden:plan-confirm", draft.draft_id, 1, "activate"))
     identity = CodeIdentity("fixture", "source", "lock", "migration", "workflow", "frontend", "config", "package", "model-policy", "licenses")
-    market = root.facade.build_market_snapshot(BuildMarketSnapshotCommand("golden:market", "security_yihua", "SZSE", sync.snapshot_id, "cn-a-share-market@1", "freshness@1", identity))
-    evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("golden:evaluation", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
+    market = root.market.build_market_snapshot(BuildMarketSnapshotCommand("golden:market", "security_yihua", "SZSE", sync.snapshot_id, "cn-a-share-market@1", "freshness@1", identity))
+    evaluation = root.market.evaluate_plan(EvaluatePlanCommand("golden:evaluation", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     root.close()
 
     rebuilt = sync_root(tmp_path)
-    history = rebuilt.facade.get_workflow_history(research.workflow_run_id)
-    manifest = rebuilt.facade.get_artifact_manifest(history.final_manifest_id)
-    workspace = rebuilt.facade.get_workspace("security_yihua", sync.snapshot_id)
+    history = rebuilt.inspection.inspect(research.workflow_run_id)
+    manifest = rebuilt.archive.manifest(history.final_manifest_id)
+    workspace = rebuilt.workspace.build("security_yihua", sync.snapshot_id)
     doctor = PlatformOperations(tmp_path).doctor()
     assert manifest.producer_id == research.workflow_run_id and doctor["status"] == "passed"
-    assert rebuilt.facade.get_annotation_history(annotation.annotation_id)[0].annotation_version_id == annotation.annotation_version_id
-    assert rebuilt.facade.get_plan_version(plan.plan_version_id).content.references[0].ref_id == research.research_run_id
-    assert rebuilt.facade.get_market_snapshot_detail(market.market_snapshot_id).data_snapshot_id == sync.snapshot_id
-    assert rebuilt.facade.get_plan_evaluation_detail(evaluation.plan_evaluation_id).market_snapshot_id == market.market_snapshot_id
+    assert rebuilt.chart.get_history(annotation.annotation_id)[0].annotation_version_id == annotation.annotation_version_id
+    assert rebuilt.plans.get_version(plan.plan_version_id).content.references[0].ref_id == research.research_run_id
+    assert rebuilt.market.get_market_snapshot(market.market_snapshot_id).data_snapshot_id == sync.snapshot_id
+    assert rebuilt.market.get_plan_evaluation(evaluation.plan_evaluation_id).market_snapshot_id == market.market_snapshot_id
     assert workspace["history"]["research_runs"] and workspace["history"]["plans"] and workspace["history"]["evaluations"]
     evidence = {"schema_version": "GoldenJourneyEvidence@1", "workflow_run_id": research.workflow_run_id, "original_workflow_run_id": original.workflow_run_id, "data_snapshot_id": sync.snapshot_id, "research_snapshot_id": original.research_snapshot_id, "research_run_id": research.research_run_id, "research_json_artifact_id": original.json_artifact_id, "research_html_artifact_id": original.html_artifact_id, "annotation_version_id": annotation.annotation_version_id, "plan_version_id": plan.plan_version_id, "market_snapshot_id": market.market_snapshot_id, "plan_evaluation_id": evaluation.plan_evaluation_id, "final_artifact_manifest_id": history.final_manifest_id, "reuse_reason_code": research.reason_code, "stale_by_days": research.stale_by_days, "dispositions": {"research": research.disposition.value, "annotation": "created", "plan": "created", "market": "created", "evaluation": "created"}}
     if destination := os.environ.get("TRADING_PLATFORM_GOLDEN_EVIDENCE"):
@@ -151,15 +153,15 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(tmp_path: P
 
 def test_browser_plan_confirmation_preserves_user_fixture_source_and_old_history(tmp_path: Path) -> None:
     root = plan_root(tmp_path)
-    draft = root.facade.create_plan_draft(CreatePlanDraftCommand("workspace:draft", _content(root)))
-    server = LocalChartWorkspaceServer(root.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+    draft = root.plans.create_draft(CreatePlanDraftCommand("workspace:draft", _content(root)))
+    server = LocalChartWorkspaceServer(root.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
     base = server.start(); html = urlopen(base).read().decode()
     token = html.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
     body = json.dumps({"draft_id": draft.draft_id, "expected_revision": 1, "activation_intent": "activate"}).encode()
     headers = {"Origin": base, "Content-Type": "application/json", "X-CSRF-Token": token, "X-Invocation-Id": "browser:confirm-plan"}
     confirmed = json.loads(urlopen(Request(base + "/api/plan-confirmations", data=body, method="POST", headers=headers)).read())
     revised_content = replace(_content(root), based_on_version_id=confirmed["plan_version_id"], rationale="用户补充了新的复核理由。")
-    revised_draft = root.facade.create_plan_draft(CreatePlanDraftCommand("workspace:draft:v2", revised_content))
+    revised_draft = root.plans.create_draft(CreatePlanDraftCommand("workspace:draft:v2", revised_content))
     revised_body = json.dumps({"draft_id": revised_draft.draft_id, "expected_revision": 1, "activation_intent": "activate"}).encode()
     revised_headers = {**headers, "X-Invocation-Id": "browser:confirm-plan:v2"}
     revised = json.loads(urlopen(Request(base + "/api/plan-confirmations", data=revised_body, method="POST", headers=revised_headers)).read())

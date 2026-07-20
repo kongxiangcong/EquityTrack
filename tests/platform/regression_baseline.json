@@ -1,12 +1,11 @@
 {
-  "schema_version": "legacy-regression-baseline@1",
+  "schema_version": "regression-ledger@2",
   "required_every_issue": true,
   "command": "python -m pytest -q",
-  "legacy_test_count": 37,
-  "legacy_suites": [
-    "tests/test_cli.py",
+  "suites": [
     "tests/test_research_engine.py",
-    "tests/test_skill_entrypoint.py"
+    "tests/test_skill_entrypoint.py",
+    "tests/platform/test_cli_application_tasks.py"
   ],
   "worked_examples": [
     "tests/test_research_engine.py::ResearchEngineBehaviorTests::test_dcf_uses_only_an_explicit_case_and_matches_worked_example"

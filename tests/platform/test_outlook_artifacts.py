@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
 import json
 import sqlite3
 import sys
@@ -11,7 +13,7 @@ import pytest
 
 from equity_research.scenario_valuation import ScenarioValuationEngine
 from equity_research.forecast import ForecastEngine
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import ResumeWorkflowCommand
 from trading_platform.application.workflow_ledger import (
     ArtifactBundlePreviewQuery,
@@ -216,11 +218,11 @@ def test_workflow_persists_restarts_and_reuses_typed_sibling_artifacts(
 ) -> None:
     engine = CountingEngine()
     root = research_root(tmp_path, engine)
-    first = root.facade.run_research_workflow(_request("outlook:first"))
+    first = root.research.handle(StartResearchWorkflow(_request("outlook:first")))
 
     assert len(first.artifact_record_ids) == 3
     views = tuple(
-        root.facade.get_research_artifact(record_id)
+        root.archive.artifact(record_id)
         for record_id in first.artifact_record_ids
     )
     assert tuple(view.artifact_kind for view in views) == (
@@ -238,28 +240,28 @@ def test_workflow_persists_restarts_and_reuses_typed_sibling_artifacts(
     assert all(view.formula_identities for view in views)
     assert views[1].dependency_record_ids == (views[0].artifact_record_id,)
     assert views[2].dependency_record_ids == (views[1].artifact_record_id,)
-    manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
+    manifest = root.archive.manifest(first.final_manifest_id)
     assert [member["member_role"] for member in manifest.members] == [
         "decision_view_json",
         "decision_view_html",
     ]
     assert len(
-        root._store.connection.execute("PRAGMA table_info(research_run_record)").fetchall()
+        root.faults.adapter_connection.execute("PRAGMA table_info(research_run_record)").fetchall()
     ) == 11
     with pytest.raises(sqlite3.IntegrityError, match="RESEARCH_ARTIFACT_IMMUTABLE"):
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "UPDATE research_artifact_record SET status='blocked' WHERE artifact_record_id=?",
             (views[0].artifact_record_id,),
         )
-    root._store.connection.rollback()
+    root.faults.adapter_connection.rollback()
     root.close()
 
-    rebuilt = ProductionCompositionRoot(tmp_path, research_engine=engine)
+    rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
     restarted = tuple(
-        rebuilt.facade.get_research_artifact(record_id)
+        rebuilt.archive.artifact(record_id)
         for record_id in first.artifact_record_ids
     )
-    replay = rebuilt.facade.run_research_workflow(_request("outlook:replay"))
+    replay = rebuilt.research.handle(StartResearchWorkflow(_request("outlook:replay")))
     assert replay.research_run_id == first.research_run_id
     assert replay.artifact_record_ids == first.artifact_record_ids
     assert tuple(item.content_hash for item in restarted) == tuple(
@@ -274,33 +276,29 @@ def test_model_and_policy_identity_create_parallel_versions_without_rewriting_hi
 ) -> None:
     engine = CountingEngine()
     root = research_root(tmp_path, engine)
-    first = root.facade.run_research_workflow(_request("outlook:v1"))
+    first = root.research.handle(StartResearchWorkflow(_request("outlook:v1")))
     old_payloads = {
-        record_id: root.facade.get_research_artifact(record_id).payload
+        record_id: root.archive.artifact(record_id).payload
         for record_id in first.artifact_record_ids
     }
-    second = root.facade.run_research_workflow(
-        _request("outlook:v2", _drafts(model_identity="company-outlook-model@2"))
-    )
-    third = root.facade.run_research_workflow(
-        _request(
+    second = root.research.handle(StartResearchWorkflow(_request("outlook:v2", _drafts(model_identity="company-outlook-model@2"))))
+    third = root.research.handle(StartResearchWorkflow(_request(
             "outlook:policy-v2",
             _drafts(
                 model_identity="company-outlook-model@2",
                 policy_identity="company-outlook-policy@2",
             ),
-        )
-    )
+        )))
 
     assert second.research_run_id == first.research_run_id
     assert second.artifact_record_ids != first.artifact_record_ids
     assert third.research_run_id == first.research_run_id
     assert third.artifact_record_ids != second.artifact_record_ids
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == 9
     assert {
-        record_id: root.facade.get_research_artifact(record_id).payload
+        record_id: root.archive.artifact(record_id).payload
         for record_id in first.artifact_record_ids
     } == old_payloads
     root.close()
@@ -322,31 +320,31 @@ def test_artifact_bundle_crash_recovery_has_no_partial_typed_commit(
     injector = CrashAt(boundary)
     root = research_root(tmp_path, engine, injector)
     with pytest.raises(InjectedCrash):
-        root.facade.run_research_workflow(_request("outlook:crash"))
-    run_id = root._store.connection.execute(
+        root.research.handle(StartResearchWorkflow(_request("outlook:crash")))
+    run_id = root.faults.adapter_connection.execute(
         "SELECT workflow_run_id FROM workflow_run WHERE invocation_id='outlook:crash'"
     ).fetchone()[0]
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == records_before_resume
     if boundary == "research_artifact.before_commit":
-        assert root._store.connection.execute(
+        assert root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_run_record"
         ).fetchone()[0] == 0
-        assert root._store.connection.execute(
+        assert root.faults.adapter_connection.execute(
             "SELECT count(*) FROM workflow_run_artifact_use WHERE workflow_run_id=?",
             (run_id,),
         ).fetchone()[0] == 0
-        assert root._store.connection.execute(
+        assert root.faults.adapter_connection.execute(
             "SELECT count(*) FROM workflow_node_run WHERE workflow_run_id=? "
             "AND node_id='run_or_link_research' AND checkpoint_manifest_id IS NOT NULL",
             (run_id,),
         ).fetchone()[0] == 0
 
     _expire(root, run_id)
-    resumed = root.facade.resume_workflow(ResumeWorkflowCommand(run_id, "resume-owner"))
+    resumed = root.research.handle(ResumeWorkflowCommand(run_id, "resume-owner"))
     assert len(resumed.artifact_record_ids) == 3
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == 3
     assert engine.calls == 2
@@ -357,8 +355,8 @@ def test_corrupt_artifact_fails_closed_and_concurrent_replay_is_idempotent(
     tmp_path: Path,
 ) -> None:
     root = research_root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("outlook:integrity"))
-    ledger = root._store.workflow_ledger
+    result = root.research.handle(StartResearchWorkflow(_request("outlook:integrity")))
+    ledger = root.faults.workflow_ledger
     code_identity = ledger.load(
         ResearchRunIdentityQuery(result.research_run_id)
     ).code_identity
@@ -416,12 +414,12 @@ def test_corrupt_artifact_fails_closed_and_concurrent_replay_is_idempotent(
     for thread in threads:
         thread.join(timeout=10)
     assert outputs == [result.artifact_record_ids, result.artifact_record_ids]
-    assert root._store.connection.execute(
+    assert root.faults.adapter_connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == 3
 
-    view = root.facade.get_research_artifact(result.artifact_record_ids[1])
-    row = root._store.connection.execute(
+    view = root.archive.artifact(result.artifact_record_ids[1])
+    row = root.faults.adapter_connection.execute(
         "SELECT o.relative_path FROM research_artifact_record r "
         "JOIN artifact a USING(artifact_id) JOIN object_blob o ON o.sha256=a.object_sha256 "
         "WHERE r.artifact_record_id=?",
@@ -429,9 +427,9 @@ def test_corrupt_artifact_fails_closed_and_concurrent_replay_is_idempotent(
     ).fetchone()
     (tmp_path / row[0]).write_bytes(b"corrupt")
     with pytest.raises(PersistenceError) as integrity:
-        root.facade.get_research_artifact(view.artifact_record_id)
+        root.archive.artifact(view.artifact_record_id)
     assert integrity.value.code == "OBJECT_INTEGRITY_FAILED"
-    doctor = root.facade.doctor()
+    doctor = root.faults.doctor()
     assert doctor.status == "failed"
     assert "OBJECT_INTEGRITY_FAILED" in doctor.errors
     root.close()

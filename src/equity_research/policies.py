@@ -5,7 +5,7 @@ from typing import Any, Mapping
 
 from .evidence import EvidenceBook
 from .models import CapabilityResult
-from .research_inputs import ResearchInputs
+from trading_platform.domain.research_inputs import ResearchInputs
 
 
 @dataclass(frozen=True)

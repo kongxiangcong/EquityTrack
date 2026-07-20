@@ -397,7 +397,7 @@ class WorkflowLedger:
             return row[0]
         if isinstance(query, SnapshotEvidenceQuery):
             snapshot = self.__connection.execute(
-                "SELECT snapshot_purpose FROM data_snapshot WHERE data_snapshot_id=?",
+                "SELECT snapshot_purpose,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing FROM data_snapshot WHERE data_snapshot_id=?",
                 (query.data_snapshot_id,),
             ).fetchone()
             if snapshot is None:
@@ -406,7 +406,15 @@ class WorkflowLedger:
                 "SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=?",
                 (query.data_snapshot_id,),
             ).fetchall()
-            return SnapshotEvidence(snapshot[0], {row[0]: row[1] for row in rows})
+            return SnapshotEvidence(
+                purpose=str(snapshot["snapshot_purpose"]),
+                members={row[0]: row[1] for row in rows},
+                quality_status=str(snapshot["quality_status"]),
+                coverage_expected=int(snapshot["coverage_expected"]),
+                coverage_eligible=int(snapshot["coverage_eligible"]),
+                coverage_excluded=int(snapshot["coverage_excluded"]),
+                coverage_missing=int(snapshot["coverage_missing"]),
+            )
         if isinstance(query, ProjectionEvidenceQuery):
             row = self.__connection.execute(
                 "SELECT p.*,s.snapshot_purpose,s.freshness_status,s.quality_status FROM research_input_projection p JOIN data_snapshot s ON s.data_snapshot_id=p.research_snapshot_id WHERE p.research_projection_id=?",
@@ -676,11 +684,11 @@ class WorkflowLedger:
             raise
 
     def _heartbeat(self, workflow_run_id: str, owner_token: str, lease_seconds: int = 30) -> None:
-        now = datetime.now(timezone.utc)
-        expires = (now + timedelta(seconds=lease_seconds)).isoformat()
-        for retry in range(10):
+        for retry in range(40):
             try:
                 with self.__writer_lock.acquire(f"workflow-heartbeat:{workflow_run_id}:{owner_token}"):
+                    now = datetime.now(timezone.utc)
+                    expires = (now + timedelta(seconds=lease_seconds)).isoformat()
                     with self.__connection:
                         changed = self.__connection.execute("UPDATE workflow_run SET heartbeat_at=?,lease_expires_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (now.isoformat(), expires, workflow_run_id, owner_token)).rowcount
                         if changed != 1:
@@ -689,7 +697,7 @@ class WorkflowLedger:
                         self.__connection.execute("UPDATE workflow_node_attempt SET heartbeat_at=?,lease_expires_at=? WHERE owner_token=? AND disposition IS NULL AND workflow_node_run_id IN (SELECT workflow_node_run_id FROM workflow_node_run WHERE workflow_run_id=?)", (now.isoformat(), expires, owner_token, workflow_run_id))
                 return
             except PersistenceError as error:
-                if error.code != "RUNTIME_BUSY" or retry == 9:
+                if error.code != "RUNTIME_BUSY" or retry == 39:
                     raise
                 time.sleep(0.05)
 
@@ -948,7 +956,7 @@ class WorkflowLedger:
                         "input",
                     ),
                     (source_json_artifact_id, "research_run_json", "output"),
-                    (source_html_artifact_id, "research_report_html", "output"),
+                    (source_html_artifact_id, "research_source_identity_html", "output"),
                     (decision_json_artifact_id, "decision_view_json", "output"),
                     (decision_html_artifact_id, "decision_view_html", "output"),
                     *(
@@ -2008,7 +2016,7 @@ class WorkflowLedger:
         self, command: FreezeProjection
     ) -> tuple[PreparedProjection, bytes]:
         projection = command.projection
-        payload = json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "context": projection.context, "as_of_date": projection.as_of_date, "profile": projection.profile, "field_semantics": [item.__dict__ for item in projection.field_semantics], "diluted_share_identity": projection.diluted_share_identity, "net_debt_bridge_identity": projection.net_debt_bridge_identity, "source_manifest_validation_result": projection.source_manifest_validation_result, "source_manifest_path": projection.source_manifest_path}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        payload = json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "research_inputs": projection.research_inputs.identity_payload(), "as_of_date": projection.as_of_date, "profile": projection.profile, "field_semantics": [item.__dict__ for item in projection.field_semantics], "diluted_share_identity": projection.diluted_share_identity, "net_debt_bridge_identity": projection.net_debt_bridge_identity, "source_manifest_validation_result": projection.source_manifest_validation_result, "source_manifest_path": projection.source_manifest_path}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         projection_hash = hashlib.sha256(payload).hexdigest()
         existing = self.__connection.execute("SELECT research_projection_id,research_snapshot_id,projection_artifact_id FROM research_input_projection WHERE projection_hash=?", (projection_hash,)).fetchone()
         if existing:
@@ -2400,7 +2408,7 @@ class WorkflowLedger:
                 refs = (
                     ("research_run", "ResearchRun", record.research_run_id, disposition.value),
                     ("research_json", "Artifact", record.canonical_json_artifact_id, disposition.value),
-                    ("research_html", "Artifact", record.html_artifact_id, disposition.value),
+                    ("research_source_identity_html", "Artifact", record.html_artifact_id, disposition.value),
                     *typed_refs,
                     ("decision_view_manifest", "ArtifactManifest", decision_manifest, "created"),
                     ("final_manifest", "ArtifactManifest", final_manifest, "created"),

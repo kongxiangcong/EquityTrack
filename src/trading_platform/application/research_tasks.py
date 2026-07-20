@@ -8,6 +8,8 @@ from trading_platform.application.workflow_ledger import (
     ManifestQuery,
     ResearchArtifactQuery,
     ResearchPayloadQuery,
+    SnapshotEvidence,
+    SnapshotEvidenceQuery,
     WorkflowHistoryQuery,
     WorkflowLedgerPort,
 )
@@ -25,6 +27,9 @@ class WorkflowInspection:
 
     def inspect(self, workflow_run_id: str) -> WorkflowHistory:
         return self._ledger.load(WorkflowHistoryQuery(workflow_run_id))
+
+    def snapshot(self, data_snapshot_id: str) -> SnapshotEvidence:
+        return self._ledger.load(SnapshotEvidenceQuery(data_snapshot_id))
 
 
 class ResearchArchive:

@@ -23,11 +23,6 @@ from .models import (
     ResearchSynthesis,
     SourceRecord,
 )
-from .research_inputs import (
-    LegacyResearchContextAdapter,
-    ResearchInputMigration,
-    ResearchInputs,
-)
 from .simulation import (
     AffineSimulationModel,
     CalibrationEvidence,
@@ -109,9 +104,6 @@ __all__ = [
     "ProbabilityForecastTarget",
     "ResearchEngine",
     "ResearchRequest",
-    "ResearchInputs",
-    "ResearchInputMigration",
-    "LegacyResearchContextAdapter",
     "ResearchRun",
     "ResearchSynthesis",
     "SourceRecord",

@@ -146,6 +146,11 @@ class CompletedResearch:
 class SnapshotEvidence:
     purpose: str
     members: Mapping[str, str]
+    quality_status: str
+    coverage_expected: int
+    coverage_eligible: int
+    coverage_excluded: int
+    coverage_missing: int
 
 
 @dataclass(frozen=True)

@@ -6,10 +6,15 @@ import pytest
 
 from trading_platform.account import AccountOpeningError, AccountOpeningService
 from trading_platform.operations import PlatformOperations
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.web_server import LocalChartWorkspaceServer
 from tests.platform.test_chart_annotations import ROOT as REPO_ROOT, _root as chart_root
 from tests.platform.test_tonghuashun_preview import _write
+
+
+@pytest.fixture(autouse=True)
+def _bootstrapped_account_root(tmp_path: Path) -> None:
+    PlatformOperations(tmp_path / "data").bootstrap()
 
 
 def _sources(root: Path, bad_weight: bool = False) -> list[Path]:
@@ -41,8 +46,8 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(tmp_path:
     detail = service.get_detail(result.account_id)
     assert detail.opening == result and {item.source_type for item in detail.positions} == {"opening_snapshot"}
     assert {item.cost_price_decimal for item in detail.positions} == {"8", "18"}
-    composition = ProductionCompositionRoot(tmp_path / "data")
-    assert composition.facade.get_account_opening(result.account_id) == detail
+    composition = PlatformTaskFixture(tmp_path / "data")
+    assert composition.accounts.get_detail(result.account_id) == detail
     composition.close()
     import sqlite3
     connection = sqlite3.connect(tmp_path / "data/platform.sqlite3"); connection.row_factory = sqlite3.Row
@@ -54,9 +59,9 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(tmp_path:
     connection.close()
     chart = chart_root(tmp_path / "data")
     security_id = detail.positions[0].security_id
-    workspace = chart.facade.get_workspace(security_id, "snapshot_chart")
+    workspace = chart.workspace.build(security_id, "snapshot_chart")
     assert workspace["account_opening_state"][0]["limitations"] == list(result.limitations)
-    server = LocalChartWorkspaceServer(chart.facade, REPO_ROOT / "web/dist", security_id, "snapshot_chart")
+    server = LocalChartWorkspaceServer(chart.web, REPO_ROOT / "web/dist", security_id, "snapshot_chart")
     import json
     from urllib.request import urlopen
     base = server.start(); payload = json.loads(urlopen(base + "/api/workspace").read())

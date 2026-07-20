@@ -18,7 +18,7 @@ from .models import (
 from .narrative import NarrativeInputs, build_professional_narrative
 from .output_policy import normalize_action_language
 from .policies import evaluate_capabilities
-from .research_inputs import LegacyResearchContextAdapter, ResearchInputs
+from trading_platform.domain.research_inputs import ResearchInputs
 from .valuation import route_methods
 
 
@@ -69,7 +69,7 @@ NARRATIVE_KEYS = {
 def _normalize_context_language(
     value: Any,
     *,
-    path: str = "$.context",
+    path: str = "$.research_inputs",
     normalize_strings: bool = False,
 ) -> tuple[Any, tuple[IntegrityIssue, ...]]:
     issues: list[IntegrityIssue] = []
@@ -152,18 +152,9 @@ class ResearchEngine:
     """Deep deterministic module behind the research workflow seam."""
 
     def run(self, request: ResearchRequest) -> ResearchRun:
-        if request.research_inputs is not None:
-            inputs, policy_issues = _normalize_research_inputs(
-                request.research_inputs
-            )
-        else:
-            normalized_context, policy_issues = _normalize_context_language(
-                request.context or {}
-            )
-            migration = LegacyResearchContextAdapter.adapt(
-                normalized_context
-            )
-            inputs = migration.inputs
+        inputs, policy_issues = _normalize_research_inputs(
+            request.research_inputs
+        )
         build = build_evidence(
             request.manifest,
             request.estimates,
@@ -297,10 +288,7 @@ class ResearchEngine:
                 },
             }
         plan = self._conditional_plan(inputs, capabilities, methods)
-        diagnostics = (
-            *inputs.migration_diagnostics,
-            *self._diagnostics(issues, capabilities, methods),
-        )
+        diagnostics = self._diagnostics(issues, capabilities, methods)
 
         run = ResearchRun(
             schema_version=SCHEMA_VERSION,
@@ -325,10 +313,6 @@ class ResearchEngine:
             diagnostics=diagnostics,
         )
 
-        if request.render_html:
-            from .report import render_html_report
-
-            run = replace(run, html=render_html_report(run))
         return run
 
     @staticmethod
@@ -414,12 +398,7 @@ class ResearchEngine:
             "profile": request.profile,
             "manifest": request.manifest,
             "estimates": request.estimates,
-            "context": request.context,
-            "research_inputs": (
-                request.research_inputs.identity_payload()
-                if request.research_inputs is not None
-                else None
-            ),
+            "research_inputs": request.research_inputs.identity_payload(),
             "forecast_request": (
                 request.forecast_request.to_dict()
                 if request.forecast_request is not None

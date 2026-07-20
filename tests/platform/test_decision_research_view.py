@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
+
 import json
 import re
 import inspect
@@ -49,38 +52,38 @@ def test_incomplete_populated_root_rejects_workflow_and_workspace(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    first = root.facade.run_research_workflow(_request("cutover:baseline"))
-    LegacyResearchCutoverFixture(root._store).remove_decision_reference(
+    first = root.research.handle(StartResearchWorkflow(_request("cutover:baseline")))
+    LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_reference(
         first.workflow_run_id
     )
 
     with pytest.raises(WorkflowError) as workflow_error:
-        root.facade.run_research_workflow(_request("cutover:blocked"))
+        root.research.handle(StartResearchWorkflow(_request("cutover:blocked")))
     assert workflow_error.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
     with pytest.raises(WorkflowError) as resume_error:
-        root.facade.resume_workflow(
+        root.research.handle(
             ResumeWorkflowCommand(first.workflow_run_id, "blocked-owner")
         )
     assert resume_error.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
     with pytest.raises(WorkflowError) as cancel_error:
-        root.facade.cancel_workflow(
+        root.research.handle(
             CancelWorkflowCommand(first.workflow_run_id, "blocked")
         )
     assert cancel_error.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
     with pytest.raises(ResearchViewError, match="RESEARCH_VIEW_CUTOVER_INCOMPLETE"):
-        root.facade.get_workspace("security_yihua", first.research_snapshot_id)
+        root.workspace.build("security_yihua", first.research_snapshot_id)
     root.close()
 
     migrated = PlatformOperations(tmp_path).migrate()
     assert migrated["status"] == "passed"
     rebuilt = _root(tmp_path, CountingEngine())
-    workspace = rebuilt.facade.get_workspace(
+    workspace = rebuilt.workspace.build(
         "security_yihua", first.research_snapshot_id
     )
     assert workspace["research_views"][0]["view_id"] == json.loads(
         _artifact_bytes(rebuilt, first.json_artifact_id)
     )["view_id"]
-    assert rebuilt.facade.get_workflow_history(
+    assert rebuilt.inspection.inspect(
         first.workflow_run_id
     ).final_manifest_id == first.final_manifest_id
     rebuilt.close()
@@ -88,18 +91,18 @@ def test_incomplete_populated_root_rejects_workflow_and_workspace(
 
 def test_cutover_materializes_missing_view_identity_stably(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:materialize"))
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:materialize")))
     original_json = _artifact_bytes(root, result.json_artifact_id)
-    manifest_id = LegacyResearchCutoverFixture(root._store).remove_decision_manifest(
+    manifest_id = LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_manifest(
         result.workflow_run_id
     )
     root.close()
 
     PlatformOperations(tmp_path).migrate()
     rebuilt = _root(tmp_path, CountingEngine())
-    history = rebuilt.facade.get_workflow_history(result.workflow_run_id)
+    history = rebuilt.inspection.inspect(result.workflow_run_id)
     assert history.final_manifest_id == manifest_id
-    materialized = rebuilt.facade.get_artifact_manifest(manifest_id)
+    materialized = rebuilt.archive.manifest(manifest_id)
     assert [item["member_role"] for item in materialized.members] == [
         "decision_view_json",
         "decision_view_html",
@@ -112,8 +115,8 @@ def test_cutover_rejects_multiple_exact_source_candidates_atomically(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:source-ambiguous"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:source-ambiguous")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     legacy.add_duplicate_source_json(result.research_run_id)
     legacy.remove_decision_reference(result.workflow_run_id)
     original_pointer = legacy.source_json_artifact_id(result.research_run_id)
@@ -123,7 +126,7 @@ def test_cutover_rejects_multiple_exact_source_candidates_atomically(
         PlatformOperations(tmp_path).migrate()
     assert caught.value.code == "RESEARCH_SOURCE_ARTIFACT_NOT_UNIQUE"
     rebuilt = _root(tmp_path, CountingEngine())
-    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt._store)
+    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store)
     assert rebuilt_legacy.source_json_artifact_id(result.research_run_id) == original_pointer
     assert rebuilt_legacy.decision_ref_count(result.workflow_run_id) == 0
     rebuilt.close()
@@ -133,8 +136,8 @@ def test_cutover_rejects_missing_exact_source_candidate_atomically(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:source-missing"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:source-missing")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     source_artifact_id = legacy.hide_exact_source_json(result.research_run_id)
     legacy.remove_decision_reference(result.workflow_run_id)
     root.close()
@@ -143,7 +146,7 @@ def test_cutover_rejects_missing_exact_source_candidate_atomically(
         PlatformOperations(tmp_path).migrate()
     assert caught.value.code == "RESEARCH_SOURCE_ARTIFACT_NOT_UNIQUE"
     rebuilt = _root(tmp_path, CountingEngine())
-    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt._store)
+    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store)
     assert rebuilt_legacy.source_json_artifact_id(result.research_run_id) == source_artifact_id
     assert rebuilt_legacy.decision_ref_count(result.workflow_run_id) == 0
     rebuilt.close()
@@ -153,8 +156,8 @@ def test_cutover_ignores_source_html_with_nonexact_run_identity(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:html-exact"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:html-exact")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     legacy.add_misleading_source_html(
         result.workflow_run_id, result.research_run_id
     )
@@ -162,7 +165,7 @@ def test_cutover_ignores_source_html_with_nonexact_run_identity(
 
     assert PlatformOperations(tmp_path).migrate()["status"] == "passed"
     rebuilt = _root(tmp_path, CountingEngine())
-    assert rebuilt.facade.get_workflow_history(
+    assert rebuilt.inspection.inspect(
         result.workflow_run_id
     ).final_manifest_id == result.final_manifest_id
     rebuilt.close()
@@ -172,15 +175,15 @@ def test_cutover_ignores_source_html_with_nonexact_engine_schema(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:schema-exact"))
-    LegacyResearchCutoverFixture(root._store).add_misleading_source_schema(
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:schema-exact")))
+    LegacyResearchCutoverFixture(root.faults.legacy_store).add_misleading_source_schema(
         result.workflow_run_id, result.research_run_id
     )
     root.close()
 
     assert PlatformOperations(tmp_path).migrate()["status"] == "passed"
     rebuilt = _root(tmp_path, CountingEngine())
-    assert rebuilt.facade.get_workflow_history(
+    assert rebuilt.inspection.inspect(
         result.workflow_run_id
     ).final_manifest_id == result.final_manifest_id
     rebuilt.close()
@@ -190,8 +193,8 @@ def test_conflicting_decision_ref_rolls_back_source_pointer_repair(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:conflicting-ref"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:conflicting-ref")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     wrong_pointer = legacy.prepare_conflicting_decision_reference(
         result.workflow_run_id,
         result.research_run_id,
@@ -199,7 +202,7 @@ def test_conflicting_decision_ref_rolls_back_source_pointer_repair(
     )
 
     with pytest.raises(PersistenceError) as caught:
-        root._store.workflow_ledger.cutover_research_decision_views(
+        root.faults.workflow_ledger.cutover_research_decision_views(
             CanonicalResearchDecisionViewMaterializer()
         )
     assert caught.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
@@ -212,12 +215,12 @@ def test_noncanonical_decision_manifest_fails_completeness_gate(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:manifest-corrupt"))
-    LegacyResearchCutoverFixture(root._store).corrupt_decision_manifest_identity(
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:manifest-corrupt")))
+    LegacyResearchCutoverFixture(root.faults.legacy_store).corrupt_decision_manifest_identity(
         result.workflow_run_id
     )
     with pytest.raises(WorkflowError) as blocked:
-        root.facade.run_research_workflow(_request("cutover:manifest-blocked"))
+        root.research.handle(StartResearchWorkflow(_request("cutover:manifest-blocked")))
     assert blocked.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
     root.close()
 
@@ -226,15 +229,15 @@ def test_cutover_commit_fault_rolls_back_and_retry_reuses_exact_identity(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:commit-fault"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:commit-fault")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     legacy.remove_decision_reference(result.workflow_run_id)
 
     def fail_before_commit(boundary: str) -> None:
         if boundary == "research_view_cutover.before_commit":
             raise RuntimeError("injected cutover commit fault")
 
-    ledger = root._store.workflow_ledger
+    ledger = root.faults.workflow_ledger
     ledger.fault_injector = fail_before_commit
     with pytest.raises(RuntimeError, match="injected cutover commit fault"):
         ledger.cutover_research_decision_views(
@@ -256,15 +259,15 @@ def test_cutover_object_fault_leaves_only_orphan_and_retry_is_identity_stable(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:object-fault"))
-    legacy = LegacyResearchCutoverFixture(root._store)
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:object-fault")))
+    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
     legacy.remove_decision_graph(result.workflow_run_id)
 
     def fail_after_rename(boundary: str) -> None:
         if boundary == "object.renamed":
             raise RuntimeError("injected cutover object fault")
 
-    ledger = root._store.workflow_ledger
+    ledger = root.faults.workflow_ledger
     ledger.fault_injector = fail_after_rename
     with pytest.raises(RuntimeError, match="injected cutover object fault"):
         ledger.cutover_research_decision_views(
@@ -276,13 +279,13 @@ def test_cutover_object_fault_leaves_only_orphan_and_retry_is_identity_stable(
     ledger.cutover_research_decision_views(
         CanonicalResearchDecisionViewMaterializer()
     )
-    restored = root.facade.get_workflow_history(result.workflow_run_id)
-    restored_manifest = root.facade.get_artifact_manifest(restored.final_manifest_id)
+    restored = root.inspection.inspect(result.workflow_run_id)
+    restored_manifest = root.archive.manifest(restored.final_manifest_id)
     restored_ids = tuple(item["artifact_id"] for item in restored_manifest.members)
     ledger.cutover_research_decision_views(
         CanonicalResearchDecisionViewMaterializer()
     )
-    replayed = root.facade.get_artifact_manifest(restored.final_manifest_id)
+    replayed = root.archive.manifest(restored.final_manifest_id)
     assert tuple(item["artifact_id"] for item in replayed.members) == restored_ids
     restored_json = json.loads(_artifact_bytes(root, restored_ids[0]))
     assert restored_json["workflow_run_id"] == result.workflow_run_id
@@ -294,25 +297,25 @@ def test_cutover_preserves_shared_source_and_creates_workflow_scoped_views(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    first = root.facade.run_research_workflow(_request("cutover:shared:first"))
-    second = root.facade.run_research_workflow(_request("cutover:shared:second"))
+    first = root.research.handle(StartResearchWorkflow(_request("cutover:shared:first")))
+    second = root.research.handle(StartResearchWorkflow(_request("cutover:shared:second")))
     assert second.research_run_id == first.research_run_id
     assert second.workflow_run_id != first.workflow_run_id
-    LegacyResearchCutoverFixture(root._store).remove_decision_references(
+    LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_references(
         (first.workflow_run_id, second.workflow_run_id)
     )
     root.close()
 
     PlatformOperations(tmp_path).migrate()
     rebuilt = _root(tmp_path, CountingEngine())
-    first_history = rebuilt.facade.get_workflow_history(first.workflow_run_id)
-    second_history = rebuilt.facade.get_workflow_history(second.workflow_run_id)
+    first_history = rebuilt.inspection.inspect(first.workflow_run_id)
+    second_history = rebuilt.inspection.inspect(second.workflow_run_id)
     assert first_history.final_manifest_id != second_history.final_manifest_id
     first_view = json.loads(_artifact_bytes(rebuilt, first.json_artifact_id))
     second_view = json.loads(_artifact_bytes(rebuilt, second.json_artifact_id))
     assert first_view["research_run_id"] == second_view["research_run_id"]
     assert first_view["workflow_run_id"] != second_view["workflow_run_id"]
-    source_ids = LegacyResearchCutoverFixture(rebuilt._store).source_artifact_ids(
+    source_ids = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store).source_artifact_ids(
         first.research_run_id
     )
     assert all(source_ids)
@@ -321,19 +324,19 @@ def test_cutover_preserves_shared_source_and_creates_workflow_scoped_views(
 
 def test_completed_v1_workflow_is_inspection_only(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("cutover:legacy-v1"))
-    LegacyResearchCutoverFixture(root._store).mark_completed_workflow_v1(
+    result = root.research.handle(StartResearchWorkflow(_request("cutover:legacy-v1")))
+    LegacyResearchCutoverFixture(root.faults.legacy_store).mark_completed_workflow_v1(
         result.workflow_run_id
     )
 
-    history = root.facade.get_workflow_history(result.workflow_run_id)
+    history = root.inspection.inspect(result.workflow_run_id)
     assert history.status in {"succeeded", "succeeded_with_limits"}
     with pytest.raises(WorkflowError) as blocked:
-        root.facade.resume_workflow(
+        root.research.handle(
             ResumeWorkflowCommand(result.workflow_run_id, "legacy-owner")
         )
     assert blocked.value.code == "WORKFLOW_DEFINITION_MISMATCH"
-    assert root.facade.get_workflow_history(result.workflow_run_id) == history
+    assert root.inspection.inspect(result.workflow_run_id) == history
     root.close()
 
 
@@ -341,13 +344,13 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(_request("decision-view:v1"))
+    result = root.research.handle(StartResearchWorkflow(_request("decision-view:v1")))
 
-    source_html = LegacyResearchCutoverFixture(root._store).source_html_path(
+    source_html = LegacyResearchCutoverFixture(root.faults.legacy_store).source_html_path(
         result.research_run_id
     ).read_bytes()
 
-    workspace = root.facade.get_workspace(
+    workspace = root.workspace.build(
         "security_yihua",
         result.research_snapshot_id,
     )
@@ -409,9 +412,7 @@ def test_formal_json_and_html_share_the_exact_decision_view(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path, CountingEngine())
-    result = root.facade.run_research_workflow(
-        _request("decision-view:canonical-presentation")
-    )
+    result = root.research.handle(StartResearchWorkflow(_request("decision-view:canonical-presentation")))
 
     payload = json.loads(
         _artifact_bytes(root, result.json_artifact_id)
@@ -424,16 +425,16 @@ def test_formal_json_and_html_share_the_exact_decision_view(
     )
 
     assert payload["schema_version"] == "ResearchDecisionView@2"
-    source_payload = root.facade.get_research_run_payload(result.research_run_id)
+    source_payload = root.archive.source_payload(result.research_run_id)
     assert source_payload["schema_version"] == 3
     assert source_payload["run_id"] == result.research_run_id
-    history = root.facade.get_workflow_history(result.workflow_run_id)
+    history = root.inspection.inspect(result.workflow_run_id)
     decision_refs = [
         item for item in history.refs
         if item["ref_role"] == "decision_view_manifest"
     ]
     assert len(decision_refs) == 1
-    manifest = root.facade.get_artifact_manifest(decision_refs[0]["ref_id"])
+    manifest = root.archive.manifest(decision_refs[0]["ref_id"])
     assert manifest.manifest_role == "workflow_decision_view@1"
     assert [item["member_role"] for item in manifest.members] == [
         "decision_view_json",
@@ -535,14 +536,12 @@ def test_formal_html_renders_optional_value_and_market_distributions() -> None:
 
 def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
-    first = root.facade.run_research_workflow(_request("decision-view:model-v1"))
-    second = root.facade.run_research_workflow(
-        _request(
+    first = root.research.handle(StartResearchWorkflow(_request("decision-view:model-v1")))
+    second = root.research.handle(StartResearchWorkflow(_request(
             "decision-view:model-v2",
             _drafts(model_identity="company-outlook-model@2"),
-        )
-    )
-    workspace = root.facade.get_workspace(
+        )))
+    workspace = root.workspace.build(
         "security_yihua",
         first.research_snapshot_id,
     )

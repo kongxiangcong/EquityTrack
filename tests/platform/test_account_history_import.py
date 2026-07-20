@@ -11,8 +11,14 @@ from trading_platform.account_history import (
     HistoryImportError,
 )
 from trading_platform.persistence import PlatformStore
+from trading_platform.operations import PlatformOperations
 from tests.platform.test_account_opening import _sources
 from tests.platform.test_tonghuashun_preview import _write
+
+
+@pytest.fixture(autouse=True)
+def _bootstrapped_account_root(tmp_path: Path) -> None:
+    PlatformOperations(tmp_path / "data").bootstrap()
 
 
 def _opened_account(tmp_path: Path) -> tuple[str, list[Path]]:

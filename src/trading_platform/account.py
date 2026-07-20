@@ -94,12 +94,6 @@ class AccountOpeningService:
         snapshot_hash = canonical_hash({"sources": sorted(item.source_object_sha256 for item in preview.files), "as_of": confirmed_as_of, "currency": base_currency})
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
-            for retry in range(40):
-                try:
-                    store.migrate(); break
-                except PersistenceError as error:
-                    if error.code != "RUNTIME_BUSY" or retry == 39: raise
-                    time.sleep(0.05)
             existing = store.connection.execute("SELECT account_id FROM account_import_batch WHERE invocation_id=? OR source_snapshot_hash=?", (invocation_id, snapshot_hash)).fetchone()
             if existing: return self._result(store.connection, existing[0])
             try:
@@ -116,7 +110,6 @@ class AccountOpeningService:
     def get(self, account_id: str) -> AccountOpeningResult:
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
-            store.migrate()
             if store.connection.execute("SELECT 1 FROM account WHERE account_id=?", (account_id,)).fetchone() is None:
                 raise AccountOpeningError("ACCOUNT_NOT_FOUND")
             return self._result(store.connection, account_id)

@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Mapping
 
+from .research_inputs import ResearchInputs
+
 
 class WorkflowStatus(str, Enum):
     SUCCEEDED = "succeeded"
@@ -1065,7 +1067,7 @@ class FieldSemantics:
 class ResearchProjection:
     manifest: Mapping[str, Any]
     estimates: Mapping[str, Any] | None
-    context: Mapping[str, Any] | None
+    research_inputs: ResearchInputs
     as_of_date: str
     profile: str
     field_semantics: tuple[FieldSemantics, ...]

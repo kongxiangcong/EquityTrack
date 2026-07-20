@@ -1,7 +1,6 @@
 # Output Schema: Interface Contract Between Analysis and Presentation Layers
 
-> Legacy compatibility contract. This schema describes historical
-> `ResearchRun@3` file outputs. New formal platform JSON/HTML/XLSX outputs derive
+> Historical source-run reference only. Formal platform JSON/HTML/XLSX outputs derive
 > from `ResearchDecisionView@2`; standalone validator result paths are not
 > runtime authorities.
 
@@ -45,11 +44,9 @@ The analysis engine produces a structured intermediate object (written to `{comp
 | `source_manifest_path` | string | Yes | Path to the source manifest JSON artifact |
 | `source_manifest_validation_result_path` | string | Yes | Path to the validation JSON emitted by `scripts/source_manifest_validator.py` |
 | `source_manifest_validation_result` | object | Yes | Executable validation result; see shape below |
-| `model_validation_result_path` | string | L2 Yes | Path to the validation JSON emitted by `scripts/model_validator.py` |
-| `model_validation_result` | object | L2 Yes | Executable workbook validation result; see shape below |
-| `model_validation_status` | enum | L2 Yes | `not_run` / `passed` / `failed` / `not_available` |
-| `model_blocked_reason` | array | Conditional | Required when model validation fails or is unavailable |
-| `report_generation_allowed` | boolean | Yes | True only when required source and model validation gates pass |
+| `decision_view_manifest_id` | string | Yes | Canonical immutable manifest for JSON and HTML decision views |
+| `workbook_projection_status` | enum | L2 Yes | `not_requested` / `passed` / `failed` / `runtime_unavailable` |
+| `workbook_blocked_reason` | array | Conditional | Required when workbook projection fails or its runtime is unavailable |
 | `source_manifest_status` | enum | Yes | `sufficient` / `insufficient` / `draft` |
 | `data_quality_grade` | enum | Yes | `High` / `Medium` / `Low` / `Insufficient` |
 | `valuation_method_router_result` | object | Yes | Selected/caution/disabled methods and missing data |
@@ -75,34 +72,6 @@ The analysis engine produces a structured intermediate object (written to `{comp
     "critical_fields_explicitly_missing": number,
     "official_financial_fields_covered": number,
     "hash_checks": number,
-    "errors": number,
-    "warnings": number
-  },
-  "issues": [
-    { "severity": "error" | "warning", "code": string, "message": string, "path": string }
-  ]
-}
-```
-
-`model_validation_result` shape:
-
-```
-{
-  "path": string,
-  "validator": "model_validator",
-  "validator_version": number,
-  "passed": boolean,
-  "model_validation_status": "passed" | "failed",
-  "report_generation_allowed": boolean,
-  "dcf_status": "allowed" | "caution" | "disabled" | "not_selected",
-  "company_type": string,
-  "model_blocked_reason": [
-    { "code": string, "message": string, "path": string }
-  ],
-  "summary": {
-    "sheets_total": number,
-    "required_sheets": number,
-    "missing_required_sheets": number,
     "errors": number,
     "warnings": number
   },

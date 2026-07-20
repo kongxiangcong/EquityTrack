@@ -100,7 +100,7 @@ def main() -> None:
     args = parser.parse_args()
     temp_root = Path(tempfile.mkdtemp(prefix="issue05-browser-"))
     root = _root(temp_root / "data")
-    server = LocalChartWorkspaceServer(root.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+    server = LocalChartWorkspaceServer(root.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
     base_url = server.start()
     port = _free_port()
     browser = subprocess.Popen([
@@ -164,7 +164,7 @@ def main() -> None:
 
         server.close(); root.close()
         rebuilt = _root(temp_root / "data")
-        restarted = LocalChartWorkspaceServer(rebuilt.facade, ROOT / "web/dist", "security_yihua", "snapshot_chart")
+        restarted = LocalChartWorkspaceServer(rebuilt.web, ROOT / "web/dist", "security_yihua", "snapshot_chart")
         restarted_url = restarted.start()
         _navigate(cdp, restarted_url)
         cdp.wait_for("document.querySelectorAll('#ledger li').length === 4")

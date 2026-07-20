@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading_platform.application.contracts import StartResearchWorkflow
+
 import hashlib
 import inspect
 import json
@@ -9,10 +11,11 @@ from pathlib import Path
 import pytest
 
 from equity_research import ResearchEngine
-from trading_platform import ProductionCompositionRoot
+from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.application.workflow_ledger import WorkspaceWorkflowQuery
 from trading_platform.domain.workflow import FieldSemantics, ReferenceDisposition, ResearchProjection, ResearchWorkflowRequest
+from trading_platform.domain.research_inputs import ResearchInputs
 from trading_platform.workflows.research import ResearchExecution, ResearchWorkflow, WorkflowError
 from trading_platform.research import SnapshotToResearchRequestAssembler
 
@@ -50,7 +53,10 @@ def _load(name: str):
     return json.loads((EXAMPLE / name).read_text(encoding="utf-8"))
 
 
-def _projection(context=None) -> ResearchProjection:
+def _projection(
+    research_inputs=None,
+    workflow_research_member_ids: tuple[str, ...] = (),
+) -> ResearchProjection:
     manifest = _load("source_manifest.json")
     semantics = []
     for source in manifest["sources"]:
@@ -74,7 +80,12 @@ def _projection(context=None) -> ResearchProjection:
     return ResearchProjection(
         manifest=manifest,
         estimates=_load("estimate_overlay.json"),
-        context=_load("research_context.json") if context is None else context,
+        research_inputs=replace(
+            ResearchInputs.from_mapping(_load("research_context.json"))
+            if research_inputs is None
+            else research_inputs,
+            workflow_research_member_ids=workflow_research_member_ids,
+        ),
         as_of_date="2026-07-07",
         profile="standard",
         field_semantics=tuple(semantics),
@@ -119,56 +130,55 @@ def _request(invocation: str, projection: ResearchProjection | None = None, **ch
     return ResearchWorkflowRequest(**values)
 
 
-def _artifact_bytes(root: ProductionCompositionRoot, artifact_id: str) -> bytes:
-    sha = root._store.connection.execute("SELECT object_sha256 FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
-    relative = root._store.connection.execute("SELECT relative_path FROM object_blob WHERE sha256=?", (sha,)).fetchone()[0]
-    return (root._store.data_root / relative).read_bytes()
+def _artifact_bytes(root: PlatformTaskFixture, artifact_id: str) -> bytes:
+    return root.faults.artifact_bytes(artifact_id)
 
 
 def _root(
     tmp_path: Path,
     engine: CountingEngine,
     workflow_fault_injector=None,
-) -> ProductionCompositionRoot:
-    root = ProductionCompositionRoot(
+) -> PlatformTaskFixture:
+    root = PlatformTaskFixture(
         tmp_path,
         research_engine=engine,
         workflow_fault_injector=workflow_fault_injector,
     )
-    root.facade.add_watchlist_item("watch:security_yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
+    root.watchlist.add("watch:security_yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
     return root
 
 
-def test_legacy_unknown_context_keys_are_diagnosed_and_version_identity() -> None:
-    assembler = SnapshotToResearchRequestAssembler()
-    baseline = _projection()
-    with_ignored = _projection(
-        {
-            **baseline.context,
-            "obsolete_magic_key": {"must": "not affect identity"},
-        }
-    )
+def test_unknown_research_input_fields_are_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown ResearchInputs fields"):
+        ResearchInputs.from_mapping({"obsolete_magic_key": True})
 
-    assert assembler.fingerprint(baseline) != assembler.fingerprint(with_ignored)
-    request = assembler.assemble(with_ignored)
-    assert request.context is None
-    assert request.research_inputs is not None
-    assert any(
-        item.startswith("LEGACY_RESEARCH_CONTEXT_KEYS_IGNORED:")
-        for item in request.research_inputs.migration_diagnostics
-    )
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"report_version": True},
+        {"company_type": 7},
+        {"theses": {}},
+        {"analyses": []},
+        {"workflow_research_member_ids": "filing:2026Q2"},
+        {"workflow_research_member_ids": [""]},
+    ),
+)
+def test_malformed_research_input_types_fail_closed(payload: dict) -> None:
+    with pytest.raises(TypeError):
+        ResearchInputs.from_mapping(payload)
 
 
 def test_public_workflow_creates_canonical_research_artifacts_and_replays_invocation(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
-    result = root.facade.run_research_workflow(_request("research:one"))
-    replay = root.facade.run_research_workflow(_request("research:one"))
+    result = root.research.handle(StartResearchWorkflow(_request("research:one")))
+    replay = root.research.handle(StartResearchWorkflow(_request("research:one")))
 
     assert replay == result
     assert result.disposition is ReferenceDisposition.CREATED
     assert engine.calls == 1
-    payload = root.facade.get_research_run_payload(result.research_run_id)
+    payload = root.archive.source_payload(result.research_run_id)
     direct = ResearchEngine().run(SnapshotToResearchRequestAssembler().assemble(_projection())).to_dict()
     assert payload == direct
     assert payload["schema_version"] == direct["schema_version"]
@@ -179,13 +189,20 @@ def test_public_workflow_creates_canonical_research_artifacts_and_replays_invoca
     decision = json.loads(_artifact_bytes(root, result.json_artifact_id))
     assert decision["schema_version"] == "ResearchDecisionView@2"
     assert _artifact_bytes(root, result.html_artifact_id).lower().startswith(b"<!doctype html>")
-    history = root.facade.get_workflow_history(result.workflow_run_id)
+    history = root.inspection.inspect(result.workflow_run_id)
     assert history.status in {"succeeded", "succeeded_with_limits"}
     assert [item["node_id"] for item in history.attempts] == ["freeze_research_projection", "run_or_link_research", "publish_run_manifest"]
-    assert {item["ref_role"] for item in history.refs} >= {"research_snapshot", "research_projection", "research_run", "research_json", "research_html", "final_manifest"}
+    assert {item["ref_role"] for item in history.refs} >= {"research_snapshot", "research_projection", "research_run", "research_json", "research_source_identity_html", "final_manifest"}
     assert history.reuse_decision["reason_code"] == "RESEARCH_INPUT_CHANGED_OR_NEW"
-    assert tuple(root._store.connection.execute("SELECT quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing FROM data_snapshot WHERE data_snapshot_id=?", (result.research_snapshot_id,)).fetchone()) == ("warning", 1, 1, 0, 0)
-    manifest = root.facade.get_artifact_manifest(history.final_manifest_id)
+    snapshot = root.inspection.snapshot(result.research_snapshot_id)
+    assert (
+        snapshot.quality_status,
+        snapshot.coverage_expected,
+        snapshot.coverage_eligible,
+        snapshot.coverage_excluded,
+        snapshot.coverage_missing,
+    ) == ("warning", 1, 1, 0, 0)
+    manifest = root.archive.manifest(history.final_manifest_id)
     assert manifest.producer_id == result.workflow_run_id
     assert [(item["member_role"], item["direction"]) for item in manifest.members] == [
         ("decision_view_json", "output"),
@@ -198,12 +215,10 @@ def test_fresh_projection_rejects_future_as_of_before_freeze(tmp_path: Path) -> 
     root = _root(tmp_path, CountingEngine())
     future = replace(_projection(), as_of_date="2026-07-08")
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(
-            _request("research:future-projection", future)
-        )
+        root.research.handle(StartResearchWorkflow(_request("research:future-projection", future)))
     assert caught.value.code == "WORKFLOW_PIT_INVARIANT_FAILED"
     assert (
-        root._store.connection.execute(
+        root.faults.adapter_connection.execute(
             "SELECT count(*) FROM research_input_projection"
         ).fetchone()[0]
         == 0
@@ -214,8 +229,8 @@ def test_fresh_projection_rejects_future_as_of_before_freeze(tmp_path: Path) -> 
 def test_new_invocation_reuses_immutable_research_and_market_only_snapshot(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
-    first = root.facade.run_research_workflow(_request("research:first"))
-    connection = root._store.connection
+    first = root.research.handle(StartResearchWorkflow(_request("research:first")))
+    connection = root.faults.adapter_connection
     with connection:
         connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
             "snapshot_market_20260710", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1", "freshness@1", "market-members", "valid", "pass", 0, 0, 0, 0, 0, "test workflow snapshot", "2026-07-11T00:00:00+00:00",
@@ -224,14 +239,14 @@ def test_new_invocation_reuses_immutable_research_and_market_only_snapshot(tmp_p
         connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_market", "daily", "security_yihua:2026-07-10"))
         connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("daily:2026-07-10", "record_market", 1, "market-content", "attempt_market", "2026-07-10", "2026-07-10", "date", "2026-07-10T09:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
         connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_market_20260710", "daily:2026-07-10", "daily", 0))
-    second = root.facade.run_research_workflow(_request(
+    second = root.research.handle(StartResearchWorkflow(_request(
         "research:market-refresh",
         requested_date="2026-07-11",
         effective_session_date="2026-07-10",
         workflow_snapshot_id="snapshot_market_20260710",
         candidate_member_ids=("daily:2026-07-10",),
         market_only_member_ids=("daily:2026-07-10",),
-    ))
+    )))
 
     assert engine.calls == 1
     assert second.workflow_run_id != first.workflow_run_id
@@ -248,11 +263,11 @@ def test_new_invocation_reuses_immutable_research_and_market_only_snapshot(tmp_p
 def test_changed_research_input_creates_new_run_and_old_artifacts_remain_readable(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
-    first = root.facade.run_research_workflow(_request("research:first"))
+    first = root.research.handle(StartResearchWorkflow(_request("research:first")))
     old_json = _artifact_bytes(root, first.json_artifact_id)
-    context = _load("research_context.json")
-    context["workflow_test_marker"] = "changed research input"
-    second = root.facade.run_research_workflow(_request("research:changed", _projection(context)))
+    inputs = ResearchInputs.from_mapping(_load("research_context.json"))
+    changed_inputs = replace(inputs, executive_summary="changed research input")
+    second = root.research.handle(StartResearchWorkflow(_request("research:changed", _projection(changed_inputs))))
 
     assert engine.calls == 2
     assert second.research_run_id != first.research_run_id
@@ -264,17 +279,15 @@ def test_changed_research_input_creates_new_run_and_old_artifacts_remain_readabl
 def test_typed_research_relevant_snapshot_member_requires_and_accepts_updated_projection(tmp_path: Path) -> None:
     engine = CountingEngine()
     root = _root(tmp_path, engine)
-    first = root.facade.run_research_workflow(_request("research:before-disclosure"))
-    connection = root._store.connection
+    first = root.research.handle(StartResearchWorkflow(_request("research:before-disclosure")))
+    connection = root.faults.adapter_connection
     with connection:
         connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_filing", "filing-refresh", "official", "official@1", "financial_statement", "CNINFO", "official", "urn:test:filing", "{}", "{}", "timestamp", "official-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"))
         connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_filing", "financial_statement", "security_yihua:2026Q2"))
         connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
         connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1", "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
         connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_filing", "filing:2026Q2", "financial_statement", 0))
-    context = _load("research_context.json")
-    context["workflow_research_member_ids"] = ["filing:2026Q2"]
-    changed = root.facade.run_research_workflow(_request("research:after-disclosure", _projection(context), requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id="snapshot_filing", candidate_member_ids=("filing:2026Q2",)))
+    changed = root.research.handle(StartResearchWorkflow(_request("research:after-disclosure", _projection(workflow_research_member_ids=("filing:2026Q2",)), requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id="snapshot_filing", candidate_member_ids=("filing:2026Q2",))))
     assert engine.calls == 2 and changed.research_run_id != first.research_run_id
     assert changed.research_snapshot_id != first.research_snapshot_id
     root.close()
@@ -303,9 +316,9 @@ def test_projection_semantics_and_cutoff_fail_closed(tmp_path: Path, mutation: s
     engine = CountingEngine()
     root = _root(tmp_path, engine)
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(_request(f"invalid:{mutation}", projection))
+        root.research.handle(StartResearchWorkflow(_request(f"invalid:{mutation}", projection)))
     assert engine.calls == 0
-    history = root.facade.get_workflow_history(caught.value.workflow_run_id)
+    history = root.inspection.inspect(caught.value.workflow_run_id)
     failed_attempt = next(
         item for item in history.attempts if item["disposition"] == "failed"
     )
@@ -349,9 +362,7 @@ def test_missing_diluted_shares_reaches_capability_degradation(tmp_path: Path) -
     root = _root(tmp_path, engine)
 
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(
-            _request("research:missing-diluted-shares", missing)
-        )
+        root.research.handle(StartResearchWorkflow(_request("research:missing-diluted-shares", missing)))
     assert caught.value.code == "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED"
     assert engine.calls == 0
     root.close()
@@ -390,9 +401,7 @@ def test_missing_net_debt_component_reaches_capability_degradation(
     root = _root(tmp_path, engine)
 
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(
-            _request("research:missing-debt", missing)
-        )
+        root.research.handle(StartResearchWorkflow(_request("research:missing-debt", missing)))
     root.close()
 
 
@@ -400,8 +409,8 @@ def test_engine_failure_publishes_diagnostic_not_empty_research_run(tmp_path: Pa
     engine = CountingEngine("expected engine failure")
     root = _root(tmp_path, engine)
     with pytest.raises(WorkflowError) as caught:
-        root.facade.run_research_workflow(_request("research:failure"))
-    connection = root._store.connection
+        root.research.handle(StartResearchWorkflow(_request("research:failure")))
+    connection = root.faults.adapter_connection
     assert connection.execute("SELECT status FROM workflow_run WHERE workflow_run_id=?", (caught.value.workflow_run_id,)).fetchone()[0] == "failed"
     assert connection.execute("SELECT count(*) FROM research_run_record").fetchone()[0] == 0
     attempt = connection.execute("SELECT error_code,diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()
@@ -413,12 +422,12 @@ def test_workflow_definition_is_versioned_and_diagnostics_are_redacted(tmp_path:
     engine = CountingEngine("token=super-secret C:\\Users\\person\\private.txt https://private.example/path")
     root = _root(tmp_path, engine)
     with pytest.raises(WorkflowError):
-        root.facade.run_research_workflow(_request("research:redaction"))
-    definition = root._store.connection.execute(
+        root.research.handle(StartResearchWorkflow(_request("research:redaction")))
+    definition = root.faults.adapter_connection.execute(
         "SELECT workflow_id,workflow_version FROM workflow_run"
     ).fetchone()
     assert tuple(definition) == ("research-workflow", "2")
-    artifact_id = root._store.connection.execute("SELECT diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()[0]
+    artifact_id = root.faults.adapter_connection.execute("SELECT diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()[0]
     diagnostic = _artifact_bytes(root, artifact_id)
     assert b"super-secret" not in diagnostic and b"private.example" not in diagnostic and b"Users" not in diagnostic
     assert b"RESEARCH_ENGINE_FAILED" in diagnostic
@@ -427,17 +436,17 @@ def test_workflow_definition_is_versioned_and_diagnostics_are_redacted(tmp_path:
 
 def test_workspace_workflow_evidence_is_scoped_to_one_security(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
-    first = root.facade.run_research_workflow(_request("workspace-scope:first"))
-    root.facade.add_watchlist_item(
+    first = root.research.handle(StartResearchWorkflow(_request("workspace-scope:first")))
+    root.watchlist.add(
         "watch:other",
         SecurityIdentity(
             "security_other", "SZSE", "000001", "CNY", "1991-04-03"
         ),
     )
-    first_evidence = root._store.workflow_ledger.load(
+    first_evidence = root.faults.workflow_ledger.load(
         WorkspaceWorkflowQuery("security_yihua")
     )
-    second_evidence = root._store.workflow_ledger.load(
+    second_evidence = root.faults.workflow_ledger.load(
         WorkspaceWorkflowQuery("security_other")
     )
 
