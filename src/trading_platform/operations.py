@@ -17,6 +17,12 @@ from typing import Any
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import DataRootWriterLock
 from trading_platform.persistence.presence import assert_maintenance_available
+from trading_platform.persistence.workflow_ledger import WorkflowLedger
+from trading_platform.application.workflow_ledger import (
+    MaintenanceActiveQuery,
+    ObjectInventoryQuery,
+    PersistenceCountsQuery,
+)
 from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
 from trading_platform.account_import import personal_source_privacy_errors
 
@@ -132,8 +138,9 @@ class PlatformOperations:
         if not database.is_file(): return
         connection = sqlite3.connect(database)
         try:
-            table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run'").fetchone()
-            if table and connection.execute("SELECT 1 FROM workflow_run WHERE status='running' AND lease_expires_at>datetime('now') LIMIT 1").fetchone():
+            connection.row_factory = sqlite3.Row
+            ledger = WorkflowLedger(connection, self.data_root, DataRootWriterLock(self.data_root))
+            if ledger.load(MaintenanceActiveQuery()):
                 raise OperationError("MAINTENANCE_WORKFLOW_ACTIVE", "An active workflow lease blocks maintenance.")
         finally: connection.close()
 
@@ -209,21 +216,21 @@ class PlatformOperations:
                 try:
                     if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or tuple(connection.execute("PRAGMA foreign_key_check")):
                         raise OperationError("BACKUP_DATABASE_INVALID", "Frozen SQLite validation failed.")
-                    objects = tuple(connection.execute("SELECT sha256,size_bytes,relative_path FROM object_blob ORDER BY sha256"))
+                    objects = WorkflowLedger(connection, self.data_root, lock).load(ObjectInventoryQuery())
                     schema_version = connection.execute("SELECT coalesce(max(version),0) FROM schema_migration").fetchone()[0]
                 finally:
                     connection.close()
                 files = [frozen]
                 relative_paths = ["platform.sqlite3"]
                 for row in objects:
-                    relative = PurePosixPath(row["relative_path"])
-                    if relative.is_absolute() or any(part in {"", ".", ".."} or ":" in part for part in relative.parts): raise OperationError("BACKUP_OBJECT_PATH_INVALID", str(row["sha256"]))
+                    relative = PurePosixPath(row.relative_path)
+                    if relative.is_absolute() or any(part in {"", ".", ".."} or ":" in part for part in relative.parts): raise OperationError("BACKUP_OBJECT_PATH_INVALID", str(row.sha256))
                     path = self.data_root.joinpath(*relative.parts).resolve()
-                    if self.data_root not in path.parents: raise OperationError("BACKUP_OBJECT_PATH_INVALID", str(row["sha256"]))
-                    expected_relative = f"objects/sha256/{row['sha256'][:2]}/{row['sha256']}"
-                    if relative.as_posix() != expected_relative: raise OperationError("BACKUP_OBJECT_PATH_HASH_MISMATCH", str(row["sha256"]))
-                    if not path.is_file() or path.stat().st_size != row["size_bytes"] or _sha256(path) != row["sha256"]:
-                        raise OperationError("BACKUP_OBJECT_INVALID", str(row["sha256"]))
+                    if self.data_root not in path.parents: raise OperationError("BACKUP_OBJECT_PATH_INVALID", str(row.sha256))
+                    expected_relative = f"objects/sha256/{row.sha256[:2]}/{row.sha256}"
+                    if relative.as_posix() != expected_relative: raise OperationError("BACKUP_OBJECT_PATH_HASH_MISMATCH", str(row.sha256))
+                    if not path.is_file() or path.stat().st_size != row.size_bytes or _sha256(path) != row.sha256:
+                        raise OperationError("BACKUP_OBJECT_INVALID", str(row.sha256))
                     files.append(path); relative_paths.append(relative.as_posix())
                 entries = [{"path": relative, "sha256": _sha256(path), "size": path.stat().st_size} for path, relative in zip(files, relative_paths)]
                 manifest = {"schema_version": self.SCHEMA, "app_version": "platform-skeleton@1", "database_schema_version": schema_version, "journal_mode": "delete", "configuration_schema_version": "local-env-scopes@1", "created_at": datetime.now(timezone.utc).isoformat(), "source_scope": hashlib.sha256(str(self.data_root).encode()).hexdigest(), "files": entries}
@@ -293,18 +300,20 @@ class PlatformOperations:
             try:
                 schema_version = restored_database.execute("SELECT max(version) FROM schema_migration").fetchone()[0]
                 journal_mode = restored_database.execute("PRAGMA journal_mode").fetchone()[0]
-                object_rows = tuple(restored_database.execute("SELECT sha256,size_bytes,relative_path FROM object_blob"))
+                restored_ledger = WorkflowLedger(restored_database, temporary, DataRootWriterLock(temporary))
+                object_rows = restored_ledger.load(ObjectInventoryQuery())
             finally: restored_database.close()
             if manifest["app_version"] != "platform-skeleton@1" or manifest["configuration_schema_version"] != "local-env-scopes@1" or manifest["database_schema_version"] != schema_version or manifest["journal_mode"] != journal_mode:
                 raise OperationError("RESTORE_METADATA_MISMATCH", "Manifest metadata differs from the restored runtime/database.")
-            database_objects = {row["relative_path"]: {"sha256": row["sha256"], "size": row["size_bytes"]} for row in object_rows}
+            database_objects = {row.relative_path: {"sha256": row.sha256, "size": row.size_bytes} for row in object_rows}
             manifest_objects = {name: {"sha256": entry["sha256"], "size": entry["size"]} for name, entry in expected.items() if name != "platform.sqlite3"}
             if database_objects != manifest_objects: raise OperationError("RESTORE_OBJECT_GRAPH_MISMATCH", "Bundle objects do not exactly match object_blob references.")
             report = operations.doctor()
             if report["status"] != "passed": raise OperationError("RESTORE_DOCTOR_FAILED", ",".join(report["errors"]))
             database = sqlite3.connect(temporary / "platform.sqlite3")
             try:
-                minimum_query = {"schema_version": database.execute("SELECT max(version) FROM schema_migration").fetchone()[0], "security_count": database.execute("SELECT count(*) FROM security").fetchone()[0], "object_count": database.execute("SELECT count(*) FROM object_blob").fetchone()[0], "manifest_count": database.execute("SELECT count(*) FROM artifact_manifest").fetchone()[0]}
+                counts = WorkflowLedger(database, temporary, DataRootWriterLock(temporary)).load(PersistenceCountsQuery())
+                minimum_query = {"schema_version": database.execute("SELECT max(version) FROM schema_migration").fetchone()[0], "security_count": database.execute("SELECT count(*) FROM security").fetchone()[0], **counts}
             finally: database.close()
             restored_files = [{"path": name, "sha256": entry["sha256"], "size": entry["size"], "status": "verified"} for name, entry in sorted(expected.items())]
             validations = [{"check": "archive_paths_and_types", "status": "passed"}, {"check": "item_hashes_and_sizes", "status": "passed", "items": restored_files}, {"check": "sqlite_integrity_fk_journal_schema", "status": "passed"}, {"check": "domain_objects_manifests_workflow_refs", "status": "passed"}, {"check": "minimum_public_query", "status": "passed", "result": minimum_query}]

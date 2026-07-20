@@ -14,6 +14,7 @@ from equity_research import (
 )
 from tests.platform.test_outlook_artifacts import _request
 from tests.platform.test_research_workflow import CountingEngine, _root
+from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash
 from tests.platform.test_valuation_simulation_artifact import _simulation_drafts
 from trading_platform import ProductionCompositionRoot
 
@@ -232,7 +233,7 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     assert first.as_of == "2027-03-21"
     assert first.data_snapshot_id == request.review_data_snapshot_id
     assert first.model_identity == request.new_model_identity
-    assert first.code_identity == root._research_workflow.engine_identity
+    assert first.code_identity == parents[0].code_identity
     assert first.dependency_record_ids == tuple(
         sorted(run.artifact_record_ids[1:4])
     )
@@ -241,18 +242,16 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     assert first.payload["calibration_version"]["new_model_identity"] == (
         request.new_model_identity
     )
-    assert root._store.connection.execute(
-        "SELECT count(*) FROM research_artifact_record "
-        "WHERE artifact_kind='ForecastReview'"
-    ).fetchone()[0] == 1
+    assert root.facade.get_research_artifact(first.artifact_record_id) == first
     assert root.facade.get_research_artifact(
         run.artifact_record_ids[-1]
     ).content_hash == parents[-1].content_hash
-    review_manifest = root._store.connection.execute(
-        "SELECT ref_id FROM workflow_run_ref "
-        "WHERE workflow_run_id=? AND ref_role='forecast_review_manifest'",
-        (run.workflow_run_id,),
-    ).fetchone()[0]
+    history = root.facade.get_workflow_history(run.workflow_run_id)
+    review_manifest = next(
+        item["ref_id"]
+        for item in history.refs
+        if item["ref_role"] == "forecast_review_manifest"
+    )
     assert [
         item["member_role"]
         for item in root.facade.get_artifact_manifest(review_manifest).members
@@ -282,6 +281,41 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     )
     rebuilt.close()
 
+
+def test_review_database_failure_leaves_no_partial_graph_or_manifest(
+    tmp_path: Path,
+) -> None:
+    root = _root(
+        tmp_path,
+        CountingEngine(),
+        CrashAt("forecast_review.before_commit"),
+    )
+    result = root.facade.run_research_workflow(
+        _request("forecast-review:rollback", _simulation_drafts())
+    )
+    parents = tuple(
+        root.facade.get_research_artifact(record_id)
+        for record_id in result.artifact_record_ids
+    )
+    request = review_request(parents)
+    persist_review_snapshot(root, request)
+
+    with pytest.raises(InjectedCrash):
+        root.facade.review_forecast(request)
+
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM research_artifact_record "
+        "WHERE artifact_kind='ForecastReview'"
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM artifact_manifest "
+        "WHERE manifest_role='forecast_review_append'"
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM workflow_run_ref "
+        "WHERE ref_role LIKE 'forecast_review_%'"
+    ).fetchone()[0] == 0
+    root.close()
 
 def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())

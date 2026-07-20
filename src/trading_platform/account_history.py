@@ -15,6 +15,7 @@ from trading_platform.account_import import TonghuashunImportPreviewer
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import PersistenceError
+from trading_platform.application.workflow_ledger import GenericObjectCommit
 
 
 class HistoryImportError(RuntimeError):
@@ -739,7 +740,7 @@ class AccountHistoryImportService:
     def _publish(store, payload, expected):
         for retry in range(40):
             try:
-                actual = store.publish_object(payload)
+                actual = store.workflow_ledger.commit_artifacts(GenericObjectCommit(payload)).sha256
                 break
             except PersistenceError as error:
                 if error.code != "RUNTIME_BUSY" or retry == 39:

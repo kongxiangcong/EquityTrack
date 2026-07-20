@@ -11,7 +11,6 @@ import pytest
 
 from tests.platform.test_chart_annotations import ROOT, _root
 from trading_platform.web_server import LocalChartWorkspaceServer
-from trading_platform.workspace import WorkspaceService
 from trading_platform.application.market_contracts import EvaluatePlanCommand
 from tests.platform.test_market_evaluation import _market_command, _root as market_root
 from tests.platform.test_trade_plans import _content, _root as plan_root
@@ -96,7 +95,7 @@ def test_frozen_timeline_traverses_plan_market_evaluation_and_policy_versions(tm
     market = root.facade.build_market_snapshot(_market_command())
     evaluation = root.facade.evaluate_plan(EvaluatePlanCommand("workspace:evaluate", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     upgraded = root.facade.evaluate_plan(EvaluatePlanCommand("workspace:evaluate:v2", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@2"))
-    projected = WorkspaceService(root._store.connection).build("security_yihua", "snapshot_market")
+    projected = root.facade.get_workspace("security_yihua", "snapshot_market")
     assert projected["history"]["plans"][0]["user_input_source"] == "user_fixture_input"
     assert projected["history"]["market_snapshots"][0]["market_snapshot_id"] == market.market_snapshot_id
     assert [item["plan_evaluation_id"] for item in projected["history"]["evaluations"]] == [evaluation.plan_evaluation_id, upgraded.plan_evaluation_id]

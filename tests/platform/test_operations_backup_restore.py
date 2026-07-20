@@ -24,6 +24,7 @@ from tests.platform.test_workflow_recovery import (
     _expire,
     _root as recovery_root,
 )
+from trading_platform.application.workflow_ledger import GenericObjectCommit, IntegrityScope
 from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.persistence.presence import RuntimePresence
@@ -48,7 +49,7 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
         rebuilt.facade.get_workspace("security_yihua", "snapshot_chart")["task"]
         == before["task"]
     )
-    assert rebuilt._store.objects.verify_all() == ()
+    assert rebuilt._store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
     rebuilt.close()
     assert (restored / "restore-report.json").is_file()
 
@@ -66,7 +67,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    root._store.publish_object(b"backup-object")
+    root._store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"backup-object"))
     root.close()
     operations = PlatformOperations(live)
     archive = tmp_path / "immutable.zip"

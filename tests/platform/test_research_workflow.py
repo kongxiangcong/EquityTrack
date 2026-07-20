@@ -10,6 +10,7 @@ import pytest
 from equity_research import ResearchEngine
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import SecurityIdentity
+from trading_platform.application.workflow_ledger import WorkspaceWorkflowQuery
 from trading_platform.domain.workflow import FieldSemantics, ReferenceDisposition, ResearchProjection, ResearchWorkflowRequest
 from trading_platform.workflows.research import WorkflowError
 from trading_platform.workflows.registry import RESEARCH_WORKFLOW
@@ -102,11 +103,19 @@ def _request(invocation: str, projection: ResearchProjection | None = None, **ch
 def _artifact_bytes(root: ProductionCompositionRoot, artifact_id: str) -> bytes:
     sha = root._store.connection.execute("SELECT object_sha256 FROM artifact WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
     relative = root._store.connection.execute("SELECT relative_path FROM object_blob WHERE sha256=?", (sha,)).fetchone()[0]
-    return (root._store.objects.data_root / relative).read_bytes()
+    return (root._store.data_root / relative).read_bytes()
 
 
-def _root(tmp_path: Path, engine: CountingEngine) -> ProductionCompositionRoot:
-    root = ProductionCompositionRoot(tmp_path, research_engine=engine)
+def _root(
+    tmp_path: Path,
+    engine: CountingEngine,
+    workflow_fault_injector=None,
+) -> ProductionCompositionRoot:
+    root = ProductionCompositionRoot(
+        tmp_path,
+        research_engine=engine,
+        workflow_fault_injector=workflow_fault_injector,
+    )
     root.facade.add_watchlist_item("watch:security_yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
     return root
 
@@ -276,10 +285,12 @@ def test_projection_semantics_and_cutoff_fail_closed(tmp_path: Path, mutation: s
     with pytest.raises(WorkflowError) as caught:
         root.facade.run_research_workflow(_request(f"invalid:{mutation}", projection))
     assert engine.calls == 0
-    history = root._store.connection.execute("SELECT status FROM workflow_run WHERE workflow_run_id=?", (caught.value.workflow_run_id,)).fetchone()
-    diagnostic = root._store.connection.execute("SELECT diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()
-    assert history[0] == "failed" and diagnostic[0]
-    assert root._store.connection.execute("SELECT count(*) FROM research_run_record").fetchone()[0] == 0
+    history = root.facade.get_workflow_history(caught.value.workflow_run_id)
+    failed_attempt = next(
+        item for item in history.attempts if item["disposition"] == "failed"
+    )
+    assert history.status == "failed"
+    assert failed_attempt["diagnostic_artifact_id"]
     root.close()
 
 
@@ -400,4 +411,44 @@ def test_registry_contracts_are_versioned_and_diagnostics_are_redacted(tmp_path:
     diagnostic = _artifact_bytes(root, artifact_id)
     assert b"super-secret" not in diagnostic and b"private.example" not in diagnostic and b"Users" not in diagnostic
     assert b"RESEARCH_ENGINE_FAILED" in diagnostic
+    root.close()
+
+
+def test_workspace_workflow_evidence_is_scoped_to_one_security(tmp_path: Path) -> None:
+    root = _root(tmp_path, CountingEngine())
+    first = root.facade.run_research_workflow(_request("workspace-scope:first"))
+    root.facade.add_watchlist_item(
+        "watch:other",
+        SecurityIdentity(
+            "security_other", "SZSE", "000001", "CNY", "1991-04-03"
+        ),
+    )
+    second_request = _request("workspace-scope:second")
+    second = root.facade.run_research_workflow(
+        replace(
+            second_request,
+            security_id="security_other",
+            projection=replace(
+                second_request.projection,
+                context={
+                    **second_request.projection.context,
+                    "workspace_scope": "security_other",
+                },
+            ),
+        )
+    )
+
+    first_evidence = root._store.workflow_ledger.load(
+        WorkspaceWorkflowQuery("security_yihua")
+    )
+    second_evidence = root._store.workflow_ledger.load(
+        WorkspaceWorkflowQuery("security_other")
+    )
+
+    assert {row["workflow_run_id"] for row in first_evidence.workflows} == {
+        first.workflow_run_id
+    }
+    assert {row["workflow_run_id"] for row in second_evidence.workflows} == {
+        second.workflow_run_id
+    }
     root.close()

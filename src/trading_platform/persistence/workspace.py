@@ -3,27 +3,30 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
-from trading_platform.domain.workflow import ResearchArtifactView
 from trading_platform.persistence.locking import DataRootWriterLock
+from trading_platform.application.workflow_ledger import (
+    ResearchArtifactQuery,
+    ResearchPayloadQuery,
+    WorkflowLedgerPort,
+    WorkspaceWorkflowQuery,
+)
 from trading_platform.research_view import ResearchDecisionViewBuilder
 
 
 class WorkspaceService:
-    """Facade-facing workspace queries and replay-safe local authorization commands."""
+    """Own workspace read-model queries and replay-safe local authorization."""
 
     def __init__(
         self,
         connection,
+        workflow_ledger: WorkflowLedgerPort,
         writer_lock: DataRootWriterLock | None = None,
-        research_artifact_reader: Callable[[str], ResearchArtifactView] | None = None,
-        research_run_reader: Callable[[str], Mapping[str, object]] | None = None,
     ) -> None:
         self.connection = connection
         self.writer_lock = writer_lock
-        self.research_artifact_reader = research_artifact_reader
-        self.research_run_reader = research_run_reader
+        self.workflow_ledger = workflow_ledger
         self.research_view_builder = ResearchDecisionViewBuilder()
 
     def build(self, security_id: str, snapshot_id: str) -> dict[str, Any]:
@@ -31,17 +34,8 @@ class WorkspaceService:
             "SELECT requested_date,effective_session_date,freshness_status,quality_status FROM data_snapshot WHERE data_snapshot_id=?",
             (snapshot_id,),
         )
-        workflows = self._all(
-            "SELECT w.workflow_run_id,w.status,w.requested_date,w.effective_session_date,w.created_at,w.completed_at,d.disposition AS research_disposition,d.reason_code AS research_reuse_reason,d.policy_version AS research_reuse_policy FROM workflow_run w LEFT JOIN research_reuse_decision d USING(workflow_run_id) ORDER BY w.created_at DESC"
-        )
-        refs = self._all(
-            "SELECT workflow_run_id,ref_role,ref_type,ref_id,disposition FROM workflow_run_ref ORDER BY workflow_run_id,ref_role"
-        )
-        by_run: dict[str, list[dict[str, Any]]] = {}
-        for ref in refs:
-            by_run.setdefault(ref.pop("workflow_run_id"), []).append(ref)
-        for run in workflows:
-            run["refs"] = by_run.get(run["workflow_run_id"], [])
+        workflow_evidence = self.workflow_ledger.load(WorkspaceWorkflowQuery(security_id))
+        workflows = [dict(item) for item in workflow_evidence.workflows]
         evaluations = self._all(
             "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,e.outcome,e.completeness,e.created_at,e.evaluator_version,e.evaluation_policy_version FROM plan_evaluation e JOIN trade_plan_version p ON p.plan_version_id=e.plan_version_id WHERE p.security_id=? ORDER BY e.created_at",
             (security_id,),
@@ -51,15 +45,7 @@ class WorkspaceService:
                 "SELECT rule_order,rule_id,result,reason_code,operands_json,effect,applies_to,observed_at FROM plan_rule_evaluation WHERE plan_evaluation_id=? ORDER BY rule_order",
                 (evaluation["plan_evaluation_id"],),
             )
-        manifests = self._all(
-            "SELECT DISTINCT m.artifact_manifest_id,m.manifest_role,m.producer_type,m.producer_id,m.membership_hash,m.created_at FROM artifact_manifest m JOIN workflow_run_ref r ON r.ref_type='ArtifactManifest' AND r.ref_id=m.artifact_manifest_id JOIN workflow_run w USING(workflow_run_id) JOIN research_reuse_decision d USING(workflow_run_id) JOIN research_run_record rr ON rr.research_run_id=d.research_run_id JOIN research_input_projection p ON p.research_projection_id=rr.research_projection_id WHERE p.security_id=? ORDER BY m.created_at",
-            (security_id,),
-        )
-        for manifest in manifests:
-            manifest["members"] = self._all(
-                "SELECT member_order,artifact_id,member_role,direction FROM artifact_manifest_member WHERE artifact_manifest_id=? ORDER BY member_order",
-                (manifest["artifact_manifest_id"],),
-            )
+        manifests = [dict(item) for item in workflow_evidence.manifests]
         account_positions = self._all(
             "SELECT a.base_currency,a.initialized_at,s.cash_decimal,s.as_of_date AS snapshot_as_of,s.reconciliation_status,s.limitations_json,s.portfolio_snapshot_id AS account_snapshot_id,p.position_id,p.quantity_decimal,p.available_decimal,p.frozen_decimal,p.source_type,l.cost_price_decimal,o.source_price_decimal,o.source_market_value_decimal,o.source_day_pnl_decimal,o.source_weight_decimal,o.source_as_of,(SELECT h.reconciliation_status FROM account_history_snapshot h WHERE h.account_id=a.account_id ORDER BY h.created_at DESC LIMIT 1) AS latest_import_status FROM account_position p JOIN account a USING(account_id) JOIN account_position_lot l USING(position_id) JOIN account_position_observation o USING(position_id) JOIN portfolio_snapshot s ON s.portfolio_snapshot_id=(SELECT s2.portfolio_snapshot_id FROM portfolio_snapshot s2 WHERE s2.account_id=a.account_id ORDER BY s2.as_of_date DESC,s2.portfolio_snapshot_id DESC LIMIT 1) WHERE p.security_id=? ORDER BY a.initialized_at,p.position_id",
             (security_id,),
@@ -106,10 +92,7 @@ class WorkspaceService:
                     "SELECT data_snapshot_id,snapshot_purpose,requested_date,effective_session_date,as_of_at,freshness_status,quality_status,query_policy_version,source_policy_version FROM data_snapshot WHERE scope_id=? ORDER BY as_of_at",
                     (security_id,),
                 ),
-                "research_runs": self._all(
-                    "SELECT r.research_run_id,r.research_snapshot_id,r.original_cutoff_date,r.status,r.engine_schema_version,r.engine_code_identity,r.canonical_json_artifact_id,r.html_artifact_id FROM research_run_record r JOIN research_input_projection p ON p.research_projection_id=r.research_projection_id WHERE p.security_id=? ORDER BY r.original_cutoff_date",
-                    (security_id,),
-                ),
+                "research_runs": list(workflow_evidence.research_runs),
                 "annotations": self._all(
                     "SELECT v.annotation_version_id,v.annotation_id,v.version_no,v.status,v.created_at,v.annotation_kind,v.style_name,v.data_snapshot_id FROM chart_annotation_version v JOIN chart_annotation a USING(annotation_id) WHERE a.security_id=? ORDER BY v.created_at,v.version_no",
                     (security_id,),
@@ -133,29 +116,20 @@ class WorkspaceService:
         }
 
     def _research_views(self, security_id: str) -> list[dict[str, Any]]:
-        if self.research_artifact_reader is None or self.research_run_reader is None:
-            return []
-        rows = self.connection.execute(
-            "SELECT u.workflow_run_id,w.created_at,d.research_run_id,"
-            "r.artifact_kind,r.artifact_record_id "
-            "FROM workflow_run_artifact_use u "
-            "JOIN workflow_run w USING(workflow_run_id) "
-            "JOIN research_reuse_decision d USING(workflow_run_id) "
-            "JOIN research_artifact_record r USING(artifact_record_id) "
-            "WHERE r.platform_security_id=? "
-            "ORDER BY w.created_at,r.rowid",
-            (security_id,),
-        ).fetchall()
+        rows = self.workflow_ledger.load(WorkspaceWorkflowQuery(security_id)).artifact_uses
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
+            workflow_run_id = str(row["workflow_run_id"])
             group = grouped.setdefault(
-                row["workflow_run_id"],
+                workflow_run_id,
                 {
-                    "research_run_id": row["research_run_id"],
+                    "research_run_id": str(row["research_run_id"]),
                     "artifacts": {},
                 },
             )
-            group["artifacts"][row["artifact_kind"]] = row["artifact_record_id"]
+            group["artifacts"][str(row["artifact_kind"])] = str(
+                row["artifact_record_id"]
+            )
         result: list[dict[str, Any]] = []
         for workflow_run_id, group in grouped.items():
             artifact_ids = group["artifacts"]
@@ -164,49 +138,45 @@ class WorkspaceService:
                 continue
             view = self.research_view_builder.build(
                 workflow_run_id=workflow_run_id,
-                data_snapshot=self.research_artifact_reader(
+                data_snapshot=self.workflow_ledger.load(ResearchArtifactQuery(
                     artifact_ids["DataSnapshot"]
-                ),
-                forecast=self.research_artifact_reader(artifact_ids["Forecast"]),
-                valuation=self.research_artifact_reader(artifact_ids["Valuation"]),
+                )),
+                forecast=self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Forecast"])),
+                valuation=self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Valuation"])),
                 simulation=(
-                    self.research_artifact_reader(artifact_ids["Simulation"])
+                    self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Simulation"]))
                     if "Simulation" in artifact_ids
                     else None
                 ),
                 market_data_snapshot=(
-                    self.research_artifact_reader(
+                    self.workflow_ledger.load(ResearchArtifactQuery(
                         artifact_ids["MarketDataSnapshot"]
-                    )
+                    ))
                     if "MarketDataSnapshot" in artifact_ids
                     else None
                 ),
                 market_path=(
-                    self.research_artifact_reader(
+                    self.workflow_ledger.load(ResearchArtifactQuery(
                         artifact_ids["MarketPathSimulation"]
-                    )
+                    ))
                     if "MarketPathSimulation" in artifact_ids
                     else None
                 ),
-                research_run_payload=self.research_run_reader(
-                    group["research_run_id"]
-                ),
+                research_run_payload=self.workflow_ledger.load(ResearchPayloadQuery(group["research_run_id"])),
             )
             result.append(view.to_dict())
         return result
 
     def _forecast_reviews(self, security_id: str) -> list[dict[str, Any]]:
-        if self.research_artifact_reader is None:
-            return []
-        rows = self.connection.execute(
-            "SELECT artifact_record_id FROM research_artifact_record "
-            "WHERE platform_security_id=? AND artifact_kind='ForecastReview' "
-            "ORDER BY created_at,artifact_record_id",
-            (security_id,),
-        ).fetchall()
+        rows = (
+            {"artifact_record_id": record_id}
+            for record_id in self.workflow_ledger.load(
+                WorkspaceWorkflowQuery(security_id)
+            ).forecast_review_artifact_record_ids
+        )
         reviews: list[dict[str, Any]] = []
         for row in rows:
-            artifact = self.research_artifact_reader(row["artifact_record_id"])
+            artifact = self.workflow_ledger.load(ResearchArtifactQuery(row["artifact_record_id"]))
             reviews.append(
                 {
                     "artifact_record_id": artifact.artifact_record_id,
@@ -250,8 +220,6 @@ class WorkspaceService:
         security_id: str,
         effective_session_date: str | None,
     ) -> list[dict[str, Any]]:
-        if self.research_artifact_reader is None:
-            return []
         reviewed_targets = {
             (
                 review.get("forecast_artifact_record_id"),
@@ -266,15 +234,15 @@ class WorkspaceService:
             for result in review.get(key, [])
             if isinstance(result, Mapping)
         }
-        rows = self.connection.execute(
-            "SELECT artifact_record_id FROM research_artifact_record "
-            "WHERE platform_security_id=? AND artifact_kind='Forecast' "
-            "ORDER BY created_at,artifact_record_id",
-            (security_id,),
-        ).fetchall()
+        rows = (
+            {"artifact_record_id": record_id}
+            for record_id in self.workflow_ledger.load(
+                WorkspaceWorkflowQuery(security_id)
+            ).forecast_artifact_record_ids
+        )
         registry: list[dict[str, Any]] = []
         for row in rows:
-            artifact = self.research_artifact_reader(row["artifact_record_id"])
+            artifact = self.workflow_ledger.load(ResearchArtifactQuery(row["artifact_record_id"]))
             for node in artifact.payload.get("nodes", ()):
                 if not isinstance(node, Mapping):
                     continue

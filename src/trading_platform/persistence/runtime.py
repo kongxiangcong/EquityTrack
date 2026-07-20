@@ -8,8 +8,8 @@ from .database import open_database
 from .doctor import DoctorService
 from .locking import DataRootWriterLock, PersistenceError
 from .migration import MigrationRunner
-from .objects import ContentAddressedObjectStore
 from .watchlist import WatchlistRepository
+from .workflow_ledger import WorkflowLedger
 
 
 class PlatformStore:
@@ -19,15 +19,12 @@ class PlatformStore:
         self.connection = open_database(self.data_root)
         self.writer_lock = DataRootWriterLock(self.data_root)
         self.migrations = MigrationRunner(self.connection, self.data_root, self.migrations_root, self.writer_lock)
-        self.objects = ContentAddressedObjectStore(self.connection, self.data_root, self.writer_lock)
+        self.workflow_ledger = WorkflowLedger(self.connection, self.data_root, self.writer_lock)
         self.watchlist = WatchlistRepository(self.connection, self.writer_lock)
-        self.doctor_service = DoctorService(self.connection, self.migrations, self.objects)
+        self.doctor_service = DoctorService(self.connection, self.migrations, self.workflow_ledger)
 
     def migrate(self, fail_after: int | None = None) -> None:
         self.migrations.migrate(fail_after)
-
-    def publish_object(self, payload: bytes) -> str:
-        return self.objects.publish(payload)
 
     def add_watchlist_item(self, invocation_id: str, security: SecurityIdentity) -> WatchlistView:
         return self.watchlist.add(invocation_id, security)

@@ -13,6 +13,11 @@ from equity_research.scenario_valuation import ScenarioValuationEngine
 from equity_research.forecast import ForecastEngine
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import ResumeWorkflowCommand
+from trading_platform.application.workflow_ledger import (
+    ArtifactBundlePreviewQuery,
+    ResearchArtifactBundle,
+    ResearchRunIdentityQuery,
+)
 from trading_platform.domain.workflow import ImmutableArtifactDraft
 from trading_platform.persistence import PersistenceError
 from tests.platform.test_research_workflow import (
@@ -309,7 +314,7 @@ def test_model_and_policy_identity_create_parallel_versions_without_rewriting_hi
     "boundary,records_before_resume",
     [
         ("research_artifact.before_commit", 0),
-        ("workflow.research_artifacts_persisted", 3),
+        ("workflow.research_artifacts_persisted", 0),
     ],
 )
 def test_artifact_bundle_crash_recovery_has_no_partial_typed_commit(
@@ -319,10 +324,7 @@ def test_artifact_bundle_crash_recovery_has_no_partial_typed_commit(
 ) -> None:
     engine = CountingEngine()
     injector = CrashAt(boundary)
-    root = research_root(tmp_path, engine)
-    root._workflow_repository.fault_injector = injector
-    root._workflow_repository.objects.fault_injector = injector
-    root._research_workflow.fault_injector = injector
+    root = research_root(tmp_path, engine, injector)
     with pytest.raises(InjectedCrash):
         root.facade.run_research_workflow(_request("outlook:crash"))
     run_id = root._store.connection.execute(
@@ -331,17 +333,27 @@ def test_artifact_bundle_crash_recovery_has_no_partial_typed_commit(
     assert root._store.connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == records_before_resume
+    if boundary == "research_artifact.before_commit":
+        assert root._store.connection.execute(
+            "SELECT count(*) FROM research_run_record"
+        ).fetchone()[0] == 0
+        assert root._store.connection.execute(
+            "SELECT count(*) FROM workflow_run_artifact_use WHERE workflow_run_id=?",
+            (run_id,),
+        ).fetchone()[0] == 0
+        assert root._store.connection.execute(
+            "SELECT count(*) FROM workflow_node_run WHERE workflow_run_id=? "
+            "AND node_id='run_or_link_research' AND checkpoint_manifest_id IS NOT NULL",
+            (run_id,),
+        ).fetchone()[0] == 0
 
-    root._workflow_repository.fault_injector = None
-    root._workflow_repository.objects.fault_injector = None
-    root._research_workflow.fault_injector = None
     _expire(root, run_id)
     resumed = root.facade.resume_workflow(ResumeWorkflowCommand(run_id, "resume-owner"))
     assert len(resumed.artifact_record_ids) == 3
     assert root._store.connection.execute(
         "SELECT count(*) FROM research_artifact_record"
     ).fetchone()[0] == 3
-    assert engine.calls == 1
+    assert engine.calls == 2
     root.close()
 
 
@@ -350,6 +362,10 @@ def test_corrupt_artifact_fails_closed_and_concurrent_replay_is_idempotent(
 ) -> None:
     root = research_root(tmp_path, CountingEngine())
     result = root.facade.run_research_workflow(_request("outlook:integrity"))
+    ledger = root._store.workflow_ledger
+    code_identity = ledger.load(
+        ResearchRunIdentityQuery(result.research_run_id)
+    ).code_identity
     drafts = _drafts()
     outputs: list[tuple[str, ...]] = []
 
@@ -377,27 +393,25 @@ def test_corrupt_artifact_fails_closed_and_concurrent_replay_is_idempotent(
         ),
     )
     with pytest.raises(ValueError, match="RESEARCH_ARTIFACT_SUBJECT_LINEAGE_MISMATCH"):
-        root._workflow_repository.persist_research_artifact_bundle(
-            research_run_id=result.research_run_id,
-            data_snapshot_id=result.research_snapshot_id,
-            code_identity=root._workflow_repository.connection.execute(
-                "SELECT engine_code_identity FROM research_run_record WHERE research_run_id=?",
-                (result.research_run_id,),
-            ).fetchone()[0],
-            drafts=foreign_drafts,
+        ledger.load(
+            ArtifactBundlePreviewQuery(ResearchArtifactBundle(
+                research_run_id=result.research_run_id,
+                data_snapshot_id=result.research_snapshot_id,
+                code_identity=code_identity,
+                drafts=foreign_drafts,
+            ))
         )
 
     def replay() -> None:
         outputs.append(
-            root._workflow_repository.persist_research_artifact_bundle(
-                research_run_id=result.research_run_id,
-                data_snapshot_id=result.research_snapshot_id,
-                code_identity=root._workflow_repository.connection.execute(
-                    "SELECT engine_code_identity FROM research_run_record WHERE research_run_id=?",
-                    (result.research_run_id,),
-                ).fetchone()[0],
-                drafts=drafts,
-            )
+            ledger.load(
+                ArtifactBundlePreviewQuery(ResearchArtifactBundle(
+                    research_run_id=result.research_run_id,
+                    data_snapshot_id=result.research_snapshot_id,
+                    code_identity=code_identity,
+                    drafts=drafts,
+                ))
+            ).record_ids
         )
 
     threads = [threading.Thread(target=replay) for _ in range(2)]

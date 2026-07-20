@@ -10,6 +10,7 @@ import pytest
 from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import CancelWorkflowCommand, ResumeWorkflowCommand, SecurityIdentity
 from trading_platform.workflows.research import WorkflowError
+from trading_platform.application.workflow_ledger import IntegrityScope
 from tests.platform.test_data_sync_pit import _request as sync_request, _root as sync_root
 from tests.platform.test_research_workflow import CountingEngine, _request as research_request
 
@@ -55,13 +56,27 @@ def test_object_publication_crash_replay_is_orphan_or_complete_object(tmp_path: 
     rebuilt = _root(tmp_path, engine)
     result = rebuilt.facade.run_research_workflow(research_request("recovery:object"))
     assert result.research_run_id
-    assert rebuilt._store.objects.verify_all() == ()
+    assert rebuilt._store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
     assert not tuple((tmp_path / "objects").rglob(".*.tmp"))
     rebuilt.close()
 
 
-@pytest.mark.parametrize("boundary", ["workflow.before_node_success:freeze_research_projection", "workflow.freeze_checkpoint_committed", "workflow.before_node_success:run_or_link_research", "workflow.research_checkpoint_committed", "workflow.before_final_manifest_commit", "workflow.final_manifest_committed"])
-def test_resume_reuses_committed_nodes_and_never_duplicates_research(tmp_path: Path, boundary: str) -> None:
+@pytest.mark.parametrize(
+    "boundary,expected_engine_calls",
+    [
+        ("workflow.before_node_success:freeze_research_projection", 1),
+        ("projection_checkpoint.before_commit", 1),
+        ("workflow.freeze_checkpoint_committed", 1),
+        ("workflow.before_node_success:run_or_link_research", 2),
+        ("workflow.research_checkpoint_committed", 1),
+        ("workflow.before_final_manifest_commit", 1),
+        ("workflow_complete.before_commit", 1),
+        ("workflow.final_manifest_committed", 1),
+    ],
+)
+def test_resume_reuses_committed_nodes_and_never_duplicates_research(
+    tmp_path: Path, boundary: str, expected_engine_calls: int
+) -> None:
     engine = CountingEngine()
     injector = CrashAt(boundary)
     root = _root(tmp_path, engine, injector)
@@ -74,10 +89,70 @@ def test_resume_reuses_committed_nodes_and_never_duplicates_research(tmp_path: P
         _expire(root, run_id)
         result = root.facade.resume_workflow(ResumeWorkflowCommand(run_id, "resume-owner"))
         assert result.workflow_run_id == run_id
-    assert engine.calls == 1
+    assert engine.calls == expected_engine_calls
     attempts = root._store.connection.execute("SELECT node_id,count(*) count FROM workflow_node_run JOIN workflow_node_attempt USING(workflow_node_run_id) WHERE workflow_run_id=? GROUP BY node_id", (run_id,)).fetchall()
     assert all(row["count"] <= 2 for row in attempts)
-    assert root._store.objects.verify_all() == ()
+    assert root._store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
+    root.close()
+
+
+def test_projection_checkpoint_failure_rolls_back_the_whole_projection_aggregate(
+    tmp_path: Path,
+) -> None:
+    root = _root(
+        tmp_path,
+        CountingEngine(),
+        CrashAt("projection_checkpoint.before_commit"),
+    )
+
+    with pytest.raises(InjectedCrash):
+        root.facade.run_research_workflow(research_request("recovery:projection-tx"))
+
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM research_input_projection"
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM data_snapshot WHERE snapshot_purpose='research'"
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM provider_attempt WHERE provider_id='frozen_projection'"
+    ).fetchone()[0] == 0
+    root.close()
+
+
+def test_finalization_failure_rolls_back_manifest_refs_decision_and_terminal_state(
+    tmp_path: Path,
+) -> None:
+    root = _root(
+        tmp_path,
+        CountingEngine(),
+        CrashAt("workflow_complete.before_commit"),
+    )
+
+    with pytest.raises(InjectedCrash):
+        root.facade.run_research_workflow(research_request("recovery:finalize-tx"))
+
+    run_id = root._store.connection.execute(
+        "SELECT workflow_run_id FROM workflow_run "
+        "WHERE invocation_id='recovery:finalize-tx'"
+    ).fetchone()[0]
+    assert root._store.connection.execute(
+        "SELECT status FROM workflow_run WHERE workflow_run_id=?", (run_id,)
+    ).fetchone()[0] == "running"
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM research_reuse_decision WHERE workflow_run_id=?",
+        (run_id,),
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM workflow_run_ref WHERE workflow_run_id=? "
+        "AND ref_role='final_manifest'",
+        (run_id,),
+    ).fetchone()[0] == 0
+    assert root._store.connection.execute(
+        "SELECT count(*) FROM artifact_manifest WHERE producer_type='WorkflowRun' "
+        "AND producer_id=? AND manifest_role='workflow_final'",
+        (run_id,),
+    ).fetchone()[0] == 0
     root.close()
 
 
@@ -256,13 +331,13 @@ def test_cancellation_and_retry_history_are_monotonic(tmp_path: Path) -> None:
 def test_cursor_and_normalized_transaction_roll_back_then_replay_once(tmp_path: Path) -> None:
     root = sync_root(tmp_path)
     injector = CrashAt("data.before_commit")
-    root._store.objects.fault_injector = injector
+    root._store.workflow_ledger.fault_injector = injector
     root._data_sync_repository.fault_injector = injector
     with pytest.raises(InjectedCrash):
         root.facade.sync_data(sync_request("recovery:cursor"))
     assert root._store.connection.execute("SELECT count(*) FROM sync_cursor").fetchone()[0] == 0
     assert root._store.connection.execute("SELECT count(*) FROM normalized_version").fetchone()[0] == 0
-    root._store.objects.fault_injector = None
+    root._store.workflow_ledger.fault_injector = None
     root._data_sync_repository.fault_injector = None
     result = root.facade.sync_data(sync_request("recovery:cursor"))
     assert result.snapshot_id

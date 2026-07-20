@@ -10,6 +10,7 @@ from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.application.contracts import Capability, CapabilityStatus, HealthQuery
 from trading_platform.persistence.runtime import PersistenceError, PlatformStore
+from trading_platform.application.workflow_ledger import GenericObjectCommit
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,13 +49,16 @@ def test_migrations_are_idempotent_atomic_and_reject_drift_and_future(tmp_path: 
 
 def test_object_publish_is_content_addressed_and_doctor_detects_damage(tmp_path: Path) -> None:
     store = PlatformStore(tmp_path, ROOT / "migrations"); store.migrate()
-    digest = store.publish_object(b"immutable")
-    assert store.publish_object(b"immutable") == digest
+    first = store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"immutable"))
+    replay = store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"immutable"))
+    digest = first.sha256
+    assert replay.sha256 == digest
+    assert replay.disposition.value == "reused"
     path = tmp_path / "objects/sha256" / digest[:2] / digest
     path.write_bytes(b"damaged")
     assert "OBJECT_INTEGRITY_FAILED" in store.doctor().errors
     with pytest.raises(PersistenceError) as damaged:
-        store.publish_object(b"immutable")
+        store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"immutable"))
     assert damaged.value.code == "OBJECT_HASH_MISMATCH"
     store.close()
 
@@ -119,7 +123,7 @@ def test_doctor_is_read_only_and_checks_required_references(tmp_path: Path) -> N
     assert report.status == "passed"
     assert store.connection.total_changes == before
     assert {"runtime_identity", "domain_invariants", "references"}.issubset(report.checks)
-    digest = store.publish_object(b"artifact")
+    digest = store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"artifact")).sha256
     store.connection.execute("INSERT INTO artifact VALUES('artifact-1',?,'application/json','test@1')", (digest,))
     store.connection.execute("INSERT INTO artifact_relation VALUES('artifact-1','supports','Security','missing-security')")
     store.connection.commit()

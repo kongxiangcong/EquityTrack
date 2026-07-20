@@ -20,6 +20,26 @@ class ReferenceDisposition(str, Enum):
     INPUT = "input"
 
 
+@dataclass(frozen=True)
+class NodeDefinition:
+    node_id: str
+    version: str
+    input_schema: str
+    output_schema: str
+    preconditions: tuple[str, ...]
+    required: bool
+    cache_policy: str
+    retry_policy: str
+    failure_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WorkflowDefinition:
+    workflow_id: str
+    version: str
+    nodes: tuple[NodeDefinition, ...]
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(
         value,
@@ -1074,7 +1094,7 @@ class ResearchWorkflowResult:
     research_run_id: str
     research_snapshot_id: str
     workflow_snapshot_id: str | None
-    final_manifest_id: str
+    final_manifest_id: str | None
     disposition: ReferenceDisposition
     reason_code: str
     stale_by_days: int

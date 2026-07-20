@@ -1,3 +1,1 @@
-from .research import ResearchWorkflowService, WorkflowError
-
-__all__ = ["ResearchWorkflowService", "WorkflowError"]
+"""Workflow application implementation; persistence lives in WorkflowLedger."""

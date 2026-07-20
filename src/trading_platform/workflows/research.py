@@ -11,7 +11,7 @@ from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping, NoReturn, Protocol
 
 from trading_platform.application.contracts import CancelWorkflowCommand, ResumeWorkflowCommand
 from trading_platform.domain.workflow import (
@@ -33,7 +33,44 @@ from trading_platform.research_presentation import (
 from trading_platform.research_view import ResearchDecisionViewBuilder
 
 from .registry import RESEARCH_WORKFLOW, NodeDefinition
-from .repository import WorkflowRepository
+from trading_platform.application.workflow_ledger import (
+    AcquireLease,
+    ArtifactBundlePreviewQuery,
+    ArtifactPayload,
+    BeginNode,
+    CheckpointMembersQuery,
+    CheckpointQuery,
+    CommitResearchNode,
+    CompletedResearchQuery,
+    FailExecution,
+    FinalizeResearchSuccess,
+    ForecastReviewCommit,
+    FreezeProjection,
+    Heartbeat,
+    ManifestQuery,
+    MarkRetryable,
+    NodeNameQuery,
+    ProjectionEvidenceQuery,
+    ProjectionCheckpointCommit,
+    ProjectionPreviewQuery,
+    RequestCancellation,
+    RequestPayloadQuery,
+    ResearchArtifactQuery,
+    ResearchArtifactBundle,
+    ResearchPayloadQuery,
+    ResearchRecord,
+    ResearchRecordQuery,
+    SnapshotEvidenceQuery,
+    StartDisposition,
+    StartWorkflow,
+    StopIfCancelled,
+    WorkflowHistoryQuery,
+    WorkflowLedgerPort,
+    WorkflowPersistenceError,
+    WorkflowRunQuery,
+    WorkflowReferencesQuery,
+    WorkflowResultQuery,
+)
 from equity_research import (
     ForecastReviewEngine,
     ForecastReviewRequest,
@@ -62,7 +99,7 @@ class ResearchRunner(Protocol):
 
 
 class ResearchWorkflowService:
-    def __init__(self, repository: WorkflowRepository, engine: ResearchRunner, assembler: SnapshotToResearchRequestAssembler, repo_root: Path, fault_injector: Callable[[str], None] | None = None) -> None:
+    def __init__(self, repository: WorkflowLedgerPort, engine: ResearchRunner, assembler: SnapshotToResearchRequestAssembler, repo_root: Path, fault_injector: Callable[[str], None] | None = None) -> None:
         self.repository = repository
         self.engine = engine
         self.assembler = assembler
@@ -75,30 +112,43 @@ class ResearchWorkflowService:
             self.fault_injector(boundary)
 
     def run(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult:
-        row = self.repository.invocation_run(request.invocation_id)
-        if row is not None:
-            request_fingerprint = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "request": asdict(request)})
-            if request_fingerprint != row["request_fingerprint"]:
-                raise WorkflowError("INVOCATION_REQUEST_MISMATCH", row["workflow_run_id"])
-            if row["status"] in {"succeeded", "succeeded_with_limits"}:
-                return self.repository.result(row["workflow_run_id"])
-            owner = f"owner-{uuid.uuid4().hex}"
-            try:
-                self.repository.acquire_lease(row["workflow_run_id"], owner, RESEARCH_WORKFLOW, 30)
-            except ValueError as error:
-                raise WorkflowError(str(error), row["workflow_run_id"]) from error
-            return self._execute(row["workflow_run_id"], request, owner, acquire=False)
         payload = json.dumps(asdict(request), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-        artifact = self.repository.publish_artifact(payload, "application/json", "ResearchWorkflowRequest@1")
         fingerprint = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "request": asdict(request)})
         owner = f"owner-{uuid.uuid4().hex}"
-        run_id = self.repository.start_recoverable(request.invocation_id, fingerprint, request.requested_date, request.effective_session_date, RESEARCH_WORKFLOW, owner, artifact, hashlib.sha256(payload).hexdigest())
+        try:
+            started = self.repository.start_or_replay(
+                StartWorkflow(
+                    invocation_id=request.invocation_id,
+                    request_fingerprint=fingerprint,
+                    requested_date=request.requested_date,
+                    effective_session_date=request.effective_session_date,
+                    definition=RESEARCH_WORKFLOW,
+                    owner_token=owner,
+                    request_payload=payload,
+                    request_schema="ResearchWorkflowRequest@1",
+                )
+            )
+        except WorkflowPersistenceError as error:
+            code = (
+                "INVOCATION_REQUEST_MISMATCH"
+                if error.code in {"WORKFLOW_FINGERPRINT_MISMATCH", "WORKFLOW_REQUEST_INTEGRITY_FAILED"}
+                else error.code
+            )
+            raise WorkflowError(code, request.invocation_id) from error
+        run_id = started.workflow_run_id
+        if started.disposition is StartDisposition.REPLAYED:
+            if self.repository.load(WorkflowRunQuery(run_id)).status in {"succeeded", "succeeded_with_limits"}:
+                return self.repository.load(WorkflowResultQuery(run_id))
+            try:
+                self.repository.record_transition(AcquireLease(run_id, owner, RESEARCH_WORKFLOW, 30))
+            except ValueError as error:
+                raise WorkflowError(str(error), run_id) from error
         return self._execute(run_id, request, owner, acquire=False)
 
     def resume(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
         try:
-            request = self._decode_request(self.repository.request_payload(command.workflow_run_id))
-            self.repository.acquire_lease(command.workflow_run_id, command.owner_token, RESEARCH_WORKFLOW, command.lease_seconds)
+            request = self._decode_request(self.repository.load(RequestPayloadQuery(command.workflow_run_id)))
+            self.repository.record_transition(AcquireLease(command.workflow_run_id, command.owner_token, RESEARCH_WORKFLOW, command.lease_seconds))
             return self._execute(command.workflow_run_id, request, command.owner_token, acquire=False, lease_seconds=command.lease_seconds)
         except WorkflowError:
             raise
@@ -106,33 +156,33 @@ class ResearchWorkflowService:
             raise WorkflowError(str(error), command.workflow_run_id) from error
 
     def cancel(self, command: CancelWorkflowCommand) -> None:
-        self.repository.request_cancel(command.workflow_run_id, command.reason)
+        self.repository.record_transition(RequestCancellation(command.workflow_run_id, command.reason))
 
     def _execute(self, run_id: str, request: ResearchWorkflowRequest, owner: str, acquire: bool = False, lease_seconds: int = 30) -> ResearchWorkflowResult:
         del acquire
         try:
-            self.repository.heartbeat(run_id, owner, lease_seconds)
-            self.repository.stop_if_cancelled(run_id)
+            self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
+            self.repository.record_transition(StopIfCancelled(run_id))
             projection_id, research_snapshot_id, projection_artifact, research_fingerprint = self._freeze(run_id, request, owner)
-            self.repository.stop_if_cancelled(run_id)
-            self.repository.heartbeat(run_id, owner, lease_seconds)
+            self.repository.record_transition(StopIfCancelled(run_id))
+            self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
             record, disposition, run_members, run_node, run_attempt = self._research(run_id, request, owner, projection_id, research_snapshot_id, projection_artifact, research_fingerprint, lease_seconds)
-            self.repository.stop_if_cancelled(run_id)
-            self.repository.heartbeat(run_id, owner, lease_seconds)
+            self.repository.record_transition(StopIfCancelled(run_id))
+            self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
             final_contract = self._node("publish_run_manifest")
-            final_fp = self._hash({"node": asdict(final_contract), "run": record["research_run_id"], "members": run_members})
-            completed = self.repository.validate_checkpoint(run_id, final_contract, final_fp)
+            final_fp = self._hash({"node": asdict(final_contract), "run": record.research_run_id, "members": run_members})
+            completed = self.repository.load(CheckpointQuery(run_id, final_contract, final_fp))
             if completed is not None:
-                return self.repository.result(run_id)
-            final_node, final_attempt = self.repository.begin_or_retry_node(run_id, final_contract, final_fp, owner)
+                return self.repository.load(WorkflowResultQuery(run_id))
+            final_node, final_attempt = self.repository.record_transition(BeginNode(run_id, final_contract, final_fp, owner))
             self._fault("workflow.node_attempt_started:publish_run_manifest")
-            stale = max(0, (date.fromisoformat(request.effective_session_date) - date.fromisoformat(record["original_cutoff_date"])).days)
+            stale = max(0, (date.fromisoformat(request.effective_session_date) - date.fromisoformat(record.original_cutoff_date)).days)
             reason = "ROUTINE_MARKET_ONLY_INPUTS" if disposition is ReferenceDisposition.REUSED and request.market_only_member_ids else ("IDENTICAL_RESEARCH_INPUT" if disposition is ReferenceDisposition.REUSED else "RESEARCH_INPUT_CHANGED_OR_NEW")
-            terminal = "succeeded" if record["status"] == "completed" else "succeeded_with_limits"
+            terminal = "succeeded" if record.status == "completed" else "succeeded_with_limits"
             self._fault("workflow.before_final_manifest_commit")
-            self.repository.finalize_research_success(run_id, run_node, run_attempt, final_node, final_attempt, disposition, None, record, run_members, projection_id, request.workflow_snapshot_id, reason, stale, request.candidate_member_ids, request.market_only_member_ids, terminal)
+            self.repository.complete(FinalizeResearchSuccess(run_id, owner, run_node, run_attempt, final_node, final_attempt, disposition, record, run_members, projection_id, request.workflow_snapshot_id, reason, stale, request.candidate_member_ids, request.market_only_member_ids, terminal))
             self._fault("workflow.final_manifest_committed")
-            return self.repository.result(run_id)
+            return self.repository.load(WorkflowResultQuery(run_id))
         except WorkflowError:
             raise
         except ValueError as error:
@@ -146,33 +196,44 @@ class ResearchWorkflowService:
             raise WorkflowError("WORKFLOW_PIT_INVARIANT_FAILED", run_id)
         contract = self._node("freeze_research_projection")
         fp = self._hash({"node": asdict(contract), "input": asdict(request.projection)})
-        completed = self.repository.validate_checkpoint(run_id, contract, fp)
+        completed = self.repository.load(CheckpointQuery(run_id, contract, fp))
         if completed is not None:
             research_fp = self.assembler.fingerprint(request.projection)
-            refs = {row["ref_role"]: row["ref_id"] for row in self.repository.connection.execute("SELECT * FROM workflow_run_ref WHERE workflow_run_id=?", (run_id,))}
-            member = self.repository.checkpoint_members(completed["workflow_node_run_id"])[0]
-            self._validate_completed_projection_refs(request, refs, member["artifact_id"], research_fp)
-            return refs["research_projection"], refs["research_snapshot"], member["artifact_id"], research_fp
-        node, attempt = self.repository.begin_or_retry_node(run_id, contract, fp, owner)
+            refs = self.repository.load(WorkflowReferencesQuery(run_id))
+            member = self.repository.load(CheckpointMembersQuery(completed.workflow_node_run_id))[0]
+            self._validate_completed_projection_refs(request, refs, member.artifact_id, research_fp)
+            return refs["research_projection"], refs["research_snapshot"], member.artifact_id, research_fp
+        node, attempt = self.repository.record_transition(BeginNode(run_id, contract, fp, owner))
         self._fault("workflow.node_attempt_started:freeze_research_projection")
         try:
             research_fp = self.assembler.fingerprint(request.projection)
-            projection_id, snapshot_id, artifact, disposition = self.repository.freeze_projection(request.security_id, request.projection, research_fp)
+            freeze = FreezeProjection(request.security_id, request.projection, research_fp)
+            preview = self.repository.load(ProjectionPreviewQuery(freeze))
             if request.workflow_snapshot_id:
-                self._validate_workflow_snapshot(request.workflow_snapshot_id, snapshot_id)
+                self._validate_workflow_snapshot(request.workflow_snapshot_id, preview.research_snapshot_id)
                 self._validate_snapshot_classification(request.workflow_snapshot_id, request.candidate_member_ids, request.market_only_member_ids, request.projection.context)
-            manifest = self.repository.publish_manifest("checkpoint", "WorkflowNodeRun", node, ((artifact, "research_projection", "output"),))
             self._fault("workflow.before_node_success:freeze_research_projection")
-            self.repository.finish_node(node, attempt, disposition, manifest)
-            self.repository.add_ref(run_id, "research_snapshot", "DataSnapshot", snapshot_id, disposition)
-            self.repository.add_ref(run_id, "research_projection", "ResearchProjection", projection_id, disposition)
-            if request.workflow_snapshot_id:
-                self.repository.add_ref(run_id, "workflow_snapshot", "DataSnapshot", request.workflow_snapshot_id, ReferenceDisposition.INPUT)
-            self.repository.heartbeat(run_id, owner)
+            checkpoint = self.repository.commit_checkpoint(
+                ProjectionCheckpointCommit(
+                    workflow_run_id=run_id,
+                    workflow_node_run_id=node,
+                    workflow_node_attempt_id=attempt,
+                    owner_token=owner,
+                    freeze=freeze,
+                    workflow_snapshot_id=request.workflow_snapshot_id,
+                )
+            )
+            self.repository.record_transition(Heartbeat(run_id, owner))
             self._fault("workflow.freeze_checkpoint_committed")
-            return projection_id, snapshot_id, artifact, research_fp
+            projection = checkpoint.projection
+            return (
+                projection.research_projection_id,
+                projection.research_snapshot_id,
+                projection.projection_artifact_id,
+                research_fp,
+            )
         except (ProjectionError, ValueError) as error:
-            self._fail_node(run_id, node, attempt, getattr(error, "code", "RESEARCH_PROJECTION_INVALID"))
+            self._fail_node(run_id, node, attempt, owner, getattr(error, "code", "RESEARCH_PROJECTION_INVALID"))
 
     def _research(self, run_id: str, request: ResearchWorkflowRequest, owner: str, projection_id: str, snapshot_id: str, projection_artifact: str, research_fp: str, lease_seconds: int):
         contract = self._node("run_or_link_research")
@@ -180,36 +241,31 @@ class ResearchWorkflowService:
             item.content_hash for item in request.analysis_artifacts
         ]
         fp = self._hash({"workflow": f"{RESEARCH_WORKFLOW.workflow_id}@{RESEARCH_WORKFLOW.version}", "node": f"{contract.node_id}@{contract.version}", "research": research_fp, "policy": self.assembler.POLICY_VERSION, "code_identity": self.engine_identity, "analysis_artifacts": analysis_artifact_hashes})
-        completed = self.repository.validate_checkpoint(run_id, contract, fp)
+        completed = self.repository.load(CheckpointQuery(run_id, contract, fp))
         if completed is not None:
-            member_rows = self.repository.checkpoint_members(completed["workflow_node_run_id"])
-            members = {r["member_role"]: r["artifact_id"] for r in member_rows}
-            record = self.repository.connection.execute("SELECT * FROM research_run_record WHERE canonical_json_artifact_id=?", (members["research_run_json"],)).fetchone()
-            if record is None:
-                record = self.repository.connection.execute(
-                    "SELECT DISTINCT r.* FROM research_run_record r "
-                    "JOIN research_artifact_record a "
-                    "ON a.research_run_id=r.research_run_id "
-                    "WHERE a.artifact_id IN ("
-                    + ",".join("?" for _ in member_rows)
-                    + ")",
-                    tuple(row["artifact_id"] for row in member_rows),
-                ).fetchone()
-            attempt = self.repository.connection.execute("SELECT workflow_node_attempt_id FROM workflow_node_attempt WHERE workflow_node_run_id=? ORDER BY attempt_no DESC LIMIT 1", (completed["workflow_node_run_id"],)).fetchone()[0]
-            decision = ReferenceDisposition.REUSED if self.repository.connection.execute("SELECT disposition FROM workflow_node_attempt WHERE workflow_node_attempt_id=?", (attempt,)).fetchone()[0] == "reused" else ReferenceDisposition.CREATED
-            run_members = tuple(
-                (row["artifact_id"], row["member_role"], row["direction"])
-                for row in member_rows
+            restored = self.repository.load(
+                CompletedResearchQuery(completed.workflow_node_run_id)
             )
-            return record, decision, run_members, completed["workflow_node_run_id"], attempt
-        node, attempt = self.repository.begin_or_retry_node(run_id, contract, fp, owner)
+            return (
+                restored.record,
+                restored.disposition,
+                restored.members,
+                completed.workflow_node_run_id,
+                restored.workflow_node_attempt_id,
+            )
+        node, attempt = self.repository.record_transition(BeginNode(run_id, contract, fp, owner))
         self._fault("workflow.node_attempt_started:run_or_link_research")
         try:
             trusted_source_validation = self._validate_analysis_artifact_gate(request)
         except ProjectionError as error:
-            self._fail_node(run_id, node, attempt, error.code)
-        record = self.repository.connection.execute("SELECT r.* FROM research_run_record r WHERE r.research_input_fingerprint=? AND r.engine_code_identity=?", (research_fp, self.engine_identity)).fetchone()
-        values = None
+            self._fail_node(run_id, node, attempt, owner, error.code)
+        record = self.repository.load(
+            ResearchRecordQuery(
+                research_input_fingerprint=research_fp,
+                engine_code_identity=self.engine_identity,
+            )
+        )
+        new_record = None
         if record is None:
             retry_count = 0
             while True:
@@ -217,7 +273,7 @@ class ResearchWorkflowService:
                 assembled = self.assembler.assemble(request.projection)
                 with self._periodic_heartbeat(run_id, owner, lease_seconds):
                     produced = self.engine.run(assembled)
-                self.repository.heartbeat(run_id, owner, lease_seconds)
+                self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
                 if not produced.html:
                     raise ValueError("RESEARCH_HTML_MISSING")
                 typed_presentation_expected = {
@@ -233,8 +289,12 @@ class ResearchWorkflowService:
                     if typed_presentation_expected
                     else "ResearchReportHtml@1"
                 )
-                json_artifact = self.repository.publish_artifact(json.dumps(produced.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(), "application/json", json_schema)
-                html_artifact = self.repository.publish_artifact(produced.html.encode(), "text/html", html_schema)
+                json_write = ArtifactPayload(
+                    json.dumps(produced.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(),
+                    "application/json",
+                    json_schema,
+                )
+                html_write = ArtifactPayload(produced.html.encode(), "text/html", html_schema)
                 request_fp = self._hash(
                     {
                         "manifest": assembled.manifest,
@@ -248,55 +308,61 @@ class ResearchWorkflowService:
                         "profile": assembled.profile,
                     }
                 )
-                values = (produced.run_id, research_fp, projection_id, snapshot_id, request_fp, produced.schema_version, self.engine_identity, assembled.as_of_date, produced.status, json_artifact, html_artifact)
-                self.repository.persist_research_record(values)
-                record = self.repository.connection.execute(
-                    "SELECT * FROM research_run_record WHERE research_run_id=?",
-                    (produced.run_id,),
-                ).fetchone()
+                new_record = ResearchRecord(
+                    research_run_id=produced.run_id,
+                    research_input_fingerprint=research_fp,
+                    research_projection_id=projection_id,
+                    research_snapshot_id=snapshot_id,
+                    request_fingerprint=request_fp,
+                    engine_schema_version=produced.schema_version,
+                    engine_code_identity=self.engine_identity,
+                    original_cutoff_date=assembled.as_of_date,
+                    status=produced.status,
+                )
+                record = new_record
                 disposition = ReferenceDisposition.CREATED
-                values = None
                 break
               except Exception as error:
                 if self._is_retryable(error) and retry_count < 2:
-                    self.repository.mark_retryable(node, attempt, self._retry_code(error))
+                    self.repository.record_transition(MarkRetryable(run_id, node, attempt, owner, self._retry_code(error)))
                     retry_count += 1
-                    node, attempt = self.repository.begin_or_retry_node(run_id, contract, fp, owner)
+                    node, attempt = self.repository.record_transition(BeginNode(run_id, contract, fp, owner))
                     self._fault("workflow.node_attempt_started:run_or_link_research")
                     self._retry_delay(error, retry_count)
                     continue
-                self._fail_node(run_id, node, attempt, "RESEARCH_ENGINE_FAILED")
+                self._fail_node(run_id, node, attempt, owner, "RESEARCH_ENGINE_FAILED")
         else:
             disposition = ReferenceDisposition.REUSED
-            json_artifact, html_artifact = record["canonical_json_artifact_id"], record["html_artifact_id"]
+            json_write = None
+            html_write = None
         try:
-            artifact_record_ids = self.repository.persist_research_artifact_bundle(
-                research_run_id=record["research_run_id"],
+            artifact_bundle = ResearchArtifactBundle(
+                research_run_id=record.research_run_id,
                 data_snapshot_id=snapshot_id,
                 code_identity=self.engine_identity,
                 drafts=request.analysis_artifacts,
                 workflow_run_id=run_id,
                 market_data_snapshot_id=request.workflow_snapshot_id,
+                research_record=new_record,
+            )
+            prepared_artifacts = self.repository.load(
+                ArtifactBundlePreviewQuery(artifact_bundle)
             )
         except Exception:
             self._fail_node(
                 run_id,
                 node,
                 attempt,
+                owner,
                 "RESEARCH_ARTIFACT_PERSISTENCE_FAILED",
             )
-        typed_views = tuple(
-            self.repository.research_artifact_view(record_id)
-            for record_id in artifact_record_ids
-        )
+        typed_views = prepared_artifacts.views
         by_kind = {item.artifact_kind: item for item in typed_views}
         if {"DataSnapshot", "Forecast", "Valuation"}.issubset(by_kind):
             research_payload = (
                 produced.to_dict()
                 if disposition is ReferenceDisposition.CREATED
-                else self.repository.research_run_payload(
-                    record["research_run_id"]
-                )
+                else self.repository.load(ResearchPayloadQuery(record.research_run_id))
             )
             research_payload = self._presentation_permissions(
                 research_payload,
@@ -316,7 +382,7 @@ class ResearchWorkflowService:
                 research_run_payload=research_payload,
             )
             decision_payload = decision_view.to_dict()
-            json_artifact = self.repository.publish_artifact(
+            json_write = ArtifactPayload(
                 json.dumps(
                     decision_payload,
                     ensure_ascii=False,
@@ -327,50 +393,30 @@ class ResearchWorkflowService:
                 "application/json",
                 decision_view.schema_version,
             )
-            html_artifact = self.repository.publish_artifact(
+            html_write = ArtifactPayload(
                 render_research_decision_html(decision_view).encode(),
                 "text/html",
                 "ResearchDecisionHtml@1",
             )
-            if disposition is ReferenceDisposition.CREATED:
-                with self.repository.connection:
-                    self.repository.connection.execute(
-                        "UPDATE research_run_record "
-                        "SET canonical_json_artifact_id=?,html_artifact_id=? "
-                        "WHERE research_run_id=?",
-                        (
-                            json_artifact,
-                            html_artifact,
-                            record["research_run_id"],
-                        ),
-                    )
-                record = self.repository.connection.execute(
-                    "SELECT * FROM research_run_record WHERE research_run_id=?",
-                    (record["research_run_id"],),
-                ).fetchone()
-        typed_members = tuple(
-            (
-                row["artifact_id"],
-                self._artifact_member_role(row["artifact_kind"]),
-                "output",
-            )
-            for record_id in artifact_record_ids
-            for row in (
-                self.repository.connection.execute(
-                    "SELECT artifact_id,artifact_kind FROM research_artifact_record WHERE artifact_record_id=?",
-                    (record_id,),
-                ).fetchone(),
-            )
-        )
-        run_members = (
-            (projection_artifact, "research_projection", "input"),
-            (json_artifact, "research_run_json", "output"),
-            (html_artifact, "research_report_html", "output"),
-            *typed_members,
-        )
         self._fault("workflow.research_artifacts_persisted")
         self._fault("workflow.before_node_success:run_or_link_research")
-        self.repository.commit_research_checkpoint(node, attempt, disposition, values, run_members)
+        checkpoint = self.repository.commit_checkpoint(
+            CommitResearchNode(
+                run_id,
+                node,
+                attempt,
+                owner,
+                disposition,
+                new_record,
+                record,
+                projection_artifact,
+                json_write,
+                html_write,
+                artifact_bundle,
+            )
+        )
+        record = checkpoint.record
+        run_members = checkpoint.members
         self._fault("workflow.research_checkpoint_committed")
         return record, disposition, run_members, node, attempt
 
@@ -598,31 +644,32 @@ class ResearchWorkflowService:
             )
         except ValueError:
             return None
-        manifest_field = next(
-            (
-                field
-                for source in projection.manifest.get("sources", ())
-                if isinstance(source, Mapping)
-                and str(source.get("source_id")) == source_id
-                for field in source.get("extracted_fields", ())
-                if isinstance(field, Mapping)
-                and str(field.get("field_name")) == field_name
-                and str(field.get("period")) == period
-            ),
-            None,
-        )
-        snapshot_fact = next(
-            (
-                fact
-                for fact in data_snapshot_payload.get("facts", ())
-                if isinstance(fact, Mapping)
+        manifest_field = None
+        sources = projection.manifest.get("sources", ())
+        for source in sources if isinstance(sources, (list, tuple)) else ():
+            if not isinstance(source, Mapping) or str(source.get("source_id")) != source_id:
+                continue
+            fields = source.get("extracted_fields", ())
+            for field in fields if isinstance(fields, (list, tuple)) else ():
+                if (
+                    isinstance(field, Mapping)
+                    and str(field.get("field_name")) == field_name
+                    and str(field.get("period")) == period
+                ):
+                    manifest_field = field
+                    break
+        snapshot_fact = None
+        facts = data_snapshot_payload.get("facts", ())
+        for fact in facts if isinstance(facts, (list, tuple)) else ():
+            if (
+                isinstance(fact, Mapping)
                 and str(fact.get("source_id")) == source_id
                 and str(fact.get("field_name")) == field_name
                 and str(fact.get("period")) == period
                 and fact.get("official") is True
-            ),
-            None,
-        )
+            ):
+                snapshot_fact = fact
+                break
         if manifest_field is None or snapshot_fact is None:
             return None
         try:
@@ -660,10 +707,12 @@ class ResearchWorkflowService:
             except Exception:
                 return None
 
-        for scenario in valuation_payload.get("scenarios", ()):
+        scenarios = valuation_payload.get("scenarios", ())
+        for scenario in scenarios if isinstance(scenarios, (list, tuple)) else ():
             if not isinstance(scenario, Mapping):
                 continue
-            for method in scenario.get("methods", ()):
+            methods = scenario.get("methods", ())
+            for method in methods if isinstance(methods, (list, tuple)) else ():
                 if not isinstance(method, Mapping) or method.get("status") != "ready":
                     continue
                 method_id = str(method.get("method_id"))
@@ -754,33 +803,30 @@ class ResearchWorkflowService:
             },
         }
 
-    def _fail_node(self, run_id: str, node: str, attempt: str, code: str) -> None:
-        node_name = self.repository.connection.execute("SELECT node_id FROM workflow_node_run WHERE workflow_node_run_id=?", (node,)).fetchone()[0]
+    def _fail_node(self, run_id: str, node: str, attempt: str, owner: str, code: str) -> NoReturn:
+        node_name = self.repository.load(NodeNameQuery(node))
         contract = self._node(node_name)
         if code not in contract.failure_codes:
             code = contract.failure_codes[0]
-        diagnostic = self.repository.publish_artifact(json.dumps({"error_code": code}).encode(), "application/json", "WorkflowDiagnostic@1")
-        self.repository.fail_node(node, attempt, code, diagnostic)
-        self.repository.fail(run_id, code)
+        diagnostic = ArtifactPayload(
+            json.dumps({"error_code": code}).encode(),
+            "application/json",
+            "WorkflowDiagnostic@1",
+        )
+        self.repository.record_transition(FailExecution(run_id, node, attempt, owner, code, diagnostic))
         raise WorkflowError(code, run_id)
 
-    def get_history(self, workflow_run_id: str) -> WorkflowHistory: return self.repository.history(workflow_run_id)
-    def get_manifest(self, manifest_id: str) -> ArtifactManifestView: return self.repository.manifest(manifest_id)
-    def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: return self.repository.research_artifact_view(artifact_record_id)
-    def get_research_run_payload(self, research_run_id: str) -> Mapping[str, object]: return self.repository.research_run_payload(research_run_id)
+    def get_history(self, workflow_run_id: str) -> WorkflowHistory: return self.repository.load(WorkflowHistoryQuery(workflow_run_id))
+    def get_manifest(self, manifest_id: str) -> ArtifactManifestView: return self.repository.load(ManifestQuery(manifest_id))
+    def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: return self.repository.load(ResearchArtifactQuery(artifact_record_id))
+    def get_research_run_payload(self, research_run_id: str) -> Mapping[str, object]: return self.repository.load(ResearchPayloadQuery(research_run_id))
     def review_forecast(
         self,
         request: ForecastReviewRequest,
     ) -> ResearchArtifactView:
-        forecast = self.repository.research_artifact_view(
-            request.forecast_artifact_record_id
-        )
-        valuation = self.repository.research_artifact_view(
-            request.valuation_artifact_record_id
-        )
-        simulation = self.repository.research_artifact_view(
-            request.simulation_artifact_record_id
-        )
+        forecast = self.repository.load(ResearchArtifactQuery(request.forecast_artifact_record_id))
+        valuation = self.repository.load(ResearchArtifactQuery(request.valuation_artifact_record_id))
+        simulation = self.repository.load(ResearchArtifactQuery(request.simulation_artifact_record_id))
         result = ForecastReviewEngine().run(request)
         draft = ImmutableArtifactDraft.from_forecast_review(
             result,
@@ -788,36 +834,26 @@ class ResearchWorkflowService:
             valuation_artifact=valuation,
             simulation_artifact=simulation,
         )
-        record_id = self.repository.persist_forecast_review(
-            draft=draft,
-            parent_record_ids=(
+        record_id = self.repository.commit_artifacts(
+            ForecastReviewCommit(
+                draft=draft,
+                parent_record_ids=(
                 forecast.artifact_record_id,
                 valuation.artifact_record_id,
                 simulation.artifact_record_id,
             ),
-            code_identity=self.engine_identity,
+                code_identity=self.engine_identity,
+            )
         )
-        return self.repository.research_artifact_view(record_id)
-    @staticmethod
-    def _artifact_member_role(artifact_kind: str) -> str:
-        return {
-            "DataSnapshot": "data_snapshot",
-            "Forecast": "forecast",
-            "Valuation": "valuation",
-            "Simulation": "simulation",
-            "MarketDataSnapshot": "market_data_snapshot",
-            "MarketPathSimulation": "market_path_simulation",
-            "ForecastReview": "forecast_review",
-        }[artifact_kind]
+        return self.repository.load(ResearchArtifactQuery(record_id))
     def _validate_workflow_snapshot(self, workflow_snapshot_id: str, research_snapshot_id: str) -> None:
         if workflow_snapshot_id == research_snapshot_id:
             raise ProjectionError("SNAPSHOT_PURPOSE_COLLISION", "snapshots differ")
-        row = self.repository.connection.execute("SELECT snapshot_purpose FROM data_snapshot WHERE data_snapshot_id=?", (workflow_snapshot_id,)).fetchone()
-        if row is None or row[0] not in {"workflow", "market"}:
+        evidence = self.repository.load(SnapshotEvidenceQuery(workflow_snapshot_id))
+        if evidence.purpose not in {"workflow", "market"}:
             raise ProjectionError("WORKFLOW_SNAPSHOT_INVALID", "snapshot invalid")
     def _validate_snapshot_classification(self, snapshot_id: str, candidates: tuple[str, ...], market_only: tuple[str, ...], context: object) -> None:
-        rows = self.repository.connection.execute("SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=?", (snapshot_id,)).fetchall()
-        actual = {r[0]: r[1] for r in rows}
+        actual = dict(self.repository.load(SnapshotEvidenceQuery(snapshot_id)).members)
         if set(candidates) != set(actual):
             raise ProjectionError("SNAPSHOT_CANDIDATE_CLASSIFICATION_INVALID", "candidate mismatch")
         market = {i for i, dataset in actual.items() if dataset in {"trade_cal", "market_universe", "daily"}}
@@ -826,15 +862,17 @@ class ResearchWorkflowService:
         declared = set(context.get("workflow_research_member_ids", ())) if isinstance(context, dict) else set()
         if set(actual) - market != declared:
             raise ProjectionError("RESEARCH_RELEVANT_SNAPSHOT_CHANGE", "relevant mismatch")
-    def _validate_completed_projection_refs(self, request: ResearchWorkflowRequest, refs: dict[str, str], artifact_id: str, fingerprint: str) -> None:
+    def _validate_completed_projection_refs(self, request: ResearchWorkflowRequest, refs: Mapping[str, str], artifact_id: str, fingerprint: str) -> None:
         projection_id = refs.get("research_projection")
         snapshot_id = refs.get("research_snapshot")
-        row = self.repository.connection.execute("SELECT p.*,s.snapshot_purpose,s.freshness_status,s.quality_status FROM research_input_projection p JOIN data_snapshot s ON s.data_snapshot_id=p.research_snapshot_id WHERE p.research_projection_id=?", (projection_id,)).fetchone()
-        if row is None or row["research_snapshot_id"] != snapshot_id or row["projection_artifact_id"] != artifact_id or row["research_input_fingerprint"] != fingerprint:
+        if projection_id is None:
             raise ValueError("WORKFLOW_DOMAIN_REFERENCE_INVALID")
-        if row["security_id"] != request.security_id or row["as_of_date"] > request.requested_date or row["snapshot_purpose"] != "research":
+        row = self.repository.load(ProjectionEvidenceQuery(projection_id))
+        if row is None or row.research_snapshot_id != snapshot_id or row.projection_artifact_id != artifact_id or row.research_input_fingerprint != fingerprint:
+            raise ValueError("WORKFLOW_DOMAIN_REFERENCE_INVALID")
+        if row.security_id != request.security_id or row.as_of_date > request.requested_date or row.snapshot_purpose != "research":
             raise ValueError("WORKFLOW_PIT_INVARIANT_FAILED")
-        if row["freshness_status"] != "valid" or row["quality_status"] == "blocking":
+        if row.freshness_status != "valid" or row.quality_status == "blocking":
             raise ValueError("WORKFLOW_QUALITY_BLOCKED")
         if request.workflow_snapshot_id:
             self._validate_workflow_snapshot(request.workflow_snapshot_id, snapshot_id)
@@ -876,7 +914,7 @@ class ResearchWorkflowService:
             interval = max(0.1, lease_seconds / 3)
             while not stopped.wait(interval):
                 try:
-                    self.repository.heartbeat(run_id, owner, lease_seconds)
+                    self.repository.record_transition(Heartbeat(run_id, owner, lease_seconds))
                 except Exception as error:
                     failures.append(error)
                     return

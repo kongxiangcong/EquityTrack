@@ -14,6 +14,7 @@ from trading_platform.account_import import SCHEMAS, TonghuashunImportPreviewer
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import PersistenceError
+from trading_platform.application.workflow_ledger import GenericObjectCommit
 
 
 class AccountOpeningError(RuntimeError):
@@ -138,7 +139,7 @@ class AccountOpeningService:
             payload=(Path(private_root).resolve()/"sources/sha256"/item.source_object_sha256[:2]/item.source_object_sha256).read_bytes()
             for retry in range(40):
                 try:
-                    published=store.publish_object(payload); break
+                    published=store.workflow_ledger.commit_artifacts(GenericObjectCommit(payload)).sha256; break
                 except PersistenceError as error:
                     if error.code!="RUNTIME_BUSY" or retry==39: raise
                     time.sleep(0.05)

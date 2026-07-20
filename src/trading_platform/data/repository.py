@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Iterable
@@ -10,15 +11,16 @@ from typing import Iterable
 from trading_platform.domain.data import Coverage, CursorCheckpoint, DistributionQualification, FixtureRights, FreshnessStatus, NextStep, ProviderAttemptEvidence, QualityStatus, RawEnvelope, SyncDisposition, SyncRequest, SyncResult, SyncStatus
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock, PersistenceError
-from trading_platform.persistence.objects import ContentAddressedObjectStore
+from trading_platform.application.workflow_ledger import GenericObjectCommit, WorkflowLedgerPort
 
 from .normalizer import NormalizedItem, parse_instant
 
 
 class DataRepository:
-    def __init__(self, connection: sqlite3.Connection, objects: ContentAddressedObjectStore, writer_lock: DataRootWriterLock) -> None:
+    def __init__(self, connection: sqlite3.Connection, workflow_ledger: WorkflowLedgerPort, data_root: Path, writer_lock: DataRootWriterLock) -> None:
         self.connection = connection
-        self.objects = objects
+        self.workflow_ledger = workflow_ledger
+        self.data_root = data_root
         self.writer_lock = writer_lock
         self.fault_injector = None
 
@@ -30,8 +32,16 @@ class DataRepository:
         expected_hash = hashlib.sha256(envelope.payload).hexdigest() if envelope.payload is not None else None
         if expected_hash != envelope.raw_sha256:
             raise PersistenceError("RAW_HASH_MISMATCH", "Provider raw hash does not match payload.")
-        already_cached = expected_hash is not None and self.connection.execute("SELECT 1 FROM object_blob WHERE sha256=?", (expected_hash,)).fetchone() is not None
-        raw_hash = self.objects.publish(envelope.payload) if envelope.payload is not None else None
+        object_commit = (
+            self.workflow_ledger.commit_artifacts(GenericObjectCommit(envelope.payload))
+            if envelope.payload is not None
+            else None
+        )
+        raw_hash = None if object_commit is None else object_commit.sha256
+        already_cached = (
+            object_commit is not None
+            and object_commit.disposition.value == "reused"
+        )
         attempt_id = f"attempt_{canonical_hash({'invocation': invocation_id, 'provider': provider_id, 'adapter': adapter_version, 'dataset': dataset, 'retrieved': envelope.retrieved_at, 'source': envelope.source_identity})[:24]}"
         with self.connection:
             self.connection.execute(
@@ -95,7 +105,7 @@ class DataRepository:
     def validate_fixture_location(self, rights: FixtureRights) -> None:
         if rights.repository_redistribution_allowed and rights.packaged_distribution_allowed:
             return
-        if any((parent / ".git").exists() for parent in (self.objects.data_root, *self.objects.data_root.parents)):
+        if any((parent / ".git").exists() for parent in (self.data_root, *self.data_root.parents)):
             raise PersistenceError("PRIVATE_FIXTURE_IN_GIT_WORKTREE", "Private fixture raw must use a data root outside the Git worktree.")
 
     def persist_items(self, attempt_id: str, items: Iterable[NormalizedItem], cutoff: datetime, cursor: CursorCheckpoint | None = None) -> tuple[tuple[tuple[str, str], ...], bool, int, int]:
