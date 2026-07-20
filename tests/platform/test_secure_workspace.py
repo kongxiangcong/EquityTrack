@@ -119,7 +119,8 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(tmp_path: P
     research = root.facade.run_research_workflow(research_request("golden:outer-workflow:2026-07-11", requested_date="2026-07-11", effective_session_date="2026-07-10", workflow_snapshot_id=sync.snapshot_id, candidate_member_ids=member_ids, market_only_member_ids=member_ids))
     assert research.research_run_id == original.research_run_id
     assert research.research_snapshot_id == original.research_snapshot_id
-    assert research.json_artifact_id == original.json_artifact_id and research.html_artifact_id == original.html_artifact_id
+    assert research.json_artifact_id != original.json_artifact_id
+    assert research.html_artifact_id != original.html_artifact_id
     assert research.disposition.value == "reused" and research.reason_code == "ROUTINE_MARKET_ONLY_INPUTS" and research.stale_by_days == 3
     annotation_input = replace(annotation_draft(), data_snapshot_id=sync.snapshot_id, links=(AnnotationLink("ResearchRun", research.research_run_id, "resolved"),))
     annotation = root.facade.create_annotation(AnnotationCommand("golden:annotation", None, 0, annotation_input))

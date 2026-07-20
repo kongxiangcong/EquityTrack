@@ -52,7 +52,7 @@ def test_code_identity_changes_with_source_lock_workflow_frontend_migration_and_
     (tmp_path / "src").mkdir(); (tmp_path / "src/a.py").write_text("a=1", encoding="utf-8")
     (tmp_path / "web").mkdir(); (tmp_path / "web/app.js").write_text("1", encoding="utf-8")
     (tmp_path / "migrations").mkdir(); (tmp_path / "migrations/0001.sql").write_text("select 1", encoding="utf-8")
-    (tmp_path / "src/trading_platform/workflows").mkdir(parents=True); (tmp_path / "src/trading_platform/workflows/registry.py").write_text("V=1", encoding="utf-8")
+    (tmp_path / "src/trading_platform/workflows").mkdir(parents=True); (tmp_path / "src/trading_platform/workflows/research.py").write_text("V=1", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text("[project]", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     first = build_code_identity(tmp_path, {"mode": "offline"})
@@ -64,7 +64,7 @@ def test_code_identity_changes_with_source_lock_workflow_frontend_migration_and_
     assert first.lock_hash != build_code_identity(tmp_path, {"mode": "offline"}).lock_hash
     (tmp_path / "migrations/0001.sql").write_text("select 2", encoding="utf-8")
     assert first.migration_hash != build_code_identity(tmp_path, {"mode": "offline"}).migration_hash
-    (tmp_path / "src/trading_platform/workflows/registry.py").write_text("V=2", encoding="utf-8")
+    (tmp_path / "src/trading_platform/workflows/research.py").write_text("V=2", encoding="utf-8")
     assert first.workflow_hash != build_code_identity(tmp_path, {"mode": "offline"}).workflow_hash
     (tmp_path / "web/app.js").write_text("2", encoding="utf-8")
     assert first.frontend_hash != build_code_identity(tmp_path, {"mode": "offline"}).frontend_hash

@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Mapping
+from typing import Any, Mapping
 
 from trading_platform.domain.workflow import (
     ArtifactManifestView,
@@ -36,6 +36,9 @@ from trading_platform.domain.artifact_lineage import (
 )
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock, PersistenceError
+from trading_platform.persistence.research_view_cutover import (
+    ResearchDecisionViewCutover,
+)
 
 
 def _now() -> str:
@@ -129,7 +132,7 @@ from trading_platform.application.workflow_ledger import (
     IntegrityReport,
     IntegrityScope,
     LedgerLoadResult,
-    MaintenanceActiveQuery,
+    NonterminalWorkflowQuery,
     ManifestQuery,
     MarkRetryable,
     NodeNameQuery,
@@ -148,6 +151,11 @@ from trading_platform.application.workflow_ledger import (
     ResearchArtifactQuery,
     ResearchArtifactBundle,
     ResearchPayloadQuery,
+    ResearchDecisionMaterialization,
+    ResearchDecisionViewMaterializerPort,
+    DecisionViewPayload,
+    DecisionViewPayloadQuery,
+    ResearchViewCutoverCompleteQuery,
     ResearchRecord,
     ResearchRecordQuery,
     ResearchCheckpointResult,
@@ -250,7 +258,7 @@ class WorkflowLedger:
         | ManifestQuery
         | ResearchArtifactQuery
         | ResearchPayloadQuery
-        | MaintenanceActiveQuery
+        | NonterminalWorkflowQuery
         | ObjectInventoryQuery
         | PersistenceCountsQuery
         | ArtifactBundlePreviewQuery,
@@ -259,14 +267,14 @@ class WorkflowLedger:
             return self._projection_plan(query.freeze)[0]
         if isinstance(query, ArtifactBundlePreviewQuery):
             return self._preview_artifact_bundle(query.bundle)
-        if isinstance(query, MaintenanceActiveQuery):
+        if isinstance(query, NonterminalWorkflowQuery):
             table = self.__connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run'"
             ).fetchone()
             return bool(
                 table
                 and self.__connection.execute(
-                    "SELECT 1 FROM workflow_run WHERE status='running' AND lease_expires_at>datetime('now') LIMIT 1"
+                    "SELECT 1 FROM workflow_run WHERE status IN ('queued','running') LIMIT 1"
                 ).fetchone()
             )
         if isinstance(query, ObjectInventoryQuery):
@@ -316,6 +324,10 @@ class WorkflowLedger:
             return self._research_artifact_view(query.artifact_record_id)
         if isinstance(query, ResearchPayloadQuery):
             return self._research_run_payload(query.research_run_id)
+        if isinstance(query, DecisionViewPayloadQuery):
+            return self._decision_view_payload(query.workflow_run_id)
+        if isinstance(query, ResearchViewCutoverCompleteQuery):
+            return self._research_view_cutover_complete()
         if isinstance(query, ResearchRunIdentityQuery):
             identity = self.__connection.execute(
                 "SELECT engine_code_identity FROM research_run_record WHERE research_run_id=?",
@@ -838,22 +850,24 @@ class WorkflowLedger:
         with self.__writer_lock.acquire(
             f"research-checkpoint:{command.workflow_run_id}"
         ):
-            if (command.json_artifact is None) != (command.html_artifact is None):
+            if (command.source_json_artifact is None) != (command.source_html_artifact is None):
                 raise WorkflowPersistenceError(
                     "RESEARCH_PRESENTATION_INCOMPLETE",
                     "commit_checkpoint",
                     command.workflow_run_id,
                 )
-            published_json = (
+            published_source_json = (
                 None
-                if command.json_artifact is None
-                else self._publish_durable(command.json_artifact.payload)
+                if command.source_json_artifact is None
+                else self._publish_durable(command.source_json_artifact.payload)
             )
-            published_html = (
+            published_source_html = (
                 None
-                if command.html_artifact is None
-                else self._publish_durable(command.html_artifact.payload)
+                if command.source_html_artifact is None
+                else self._publish_durable(command.source_html_artifact.payload)
             )
+            published_decision_json = self._publish_durable(command.decision_json_artifact.payload)
+            published_decision_html = self._publish_durable(command.decision_html_artifact.payload)
             bundle = command.artifact_bundle
             prepared_bundle = self._prepare_research_artifact_bundle(
                 research_run_id=bundle.research_run_id,
@@ -874,16 +888,22 @@ class WorkflowLedger:
                     command.owner_token,
                     "commit_checkpoint",
                 )
-                if command.json_artifact is not None:
-                    json_artifact_id = self._register_artifact(
-                        published_json,
-                        command.json_artifact.media_type,
-                        command.json_artifact.schema_version,
+                if command.source_json_artifact is not None:
+                    if published_source_json is None or published_source_html is None or command.source_html_artifact is None:
+                        raise WorkflowPersistenceError(
+                            "RESEARCH_PRESENTATION_INCOMPLETE",
+                            "commit_checkpoint",
+                            command.workflow_run_id,
+                        )
+                    source_json_artifact_id = self._register_artifact(
+                        published_source_json,
+                        command.source_json_artifact.media_type,
+                        command.source_json_artifact.schema_version,
                     )
-                    html_artifact_id = self._register_artifact(
-                        published_html,
-                        command.html_artifact.media_type,
-                        command.html_artifact.schema_version,
+                    source_html_artifact_id = self._register_artifact(
+                        published_source_html,
+                        command.source_html_artifact.media_type,
+                        command.source_html_artifact.schema_version,
                     )
                 else:
                     if (
@@ -895,13 +915,23 @@ class WorkflowLedger:
                             "commit_checkpoint",
                             command.workflow_run_id,
                         )
-                    json_artifact_id = command.record.canonical_json_artifact_id
-                    html_artifact_id = command.record.html_artifact_id
+                    source_json_artifact_id = command.record.canonical_json_artifact_id
+                    source_html_artifact_id = command.record.html_artifact_id
+                decision_json_artifact_id = self._register_artifact(
+                    published_decision_json,
+                    command.decision_json_artifact.media_type,
+                    command.decision_json_artifact.schema_version,
+                )
+                decision_html_artifact_id = self._register_artifact(
+                    published_decision_html,
+                    command.decision_html_artifact.media_type,
+                    command.decision_html_artifact.schema_version,
+                )
                 if command.new_record is not None:
                     record = replace(
                         command.new_record,
-                        canonical_json_artifact_id=json_artifact_id,
-                        html_artifact_id=html_artifact_id,
+                        canonical_json_artifact_id=source_json_artifact_id,
+                        html_artifact_id=source_html_artifact_id,
                     )
                     self.__connection.execute(
                         "INSERT OR IGNORE INTO research_run_record VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -917,8 +947,10 @@ class WorkflowLedger:
                         "research_projection",
                         "input",
                     ),
-                    (json_artifact_id, "research_run_json", "output"),
-                    (html_artifact_id, "research_report_html", "output"),
+                    (source_json_artifact_id, "research_run_json", "output"),
+                    (source_html_artifact_id, "research_report_html", "output"),
+                    (decision_json_artifact_id, "decision_view_json", "output"),
+                    (decision_html_artifact_id, "decision_view_html", "output"),
                     *(
                         (artifact_id, member_role, "output")
                         for artifact_id, member_role in committed_bundle.members
@@ -1833,7 +1865,7 @@ class WorkflowLedger:
 
     def _research_run_payload(self, research_run_id: str) -> Mapping[str, object]:
         row = self.__connection.execute(
-            "SELECT a.object_sha256,o.size_bytes,o.relative_path "
+            "SELECT a.object_sha256,o.size_bytes,o.relative_path,r.engine_schema_version "
             "FROM research_run_record r "
             "JOIN artifact a ON a.artifact_id=r.canonical_json_artifact_id "
             "JOIN object_blob o ON o.sha256=a.object_sha256 "
@@ -1859,19 +1891,45 @@ class WorkflowLedger:
                 "RESEARCH_RUN_JSON_INVALID",
                 "Canonical research JSON is not valid JSON.",
             ) from error
-        decision_identity = (
+        source_identity = (
             isinstance(decoded, Mapping)
-            and decoded.get("research_run_id") == research_run_id
-            and str(decoded.get("schema_version", "")).startswith(
-                "ResearchDecisionView@"
-            )
+            and decoded.get("run_id") == research_run_id
+            and decoded.get("schema_version") == row["engine_schema_version"]
         )
-        if not decision_identity:
+        if not source_identity:
             raise PersistenceError(
                 "RESEARCH_RUN_JSON_IDENTITY_MISMATCH",
                 "Canonical research JSON identity does not match its database record.",
             )
         return decoded
+
+    def _research_view_persistence(self) -> ResearchDecisionViewCutover:
+        return ResearchDecisionViewCutover(
+            self.__connection,
+            self.__data_root,
+            self.__writer_lock,
+            self._publish_durable,
+            self._register_artifact,
+            self._research_artifact_view,
+            self._research_run_payload,
+            self._fault,
+        )
+
+    def _decision_view_payload(self, workflow_run_id: str) -> DecisionViewPayload:
+        return self._research_view_persistence().decision_payload(workflow_run_id)
+
+    def _research_view_cutover_complete(self) -> bool:
+        return self._research_view_persistence().complete()
+
+    def cutover_research_decision_views(
+        self,
+        materializer: ResearchDecisionViewMaterializerPort,
+        *,
+        acquire_lock: bool = True,
+    ) -> None:
+        self._research_view_persistence().run(
+            materializer, acquire_lock=acquire_lock
+        )
 
     def _commit_projection_checkpoint(
         self, command: ProjectionCheckpointCommit
@@ -2171,6 +2229,7 @@ class WorkflowLedger:
         record = self.__connection.execute("SELECT * FROM research_run_record WHERE research_run_id=?", (decision["research_run_id"],)).fetchone()
         workflow_snapshot = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='workflow_snapshot'", (workflow_run_id,)).fetchone()
         final_manifest = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='final_manifest'", (workflow_run_id,)).fetchone()
+        decision_manifest = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='decision_view_manifest'", (workflow_run_id,)).fetchone()
         presentation_artifacts = {
             row["member_role"]: row["artifact_id"]
             for row in self.__connection.execute(
@@ -2178,8 +2237,8 @@ class WorkflowLedger:
                 "FROM artifact_manifest_member "
                 "WHERE artifact_manifest_id=? "
                 "AND member_role IN "
-                "('research_run_json','research_report_html')",
-                (final_manifest[0],),
+                "('decision_view_json','decision_view_html')",
+                (decision_manifest[0],),
             )
         }
         artifact_record_ids = tuple(
@@ -2191,7 +2250,7 @@ class WorkflowLedger:
                 (final_manifest[0],),
             )
         )
-        return ResearchWorkflowResult(workflow_run_id, record["research_run_id"], record["research_snapshot_id"], workflow_snapshot[0] if workflow_snapshot else None, final_manifest[0], ReferenceDisposition(decision["disposition"]), decision["reason_code"], decision["stale_by_days"], presentation_artifacts["research_run_json"], presentation_artifacts["research_report_html"], artifact_record_ids)
+        return ResearchWorkflowResult(workflow_run_id, record["research_run_id"], record["research_snapshot_id"], workflow_snapshot[0] if workflow_snapshot else None, decision_manifest[0], ReferenceDisposition(decision["disposition"]), decision["reason_code"], decision["stale_by_days"], presentation_artifacts["decision_view_json"], presentation_artifacts["decision_view_html"], artifact_record_ids)
 
     def _history(self, workflow_run_id: str) -> WorkflowHistory:
         run = self.__connection.execute("SELECT * FROM workflow_run WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()
@@ -2200,7 +2259,7 @@ class WorkflowLedger:
         transitions = tuple(dict(row) for row in self.__connection.execute("SELECT sequence_no,from_status,to_status,reason_code,occurred_at FROM workflow_transition WHERE workflow_run_id=? ORDER BY sequence_no", (workflow_run_id,)))
         decision_row = self.__connection.execute("SELECT * FROM research_reuse_decision WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()
         decision = {} if decision_row is None else dict(decision_row)
-        final_manifest = next((ref["ref_id"] for ref in refs if ref["ref_role"] == "final_manifest"), None)
+        final_manifest = next((ref["ref_id"] for ref in refs if ref["ref_role"] == "decision_view_manifest"), None)
         return WorkflowHistory(workflow_run_id, run["status"], refs, attempts, transitions, decision, final_manifest)
 
     def _manifest(self, manifest_id: str) -> ArtifactManifestView:
@@ -2291,13 +2350,20 @@ class WorkflowLedger:
                     member_role: artifact_id
                     for artifact_id, member_role, _ in committed_members
                 }
-                json_artifact_id = member_by_role["research_run_json"]
-                html_artifact_id = member_by_role["research_report_html"]
+                decision_members = (
+                    (member_by_role["decision_view_json"], "decision_view_json", "output"),
+                    (member_by_role["decision_view_html"], "decision_view_html", "output"),
+                )
                 identity = [
                     {"artifact_id": artifact_id, "role": role, "direction": direction}
                     for artifact_id, role, direction in committed_members
                 ]
                 final_manifest = f"manifest_{canonical_hash({'role': 'workflow_final', 'producer_type': 'WorkflowRun', 'producer_id': workflow_run_id, 'members': identity})[:24]}"
+                decision_identity = [
+                    {"artifact_id": artifact_id, "role": role, "direction": direction}
+                    for artifact_id, role, direction in decision_members
+                ]
+                decision_manifest = f"manifest_{canonical_hash({'role': 'workflow_decision_view@1', 'producer_type': 'WorkflowRun', 'producer_id': workflow_run_id, 'members': decision_identity})[:24]}"
                 persisted_record = self.__connection.execute(
                     "SELECT * FROM research_run_record WHERE research_run_id=?",
                     (record.research_run_id,),
@@ -2310,6 +2376,9 @@ class WorkflowLedger:
                 self.__connection.execute("INSERT OR IGNORE INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)", (final_manifest, "workflow_final", "WorkflowRun", workflow_run_id, canonical_hash(identity), completed_at, len(committed_members)))
                 for member_index, (artifact_id, member_role, direction) in enumerate(committed_members):
                     self.__connection.execute("INSERT OR IGNORE INTO artifact_manifest_member VALUES(?,?,?,?,?)", (final_manifest, member_index, artifact_id, member_role, direction))
+                self.__connection.execute("INSERT INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)", (decision_manifest, "workflow_decision_view@1", "WorkflowRun", workflow_run_id, canonical_hash(decision_identity), completed_at, 2))
+                for member_index, (artifact_id, member_role, direction) in enumerate(decision_members):
+                    self.__connection.execute("INSERT INTO artifact_manifest_member VALUES(?,?,?,?,?)", (decision_manifest, member_index, artifact_id, member_role, direction))
                 final_node = self.__connection.execute("UPDATE workflow_node_run SET status='succeeded',checkpoint_manifest_id=? WHERE workflow_node_run_id=? AND owner_token=? AND status='running'", (final_manifest, final_node_id, owner_token))
                 final_attempt = self.__connection.execute("UPDATE workflow_node_attempt SET disposition='succeeded',completed_at=? WHERE workflow_node_attempt_id=? AND owner_token=? AND completed_at IS NULL", (completed_at, final_attempt_id, owner_token))
                 if final_node.rowcount != 1 or final_attempt.rowcount != 1:
@@ -2330,9 +2399,10 @@ class WorkflowLedger:
                 )
                 refs = (
                     ("research_run", "ResearchRun", record.research_run_id, disposition.value),
-                    ("research_json", "Artifact", json_artifact_id, disposition.value),
-                    ("research_html", "Artifact", html_artifact_id, disposition.value),
+                    ("research_json", "Artifact", record.canonical_json_artifact_id, disposition.value),
+                    ("research_html", "Artifact", record.html_artifact_id, disposition.value),
                     *typed_refs,
+                    ("decision_view_manifest", "ArtifactManifest", decision_manifest, "created"),
                     ("final_manifest", "ArtifactManifest", final_manifest, "created"),
                 )
                 for ref_role, ref_type, ref_id, ref_disposition in refs:

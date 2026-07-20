@@ -188,7 +188,7 @@ class AcceptanceEvidenceService:
                 if criterion["criterion"] == "AC-015": criterion["status"] = "failed"
         golden_entities = [{"entity_type": entity_type, "identity": str(golden[field]), "disposition": str(golden.get("dispositions", {}).get(field.removesuffix("_id").replace("_version", ""), "as_recorded"))} for field, entity_type in golden_fields.items() if golden.get(field)]
         supplied = {
-            "slice_spec_version": "0.2.0", "versions": {"workflow": "research-workflow@1", "node": "registry@1", "evaluator": "plan-evaluator@1", "model": "equity-research@0.3.0", "policy": "research_input_policy@1"},
+            "slice_spec_version": "0.2.0", "versions": {"workflow": "research-workflow@2", "node": "run_or_link_research@2", "evaluator": "plan-evaluator@1", "model": "equity-research@0.3.0", "policy": "research_input_policy@1"},
             "fixed_clock": "2026-07-11T09:30:00+08:00", "network_policy": "offline-deny-all", "fixture": fixture,
             "criteria": criteria, "suites": suites, "artifacts": artifacts,
             "golden_entities": golden_entities,

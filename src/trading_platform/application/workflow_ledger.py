@@ -217,7 +217,54 @@ class ResearchPayloadQuery:
 
 
 @dataclass(frozen=True)
-class MaintenanceActiveQuery:
+class DecisionViewPayloadQuery:
+    workflow_run_id: str
+
+
+@dataclass(frozen=True)
+class DecisionViewPayload:
+    manifest_id: str
+    json_artifact_id: str
+    html_artifact_id: str
+    json_bytes: bytes
+    html_bytes: bytes
+
+
+@dataclass(frozen=True)
+class ResearchDecisionMaterialization:
+    workflow_run_id: str
+    research_run_id: str
+    request_bytes: bytes
+    source_payload: Mapping[str, object]
+    artifacts: tuple[ResearchArtifactView, ...]
+
+
+@dataclass(frozen=True)
+class ResearchDecisionBytes:
+    json_bytes: bytes
+    html_bytes: bytes
+
+
+class ResearchDecisionViewMaterializerPort(Protocol):
+    def materialize(
+        self, request: ResearchDecisionMaterialization
+    ) -> ResearchDecisionBytes: ...
+
+    def expected_html(
+        self,
+        workflow_run_id: str,
+        research_run_id: str,
+        json_bytes: bytes,
+    ) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class ResearchViewCutoverCompleteQuery:
+    pass
+
+
+@dataclass(frozen=True)
+class NonterminalWorkflowQuery:
     pass
 
 
@@ -302,8 +349,10 @@ class CommitResearchNode:
     new_record: ResearchRecord | None
     record: ResearchRecord
     projection_artifact_id: str
-    json_artifact: ArtifactPayload | None
-    html_artifact: ArtifactPayload | None
+    source_json_artifact: ArtifactPayload | None
+    source_html_artifact: ArtifactPayload | None
+    decision_json_artifact: ArtifactPayload
+    decision_html_artifact: ArtifactPayload
     artifact_bundle: ResearchArtifactBundle
 
 
@@ -446,6 +495,8 @@ LedgerLoadResult: TypeAlias = (
     | tuple[DurableObject, ...]
     | PreparedArtifactBundle
     | PreparedProjection
+    | DecisionViewPayload
+    | tuple[CheckpointMember, ...]
     | bytes
     | str
     | bool
@@ -470,7 +521,9 @@ LedgerQuery: TypeAlias = (
     | ManifestQuery
     | ResearchArtifactQuery
     | ResearchPayloadQuery
-    | MaintenanceActiveQuery
+    | DecisionViewPayloadQuery
+    | ResearchViewCutoverCompleteQuery
+    | NonterminalWorkflowQuery
     | ObjectInventoryQuery
     | PersistenceCountsQuery
     | ArtifactBundlePreviewQuery
@@ -545,8 +598,14 @@ class WorkflowLedgerPort(Protocol):
     def load(self, query: ResearchArtifactQuery) -> ResearchArtifactView: ...
     @overload
     def load(self, query: ResearchPayloadQuery) -> Mapping[str, object]: ...
+
     @overload
-    def load(self, query: MaintenanceActiveQuery) -> bool: ...
+    def load(self, query: DecisionViewPayloadQuery) -> DecisionViewPayload: ...
+
+    @overload
+    def load(self, query: ResearchViewCutoverCompleteQuery) -> bool: ...
+    @overload
+    def load(self, query: NonterminalWorkflowQuery) -> bool: ...
     @overload
     def load(self, query: ObjectInventoryQuery) -> tuple[DurableObject, ...]: ...
     @overload

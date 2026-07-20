@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Mapping, Optional, TypeAlias
+
+from trading_platform.domain.workflow import ResearchWorkflowRequest
 
 
 class CapabilityStatus(str, Enum):
@@ -102,3 +104,18 @@ class ResumeWorkflowCommand:
 class CancelWorkflowCommand:
     workflow_run_id: str
     reason: str
+
+
+@dataclass(frozen=True)
+class StartResearchWorkflow:
+    request: ResearchWorkflowRequest
+
+
+@dataclass(frozen=True)
+class CancellationAccepted:
+    workflow_run_id: str
+
+
+ResearchWorkflowCommand: TypeAlias = (
+    StartResearchWorkflow | ResumeWorkflowCommand | CancelWorkflowCommand
+)

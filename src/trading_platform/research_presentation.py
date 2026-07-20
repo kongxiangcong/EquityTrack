@@ -307,15 +307,15 @@ def _render_story_cards(story: Mapping[str, Any], keys: tuple[str, ...]) -> str:
 
 
 def render_research_decision_html(
-    view: ResearchDecisionView | Mapping[str, Any],
+    view: ResearchDecisionView,
 ) -> str:
     """Render the canonical decision-first view without recalculating it."""
 
-    payload = view.to_dict() if isinstance(view, ResearchDecisionView) else dict(view)
-    story = payload.get("story") if isinstance(payload.get("story"), Mapping) else {}
-    scenarios = payload.get("scenarios") if isinstance(payload.get("scenarios"), (list, tuple)) else ()
-    drivers = payload.get("key_drivers") if isinstance(payload.get("key_drivers"), (list, tuple)) else ()
-    audit = payload.get("audit") if isinstance(payload.get("audit"), Mapping) else {}
+    payload = view.to_dict()
+    story = view.story
+    scenarios = view.scenarios
+    drivers = view.key_drivers
+    audit = view.audit
     canonical = json.dumps(
         payload,
         ensure_ascii=False,

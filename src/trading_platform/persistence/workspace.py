@@ -7,12 +7,13 @@ from typing import Any, Mapping
 
 from trading_platform.persistence.locking import DataRootWriterLock
 from trading_platform.application.workflow_ledger import (
+    DecisionViewPayloadQuery,
+    ResearchViewCutoverCompleteQuery,
     ResearchArtifactQuery,
-    ResearchPayloadQuery,
     WorkflowLedgerPort,
     WorkspaceWorkflowQuery,
 )
-from trading_platform.research_view import ResearchDecisionViewBuilder
+from trading_platform.research_view import ResearchDecisionView, ResearchViewError
 
 
 class WorkspaceService:
@@ -27,9 +28,10 @@ class WorkspaceService:
         self.connection = connection
         self.writer_lock = writer_lock
         self.workflow_ledger = workflow_ledger
-        self.research_view_builder = ResearchDecisionViewBuilder()
 
     def build(self, security_id: str, snapshot_id: str) -> dict[str, Any]:
+        if not self.workflow_ledger.load(ResearchViewCutoverCompleteQuery()):
+            raise ResearchViewError("RESEARCH_VIEW_CUTOVER_INCOMPLETE")
         snapshot = self._one(
             "SELECT requested_date,effective_session_date,freshness_status,quality_status FROM data_snapshot WHERE data_snapshot_id=?",
             (snapshot_id,),
@@ -117,54 +119,27 @@ class WorkspaceService:
 
     def _research_views(self, security_id: str) -> list[dict[str, Any]]:
         rows = self.workflow_ledger.load(WorkspaceWorkflowQuery(security_id)).artifact_uses
-        grouped: dict[str, dict[str, Any]] = {}
+        workflow_run_ids: dict[str, None] = {}
         for row in rows:
-            workflow_run_id = str(row["workflow_run_id"])
-            group = grouped.setdefault(
-                workflow_run_id,
-                {
-                    "research_run_id": str(row["research_run_id"]),
-                    "artifacts": {},
-                },
-            )
-            group["artifacts"][str(row["artifact_kind"])] = str(
-                row["artifact_record_id"]
-            )
+            workflow_run_ids.setdefault(str(row["workflow_run_id"]), None)
         result: list[dict[str, Any]] = []
-        for workflow_run_id, group in grouped.items():
-            artifact_ids = group["artifacts"]
-            required = {"DataSnapshot", "Forecast", "Valuation"}
-            if not required.issubset(artifact_ids):
-                continue
-            view = self.research_view_builder.build(
-                workflow_run_id=workflow_run_id,
-                data_snapshot=self.workflow_ledger.load(ResearchArtifactQuery(
-                    artifact_ids["DataSnapshot"]
-                )),
-                forecast=self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Forecast"])),
-                valuation=self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Valuation"])),
-                simulation=(
-                    self.workflow_ledger.load(ResearchArtifactQuery(artifact_ids["Simulation"]))
-                    if "Simulation" in artifact_ids
-                    else None
-                ),
-                market_data_snapshot=(
-                    self.workflow_ledger.load(ResearchArtifactQuery(
-                        artifact_ids["MarketDataSnapshot"]
-                    ))
-                    if "MarketDataSnapshot" in artifact_ids
-                    else None
-                ),
-                market_path=(
-                    self.workflow_ledger.load(ResearchArtifactQuery(
-                        artifact_ids["MarketPathSimulation"]
-                    ))
-                    if "MarketPathSimulation" in artifact_ids
-                    else None
-                ),
-                research_run_payload=self.workflow_ledger.load(ResearchPayloadQuery(group["research_run_id"])),
+        for workflow_run_id in workflow_run_ids:
+            persisted = self.workflow_ledger.load(
+                DecisionViewPayloadQuery(workflow_run_id)
             )
-            result.append(view.to_dict())
+            try:
+                decoded = json.loads(persisted.json_bytes)
+                view = ResearchDecisionView.from_dict(decoded)
+            except (json.JSONDecodeError, ResearchViewError) as error:
+                raise ResearchViewError("RESEARCH_VIEW_PERSISTED_INVALID") from error
+            if view.workflow_run_id != workflow_run_id:
+                raise ResearchViewError("RESEARCH_VIEW_IDENTITY_MISMATCH")
+            result.append(
+                {
+                    **view.to_dict(),
+                    "html_projection": persisted.html_bytes.decode("utf-8"),
+                }
+            )
         return result
 
     def _forecast_reviews(self, security_id: str) -> list[dict[str, Any]]:

@@ -12,6 +12,7 @@ from .contracts import (
     HealthResult,
     PlatformCommand,
     ResumeWorkflowCommand,
+    StartResearchWorkflow,
     SecurityIdentity,
     DoctorReport,
     WatchlistView,
@@ -24,7 +25,19 @@ from trading_platform.application.market_contracts import BuildMarketSnapshotCom
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
 from equity_research import ForecastReviewRequest
 
-from .ports import AccountPort, ChartPort, DataSyncPort, MarketPort, PlanPort, PlatformPersistence, ResearchWorkflowPort, WorkspacePort
+from .ports import (
+    AccountPort,
+    ChartPort,
+    DataSyncPort,
+    ForecastReviewPort,
+    MarketPort,
+    PlanPort,
+    PlatformPersistence,
+    ResearchArchivePort,
+    ResearchWorkflowPort,
+    WorkflowInspectionPort,
+    WorkspacePort,
+)
 
 
 class ApplicationFacade:
@@ -32,7 +45,20 @@ class ApplicationFacade:
 
     VERSION = "platform-skeleton@1"
 
-    def __init__(self, store: PlatformPersistence | None = None, data_sync: DataSyncPort | None = None, research_workflow: ResearchWorkflowPort | None = None, chart: ChartPort | None = None, plans: PlanPort | None = None, market: MarketPort | None = None, workspace: WorkspacePort | None = None, accounts: AccountPort | None = None) -> None:
+    def __init__(
+        self,
+        store: PlatformPersistence | None = None,
+        data_sync: DataSyncPort | None = None,
+        research_workflow: ResearchWorkflowPort | None = None,
+        chart: ChartPort | None = None,
+        plans: PlanPort | None = None,
+        market: MarketPort | None = None,
+        workspace: WorkspacePort | None = None,
+        accounts: AccountPort | None = None,
+        workflow_inspection: WorkflowInspectionPort | None = None,
+        research_archive: ResearchArchivePort | None = None,
+        forecast_review: ForecastReviewPort | None = None,
+    ) -> None:
         self._store = store
         self._data_sync = data_sync
         self._research_workflow = research_workflow
@@ -41,6 +67,9 @@ class ApplicationFacade:
         self._market = market
         self._workspace = workspace
         self._accounts = accounts
+        self._workflow_inspection = workflow_inspection
+        self._research_archive = research_archive
+        self._forecast_review = forecast_review
 
     def query_health(self, query: HealthQuery) -> HealthResult:
         del query
@@ -96,40 +125,44 @@ class ApplicationFacade:
     def run_research_workflow(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult:
         if self._research_workflow is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.run(request)
+        result = self._research_workflow.handle(StartResearchWorkflow(request))
+        assert isinstance(result, ResearchWorkflowResult)
+        return result
 
     def get_workflow_history(self, workflow_run_id: str) -> WorkflowHistory:
-        if self._research_workflow is None:
+        if self._workflow_inspection is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.get_history(workflow_run_id)
+        return self._workflow_inspection.inspect(workflow_run_id)
 
     def get_artifact_manifest(self, manifest_id: str) -> ArtifactManifestView:
-        if self._research_workflow is None:
+        if self._research_archive is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.get_manifest(manifest_id)
+        return self._research_archive.manifest(manifest_id)
 
     def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView:
-        if self._research_workflow is None:
+        if self._research_archive is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.get_research_artifact(artifact_record_id)
+        return self._research_archive.artifact(artifact_record_id)
 
     def get_research_run_payload(self, research_run_id: str):
-        if self._research_workflow is None:
+        if self._research_archive is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.get_research_run_payload(research_run_id)
+        return self._research_archive.source_payload(research_run_id)
 
     def review_forecast(self, request: ForecastReviewRequest) -> ResearchArtifactView:
-        if self._research_workflow is None:
+        if self._forecast_review is None:
             raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.review_forecast(request)
+        return self._forecast_review.review(request)
 
     def resume_workflow(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
-        return self._research_workflow.resume(command)
+        result = self._research_workflow.handle(command)
+        assert isinstance(result, ResearchWorkflowResult)
+        return result
 
     def cancel_workflow(self, command: CancelWorkflowCommand) -> None:
         if self._research_workflow is None: raise RuntimeError("research workflow unavailable")
-        self._research_workflow.cancel(command)
+        self._research_workflow.handle(command)
 
     def get_workspace(self, security_id: str, snapshot_id: str):
         if self._workspace is None:

@@ -19,12 +19,15 @@ from trading_platform.persistence.locking import DataRootWriterLock
 from trading_platform.persistence.presence import assert_maintenance_available
 from trading_platform.persistence.workflow_ledger import WorkflowLedger
 from trading_platform.application.workflow_ledger import (
-    MaintenanceActiveQuery,
+    NonterminalWorkflowQuery,
     ObjectInventoryQuery,
     PersistenceCountsQuery,
 )
 from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
 from trading_platform.account_import import personal_source_privacy_errors
+from trading_platform.application.research_view_cutover import (
+    CanonicalResearchDecisionViewMaterializer,
+)
 
 
 class OperationError(RuntimeError):
@@ -71,6 +74,10 @@ class PlatformOperations:
             store = PlatformStore(self.data_root, self.migrations_root)
             try:
                 store.migrations.migrate(acquire_lock=False)
+                store.workflow_ledger.cutover_research_decision_views(
+                    CanonicalResearchDecisionViewMaterializer(),
+                    acquire_lock=False
+                )
                 report = store.doctor()
                 return {"status": report.status, "data_root_scope": hashlib.sha256(str(self.data_root).encode()).hexdigest(), "checks": report.checks, "errors": report.errors}
             finally: store.close()
@@ -108,6 +115,7 @@ class PlatformOperations:
     def migrate(self) -> dict[str, Any]:
         database = self.data_root / "platform.sqlite3"
         if database.is_file():
+            self._assert_no_live_workflow(migration=True)
             connection = sqlite3.connect(database)
             try:
                 has_ledger = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migration'").fetchone()
@@ -118,10 +126,14 @@ class PlatformOperations:
             if has_ledger: self.backup(backup)
             else: self._backup_uninitialized_database(database, backup)
         with DataRootWriterLock(self.data_root).acquire("maintenance:migrate"):
-            assert_maintenance_available(self.data_root); self._assert_no_live_workflow()
+            assert_maintenance_available(self.data_root); self._assert_no_live_workflow(migration=True)
             store = PlatformStore(self.data_root, self.migrations_root)
             try:
                 store.migrations.migrate(acquire_lock=False)
+                store.workflow_ledger.cutover_research_decision_views(
+                    CanonicalResearchDecisionViewMaterializer(),
+                    acquire_lock=False
+                )
                 report = store.doctor()
                 return {"status": report.status, "errors": report.errors, "backup_ref": backup.name if database.is_file() else None}
             finally: store.close()
@@ -133,15 +145,22 @@ class PlatformOperations:
             bundle.writestr("backup-manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":"))); bundle.writestr("platform.sqlite3", payload)
         archive.chmod(stat.S_IREAD)
 
-    def _assert_no_live_workflow(self) -> None:
+    def _assert_no_live_workflow(self, *, migration: bool = False) -> None:
         database = self.data_root / "platform.sqlite3"
         if not database.is_file(): return
         connection = sqlite3.connect(database)
         try:
             connection.row_factory = sqlite3.Row
-            ledger = WorkflowLedger(connection, self.data_root, DataRootWriterLock(self.data_root))
-            if ledger.load(MaintenanceActiveQuery()):
-                raise OperationError("MAINTENANCE_WORKFLOW_ACTIVE", "An active workflow lease blocks maintenance.")
+            ledger = WorkflowLedger(
+                connection, self.data_root, DataRootWriterLock(self.data_root)
+            )
+            if ledger.load(NonterminalWorkflowQuery()):
+                code = (
+                    "MIGRATION_WORKFLOW_NOT_TERMINAL"
+                    if migration
+                    else "MAINTENANCE_WORKFLOW_ACTIVE"
+                )
+                raise OperationError(code, "A nonterminal workflow blocks maintenance.")
         finally: connection.close()
 
     @classmethod

@@ -1,12 +1,23 @@
 from typing import Mapping, Protocol
-from .contracts import CancelWorkflowCommand, DoctorReport, ResumeWorkflowCommand, SecurityIdentity, WatchlistView
+from .contracts import (
+    CancellationAccepted,
+    DoctorReport,
+    ResearchWorkflowCommand,
+    SecurityIdentity,
+    WatchlistView,
+)
+from equity_research import ForecastReviewRequest
 from trading_platform.domain.data import ProviderAttemptEvidence, SyncRequest, SyncResult
-from trading_platform.domain.workflow import ArtifactManifestView, ResearchArtifactView, ResearchWorkflowRequest, ResearchWorkflowResult, WorkflowHistory
 from trading_platform.domain.chart import AnnotationCommand, AnnotationVersion, ChartSeries, CoordinateMigration, CoordinateMigrationResult
 from trading_platform.domain.plans import ActivatePlanVersionCommand, ActivePlanView, ChangePlanLifecycleCommand, ConfirmPlanDraftCommand, CreatePlanDraftCommand, DiscardPlanDraftCommand, PlanConfirmationView, TradePlanDraftView, TradePlanVersionView, UpdatePlanDraftCommand
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
-from equity_research import ForecastReviewRequest
+from trading_platform.domain.workflow import (
+    ArtifactManifestView,
+    ResearchArtifactView,
+    ResearchWorkflowResult,
+    WorkflowHistory,
+)
 
 class PlatformPersistence(Protocol):
     def add_watchlist_item(self, invocation_id: str, security: SecurityIdentity) -> WatchlistView: ...
@@ -25,14 +36,23 @@ class AccountPort(Protocol):
 
 
 class ResearchWorkflowPort(Protocol):
-    def run(self, request: ResearchWorkflowRequest) -> ResearchWorkflowResult: ...
-    def get_history(self, workflow_run_id: str) -> WorkflowHistory: ...
-    def get_manifest(self, manifest_id: str) -> ArtifactManifestView: ...
-    def get_research_artifact(self, artifact_record_id: str) -> ResearchArtifactView: ...
-    def get_research_run_payload(self, research_run_id: str) -> Mapping[str, object]: ...
-    def review_forecast(self, request: ForecastReviewRequest) -> ResearchArtifactView: ...
-    def resume(self, command: ResumeWorkflowCommand) -> ResearchWorkflowResult: ...
-    def cancel(self, command: CancelWorkflowCommand) -> None: ...
+    def handle(
+        self, command: ResearchWorkflowCommand
+    ) -> ResearchWorkflowResult | CancellationAccepted: ...
+
+
+class WorkflowInspectionPort(Protocol):
+    def inspect(self, workflow_run_id: str) -> WorkflowHistory: ...
+
+
+class ResearchArchivePort(Protocol):
+    def manifest(self, manifest_id: str) -> ArtifactManifestView: ...
+    def artifact(self, artifact_record_id: str) -> ResearchArtifactView: ...
+    def source_payload(self, research_run_id: str) -> Mapping[str, object]: ...
+
+
+class ForecastReviewPort(Protocol):
+    def review(self, request: ForecastReviewRequest) -> ResearchArtifactView: ...
 
 
 class ChartPort(Protocol):

@@ -8,7 +8,7 @@ from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import DataProvider, FixtureRights
 from trading_platform.persistence import PlatformStore
 from trading_platform.research import SnapshotToResearchRequestAssembler
-from trading_platform.workflows.research import ResearchWorkflowService
+from trading_platform.workflows.research import ResearchWorkflow
 from equity_research import ResearchEngine
 from trading_platform.chart import ChartService
 from trading_platform.persistence.plans import SQLitePlanRepository
@@ -17,6 +17,12 @@ from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence.market import SQLiteMarketRepository
 from trading_platform.persistence.workspace import WorkspaceService
 from trading_platform.account import AccountOpeningService
+from trading_platform.application.research_tasks import (
+    ForecastReview,
+    ResearchArchive,
+    WorkflowInspection,
+)
+from trading_platform.workflows.research import research_engine_identity
 
 from .facade import ApplicationFacade
 
@@ -28,6 +34,9 @@ class ProductionCompositionRoot:
         self._store = None
         data_sync = None
         research_workflow = None
+        workflow_inspection = None
+        research_archive = None
+        forecast_review = None
         chart = None
         plans = None
         market = None
@@ -45,7 +54,12 @@ class ProductionCompositionRoot:
                 data_sync = DataSyncService(repository, providers, fixture_rights)
             workflow_repository = self._store.workflow_ledger
             workflow_repository.fault_injector = workflow_fault_injector
-            research_workflow = ResearchWorkflowService(workflow_repository, research_engine or ResearchEngine(), SnapshotToResearchRequestAssembler(), root, workflow_fault_injector)
+            research_workflow = ResearchWorkflow(workflow_repository, research_engine or ResearchEngine(), SnapshotToResearchRequestAssembler(), root, workflow_fault_injector)
+            workflow_inspection = WorkflowInspection(workflow_repository)
+            research_archive = ResearchArchive(workflow_repository)
+            forecast_review = ForecastReview(
+                workflow_repository, research_engine_identity(root)
+            )
             chart = ChartService(self._store.connection, self._store.writer_lock)
             plans = PlanService(SQLitePlanRepository(self._store.connection, self._store.writer_lock))
             market = MarketEvaluationService(SQLiteMarketRepository(self._store.connection, self._store.writer_lock), plans)
@@ -55,7 +69,19 @@ class ProductionCompositionRoot:
                 self._store.writer_lock,
             )
             accounts = AccountOpeningService(Path(data_root), root, migrations_root or root / "migrations")
-        self._facade = ApplicationFacade(self._store, data_sync, research_workflow, chart, plans, market, workspace, accounts)
+        self._facade = ApplicationFacade(
+            self._store,
+            data_sync,
+            research_workflow,
+            chart,
+            plans,
+            market,
+            workspace,
+            accounts,
+            workflow_inspection,
+            research_archive,
+            forecast_review,
+        )
 
     @property
     def facade(self) -> ApplicationFacade:

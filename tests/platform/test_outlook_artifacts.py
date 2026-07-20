@@ -240,12 +240,8 @@ def test_workflow_persists_restarts_and_reuses_typed_sibling_artifacts(
     assert views[2].dependency_record_ids == (views[1].artifact_record_id,)
     manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
     assert [member["member_role"] for member in manifest.members] == [
-        "research_projection",
-        "research_run_json",
-        "research_report_html",
-        "data_snapshot",
-        "forecast",
-        "valuation",
+        "decision_view_json",
+        "decision_view_html",
     ]
     assert len(
         root._store.connection.execute("PRAGMA table_info(research_run_record)").fetchall()

@@ -7,7 +7,7 @@ if (!inputPath || !outputPath) {
   throw new Error("usage: render_valuation_xlsx.mjs <view.json> <output.xlsx> [preview.png]");
 }
 const view = JSON.parse(await fs.readFile(inputPath, "utf8"));
-if (!String(view.schema_version || "").startsWith("ResearchDecisionView@")) {
+if (view.schema_version !== "ResearchDecisionView@2") {
   throw new Error("VALUATION_WORKBOOK_VIEW_INVALID");
 }
 

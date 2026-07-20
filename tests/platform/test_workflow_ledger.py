@@ -17,8 +17,17 @@ from trading_platform.application.workflow_ledger import (
     WorkflowRunQuery,
 )
 from trading_platform.persistence.workflow_ledger import WorkflowLedger
-from trading_platform.workflows.registry import RESEARCH_WORKFLOW
+from trading_platform.domain.workflow import NodeDefinition, WorkflowDefinition
 from tests.platform.test_research_workflow import CountingEngine, _request, _root
+
+
+TEST_WORKFLOW = WorkflowDefinition(
+    "ledger-test-workflow",
+    "1",
+    (
+        NodeDefinition("test_node", "1", "Input@1", "Output@1", ("ready",), True, "none", "new_attempt_same_run", ("TEST_FAILED",)),
+    ),
+)
 
 
 def _command(invocation_id: str = "ledger:start") -> StartWorkflow:
@@ -27,7 +36,7 @@ def _command(invocation_id: str = "ledger:start") -> StartWorkflow:
         request_fingerprint="request-fingerprint",
         requested_date="2026-07-10",
         effective_session_date="2026-07-10",
-        definition=RESEARCH_WORKFLOW,
+        definition=TEST_WORKFLOW,
         owner_token="owner-a",
         request_payload=b'{"schema":"ResearchWorkflowRequest@1"}',
         request_schema="ResearchWorkflowRequest@1",
@@ -104,7 +113,7 @@ def test_workflow_start_rejects_same_invocation_with_different_request(tmp_path)
 def test_stale_owner_cannot_retry_or_fail_active_attempt(tmp_path, mutation) -> None:
     store, ledger = _ledger(tmp_path)
     outcome = ledger.start_or_replay(_command(f"ledger:stale:{mutation}"))
-    node_definition = RESEARCH_WORKFLOW.nodes[0]
+    node_definition = TEST_WORKFLOW.nodes[0]
     node_id, attempt_id = ledger.record_transition(
         BeginNode(
             outcome.workflow_run_id,
@@ -211,6 +220,7 @@ def test_workflow_persistence_has_one_public_owner_and_no_cross_seam_sql() -> No
         "complete",
         "load",
         "audit_integrity",
+        "cutover_research_decision_views",
     }
 
     workflow_tables = {
@@ -240,7 +250,11 @@ def test_workflow_persistence_has_one_public_owner_and_no_cross_seam_sql() -> No
                     dependency_violations.append(
                         f"{relative}:{node.lineno}"
                     )
-        if persistence_module and path.name in {"workflow_ledger.py", "migration.py"}:
+        if persistence_module and path.name in {
+            "workflow_ledger.py",
+            "research_view_cutover.py",
+            "migration.py",
+        }:
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):

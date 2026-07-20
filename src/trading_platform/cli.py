@@ -16,7 +16,9 @@ from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.web_server import LocalChartWorkspaceServer
 from trading_platform.persistence.presence import RuntimePresence
 from trading_platform.credentials import CredentialAdapter
-from trading_platform.workflows.research import decode_research_workflow_request
+from trading_platform.application.research_request_codec import (
+    decode_research_workflow_request,
+)
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand, EvaluatePlanCommand
 from trading_platform.identity.code import CodeIdentity
 from trading_platform.acceptance import AcceptanceEvidenceService

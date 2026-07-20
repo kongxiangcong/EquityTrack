@@ -8,8 +8,10 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from xml.etree import ElementTree
+
+from trading_platform.research_view import ResearchDecisionView
 
 
 class ValuationWorkbookError(RuntimeError):
@@ -38,15 +40,12 @@ class ValuationWorkbookAdapter:
 
     def export(
         self,
-        view: Mapping[str, Any],
+        view: ResearchDecisionView,
         output_path: Path,
     ) -> ValuationWorkbookExport:
-        if not str(view.get("schema_version", "")).startswith(
-            "ResearchDecisionView@"
-        ):
-            raise ValuationWorkbookError(
-                "VALUATION_WORKBOOK_VIEW_INVALID"
-            )
+        if not isinstance(view, ResearchDecisionView):
+            raise ValuationWorkbookError("VALUATION_WORKBOOK_VIEW_INVALID")
+        payload = view.to_dict()
         if not self.node_executable.is_file():
             raise ValuationWorkbookError(
                 "VALUATION_WORKBOOK_NODE_MISSING"
@@ -70,7 +69,7 @@ class ValuationWorkbookAdapter:
             runner = workdir / "render_valuation_xlsx.mjs"
             input_path.write_text(
                 json.dumps(
-                    view,
+                    payload,
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),

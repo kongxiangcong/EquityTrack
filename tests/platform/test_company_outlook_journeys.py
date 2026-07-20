@@ -60,7 +60,7 @@ from trading_platform.domain.workflow import (
     ResearchProjection,
     ResearchWorkflowRequest,
 )
-from trading_platform.workflows.research import ResearchWorkflowService, WorkflowError
+from trading_platform.workflows.research import WorkflowError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1047,14 +1047,10 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     ]
     assert all(item.content_hash for item in artifacts)
     manifest = root.facade.get_artifact_manifest(first.final_manifest_id)
-    assert {
-        "research_run_json",
-        "research_report_html",
-        "forecast",
-        "valuation",
-        "simulation",
-        "market_path_simulation",
-    } <= {member["member_role"] for member in manifest.members}
+    assert [member["member_role"] for member in manifest.members] == [
+        "decision_view_json",
+        "decision_view_html",
+    ]
     view = root.facade.get_workspace(
         "security_yihua",
         first.research_snapshot_id,
@@ -1096,21 +1092,12 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     assert [item["member_role"] for item in replay_manifest.members] == [
         item["member_role"] for item in manifest.members
     ]
-    first_by_role = {item["member_role"]: item for item in manifest.members}
-    replay_by_role = {
-        item["member_role"]: item for item in replay_manifest.members
-    }
-    for role in (
-        "data_snapshot",
-        "forecast",
-        "valuation",
-        "simulation",
-        "market_data_snapshot",
-        "market_path_simulation",
-    ):
-        assert replay_by_role[role]["artifact_id"] == first_by_role[role][
-            "artifact_id"
-        ]
+    assert [item["member_role"] for item in replay_manifest.members] == [
+        "decision_view_json",
+        "decision_view_html",
+    ]
+    assert replay.json_artifact_id != first.json_artifact_id
+    assert replay.html_artifact_id != first.html_artifact_id
     assert (
         rebuilt.facade.get_workflow_history(replay.workflow_run_id).final_manifest_id
         == replay.final_manifest_id
@@ -1255,21 +1242,12 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
     assert [item["member_role"] for item in replay_manifest.members] == [
         item["member_role"] for item in manifest.members
     ]
-    first_by_role = {item["member_role"]: item for item in manifest.members}
-    replay_by_role = {
-        item["member_role"]: item for item in replay_manifest.members
-    }
-    for role in (
-        "data_snapshot",
-        "forecast",
-        "valuation",
-        "simulation",
-        "market_data_snapshot",
-        "market_path_simulation",
-    ):
-        assert replay_by_role[role]["artifact_id"] == first_by_role[role][
-            "artifact_id"
-        ]
+    assert [item["member_role"] for item in replay_manifest.members] == [
+        "decision_view_json",
+        "decision_view_html",
+    ]
+    assert replay.json_artifact_id != first.json_artifact_id
+    assert replay.html_artifact_id != first.html_artifact_id
     rebuilt.close()
 
 
@@ -1366,85 +1344,6 @@ def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
         root.facade.run_research_workflow(request)
     assert caught.value.code == "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED"
     root.close()
-
-
-@pytest.mark.parametrize(
-    "payload",
-    (
-        {"output_level": "per_share_value", "low": "1"},
-        {"kind": "per_share", "value": "1"},
-        {"unit": "CNY/share", "value": "1"},
-        {"unit": "CNY per share", "value": "1"},
-    ),
-)
-def test_per_share_semantic_aliases_are_detected(payload: dict[str, str]) -> None:
-    assert ResearchWorkflowService._has_per_share_output(payload) is True
-
-
-def test_per_share_permission_recomputes_each_valuation_point() -> None:
-    original = _market_path_drafts()[2].payload
-    valuation = json.loads(json.dumps(original))
-    bound = ResearchWorkflowService._share_bound_ready_methods(
-        valuation, Decimal("100"), "diluted_shares"
-    )
-    assert len(bound) >= 2
-
-    method = next(
-        method
-        for scenario in valuation["scenarios"]
-        for method in scenario["methods"]
-        if method["method_id"] in bound
-    )
-    method["conditional_value_range"]["base"]["per_share_value"][
-        "normalized_value"
-    ] = "999"
-    assert method["method_id"] not in ResearchWorkflowService._share_bound_ready_methods(
-        valuation, Decimal("100"), "diluted_shares"
-    )
-
-    shortened = json.loads(json.dumps(original))
-    shortened_method = next(
-        item
-        for scenario in shortened["scenarios"]
-        for item in scenario["methods"]
-        if item["method_id"] in bound
-    )
-    shortened_method["conditional_value_range"].pop("high")
-    assert shortened_method[
-        "method_id"
-    ] not in ResearchWorkflowService._share_bound_ready_methods(
-        shortened, Decimal("100"), "diluted_shares"
-    )
-
-    extra_divide = json.loads(json.dumps(original))
-    extra_method = next(
-        item
-        for scenario in extra_divide["scenarios"]
-        for item in scenario["methods"]
-        if item["method_id"] in bound
-    )
-    extra_method["conditional_value_range"]["base"]["bridge_trace"].append(
-        {"operation": "divide_diluted_shares", "amount": "100", "ref_ids": []}
-    )
-    assert extra_method[
-        "method_id"
-    ] not in ResearchWorkflowService._share_bound_ready_methods(
-        extra_divide, Decimal("100"), "diluted_shares"
-    )
-
-    missing_scenario_method = json.loads(json.dumps(original))
-    target_id = next(iter(bound))
-    scenario = next(
-        item
-        for item in missing_scenario_method["scenarios"]
-        if item["role"] == "stress"
-    )
-    scenario["methods"] = [
-        item for item in scenario["methods"] if item["method_id"] != target_id
-    ]
-    assert target_id not in ResearchWorkflowService._share_bound_ready_methods(
-        missing_scenario_method, Decimal("100"), "diluted_shares"
-    )
 
 
 def test_public_facade_rejects_deleted_calibration_kind(tmp_path: Path) -> None:

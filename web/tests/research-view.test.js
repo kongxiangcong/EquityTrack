@@ -5,6 +5,7 @@ import {formatPercent, formatQuantity, methodSummary, renderSandboxReport, resea
 
 const view = {
   view_id: "research_view_1",
+  html_projection: "<!doctype html><p>persisted canonical report</p>",
   subject_id: "002897.SZ",
   as_of: "2026-07-07",
   model_identity: "company-outlook-model@1",
@@ -86,29 +87,11 @@ const view = {
   boundary: "条件研究结果，不构成个性化投资建议。",
 }
 
-test("historical selection is exact and sandbox report escapes model text", () => {
+test("historical selection uses the persisted sandbox report without rebuilding semantics", () => {
   assert.equal(selectResearchView([view], "research_view_1"), view)
   assert.equal(selectResearchView([view], "missing"), null)
   const report = renderSandboxReport(view)
-  assert.match(report, /ResearchDecisionView@2/)
-  assert.match(report, /关键业务 Driver/)
-  assert.match(report, /当前价格隐含预期/)
-  assert.match(report, /估值时点 2026-07-07/)
-  assert.match(report, /终值占比较高/)
-  assert.match(report, /校准后的每股价值分布/)
-  assert.match(report, /splitmix64_box_muller@1/)
-  assert.match(report, /展开分布校准、依赖结构与降级依据/)
-  assert.match(report, /&lt;calibration&gt;/)
-  assert.match(report, /&lt;copula@1&gt;/)
-  assert.match(report, /&lt;limited&gt;/)
-  assert.match(report, /状态条件下的价格与回撤分布/)
-  assert.match(report, /not intrinsic value or a target price/)
-  assert.match(report, /&lt;95&gt;/)
-  assert.match(report, /&lt;series@1&gt;/)
-  assert.match(report, /背离不是确定性价格结论或交易动作/)
-  assert.match(report, /收益低于 -10%/)
-  assert.match(report, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
-  assert.doesNotMatch(report, /<script|allow-scripts|allow-same-origin/i)
+  assert.equal(report, view.html_projection)
 })
 
 test("history labels distinguish policy and snapshot versions", () => {
@@ -126,7 +109,7 @@ test("method summaries keep horizon, value basis, and material diagnostics besid
   )
 })
 
-test("enterprise-value simulations and methods are never labeled per-share", () => {
+test("enterprise-value methods are never labeled per-share", () => {
   const enterpriseMethod = {
     ...view.scenarios[0].methods[0],
     display_value_level: "basis_value",
@@ -137,17 +120,6 @@ test("enterprise-value simulations and methods are never labeled per-share", () 
     },
   }
   assert.match(methodSummary(enterpriseMethod), /企业价值 100 CNY \/ 120 CNY \/ 140 CNY/)
-  const report = renderSandboxReport({
-    ...view,
-    scenarios: [{...view.scenarios[0], methods: [enterpriseMethod]}],
-    valuation_simulation: {
-      ...view.valuation_simulation,
-      output_level: "basis_value",
-      quantiles: {p50: {value: "125", unit: "CNY"}},
-    },
-  })
-  assert.match(report, /校准后的企业价值分布/)
-  assert.doesNotMatch(report, /校准后的每股价值分布/)
 })
 
 test("decision values are readable while exact decimals remain in the audit model", () => {

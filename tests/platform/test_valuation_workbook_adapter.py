@@ -12,6 +12,7 @@ from trading_platform.valuation_workbook import (
     ValuationWorkbookAdapter,
     ValuationWorkbookError,
 )
+from trading_platform.research_view import ResearchDecisionView
 from tests.platform.test_outlook_artifacts import _request
 from tests.platform.test_research_workflow import (
     CountingEngine,
@@ -23,14 +24,14 @@ from tests.platform.test_research_workflow import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _canonical_view(tmp_path: Path) -> dict[str, object]:
+def _canonical_view(tmp_path: Path) -> ResearchDecisionView:
     root = _root(tmp_path / "store", CountingEngine())
     result = root.facade.run_research_workflow(
         _request("valuation-workbook:canonical")
     )
     payload = json.loads(_artifact_bytes(root, result.json_artifact_id))
     root.close()
-    return payload
+    return ResearchDecisionView.from_dict(payload)
 
 
 def test_workbook_adapter_rejects_noncanonical_input(
@@ -85,7 +86,7 @@ def test_workbook_fails_when_canonical_output_is_hardcoded(
     view = _canonical_view(tmp_path)
     ready = next(
         method
-        for scenario in view["scenarios"]
+        for scenario in view.scenarios
         for method in scenario["methods"]
         if method["status"] == "ready"
     )

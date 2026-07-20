@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
-from trading_platform.domain.workflow import ResearchArtifactView
+from trading_platform.domain.workflow import ResearchArtifactView, ResearchProjection
 from trading_platform.identity import canonical_hash
 
 
@@ -41,6 +41,38 @@ class ResearchDecisionView:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> ResearchDecisionView:
+        if value.get("schema_version") != "ResearchDecisionView@2":
+            raise ResearchViewError("RESEARCH_VIEW_SCHEMA_INVALID")
+        expected = set(cls.__dataclass_fields__)
+        if set(value) != expected:
+            raise ResearchViewError("RESEARCH_VIEW_FIELDS_INVALID")
+        fields = dict(value)
+        for name in (
+            "key_drivers",
+            "scenarios",
+            "market_implied_expectations",
+        ):
+            if not isinstance(fields[name], (list, tuple)):
+                raise ResearchViewError("RESEARCH_VIEW_FIELDS_INVALID")
+            fields[name] = tuple(fields[name])
+        return cls(**fields)
+
+
+@dataclass(frozen=True)
+class ResearchDecisionInput:
+    workflow_run_id: str
+    data_snapshot: ResearchArtifactView
+    forecast: ResearchArtifactView
+    valuation: ResearchArtifactView
+    research_run_payload: Mapping[str, Any]
+    projection: ResearchProjection
+    trusted_source_validation: Mapping[str, object] | None = None
+    simulation: ResearchArtifactView | None = None
+    market_data_snapshot: ResearchArtifactView | None = None
+    market_path: ResearchArtifactView | None = None
+
 
 class ResearchDecisionViewBuilder:
     SCHEMA_VERSION = "ResearchDecisionView@2"
@@ -62,18 +94,22 @@ class ResearchDecisionViewBuilder:
         "company.fcff",
     )
 
-    def build(
-        self,
-        *,
-        workflow_run_id: str,
-        data_snapshot: ResearchArtifactView,
-        forecast: ResearchArtifactView,
-        valuation: ResearchArtifactView,
-        simulation: ResearchArtifactView | None = None,
-        market_data_snapshot: ResearchArtifactView | None = None,
-        market_path: ResearchArtifactView | None = None,
-        research_run_payload: Mapping[str, Any],
-    ) -> ResearchDecisionView:
+    def build(self, decision_input: ResearchDecisionInput) -> ResearchDecisionView:
+        workflow_run_id = decision_input.workflow_run_id
+        data_snapshot = decision_input.data_snapshot
+        forecast = decision_input.forecast
+        valuation = decision_input.valuation
+        simulation = decision_input.simulation
+        market_data_snapshot = decision_input.market_data_snapshot
+        market_path = decision_input.market_path
+        research_run_payload = decision_input.research_run_payload
+        research_run_payload = self._with_presentation_permissions(
+            research_run_payload,
+            decision_input.projection,
+            valuation.payload,
+            data_snapshot.payload,
+            decision_input.trusted_source_validation,
+        )
         self._validate_artifacts(
             data_snapshot,
             forecast,
@@ -310,6 +346,170 @@ class ResearchDecisionViewBuilder:
             boundary="条件研究结果用于理解未来路径与不确定性，不构成个性化投资建议。",
         )
 
+    @staticmethod
+    def _diluted_share_binding(
+        projection: ResearchProjection,
+        data_snapshot_payload: Mapping[str, object],
+    ) -> tuple[Decimal, str] | None:
+        try:
+            source_id, field_name, period = projection.diluted_share_identity.split(
+                ":", 2
+            )
+        except ValueError:
+            return None
+        manifest_field = None
+        sources = projection.manifest.get("sources", ())
+        for source in sources if isinstance(sources, (list, tuple)) else ():
+            if not isinstance(source, Mapping) or str(source.get("source_id")) != source_id:
+                continue
+            fields = source.get("extracted_fields", ())
+            for field in fields if isinstance(fields, (list, tuple)) else ():
+                if (
+                    isinstance(field, Mapping)
+                    and str(field.get("field_name")) == field_name
+                    and str(field.get("period")) == period
+                ):
+                    manifest_field = field
+                    break
+        snapshot_fact = None
+        facts = data_snapshot_payload.get("facts", ())
+        for fact in facts if isinstance(facts, (list, tuple)) else ():
+            if (
+                isinstance(fact, Mapping)
+                and str(fact.get("source_id")) == source_id
+                and str(fact.get("field_name")) == field_name
+                and str(fact.get("period")) == period
+                and fact.get("official") is True
+            ):
+                snapshot_fact = fact
+                break
+        if manifest_field is None or snapshot_fact is None:
+            return None
+        try:
+            expected = Decimal(str(manifest_field.get("value"))) * Decimal(
+                str(manifest_field.get("scale", "1"))
+            )
+            observed = Decimal(str(snapshot_fact.get("value")))
+        except Exception:
+            return None
+        if expected != observed or str(snapshot_fact.get("unit")) != str(
+            manifest_field.get("unit")
+        ):
+            return None
+        return observed, str(snapshot_fact.get("fact_id"))
+
+    @staticmethod
+    def _share_bound_ready_methods(
+        valuation_payload: Mapping[str, object],
+        diluted_shares: Decimal,
+        diluted_share_fact_id: str,
+    ) -> set[str]:
+        bound: set[str] = set()
+        invalid: set[str] = set()
+        roles_by_method: dict[str, set[str]] = {}
+        expected_ref = f"Fact:{diluted_share_fact_id}"
+        expected_roles = {"stress", "base", "improvement"}
+        expected_points = {"low", "base", "high"}
+
+        def quantity_value(value: object) -> Decimal | None:
+            if not isinstance(value, Mapping):
+                return None
+            raw = value.get("normalized_value", value.get("value"))
+            try:
+                return Decimal(str(raw))
+            except Exception:
+                return None
+
+        scenarios = valuation_payload.get("scenarios", ())
+        for scenario in scenarios if isinstance(scenarios, (list, tuple)) else ():
+            if not isinstance(scenario, Mapping):
+                continue
+            methods = scenario.get("methods", ())
+            for method in methods if isinstance(methods, (list, tuple)) else ():
+                if not isinstance(method, Mapping) or method.get("status") != "ready":
+                    continue
+                method_id = str(method.get("method_id"))
+                role = str(scenario.get("role"))
+                value_range = method.get("conditional_value_range")
+                if not isinstance(value_range, Mapping) or set(value_range) != expected_points:
+                    invalid.add(method_id)
+                    continue
+                points_valid = True
+                for point in value_range.values():
+                    if not isinstance(point, Mapping):
+                        points_valid = False
+                        break
+                    equity = quantity_value(point.get("equity_value"))
+                    per_share = quantity_value(point.get("per_share_value"))
+                    trace = point.get("bridge_trace")
+                    divide_steps = (
+                        [
+                            step for step in trace
+                            if isinstance(step, Mapping)
+                            and step.get("operation") == "divide_diluted_shares"
+                        ]
+                        if isinstance(trace, list) else []
+                    )
+                    if (
+                        equity is None
+                        or per_share is None
+                        or diluted_shares == 0
+                        or per_share != equity / diluted_shares
+                        or len(divide_steps) != 1
+                        or expected_ref not in divide_steps[0].get("ref_ids", ())
+                        or Decimal(str(divide_steps[0].get("amount"))) != diluted_shares
+                    ):
+                        points_valid = False
+                        break
+                if points_valid:
+                    bound.add(method_id)
+                    roles_by_method.setdefault(method_id, set()).add(role)
+                else:
+                    invalid.add(method_id)
+        return {
+            method_id for method_id in bound - invalid
+            if roles_by_method.get(method_id) == expected_roles
+        }
+
+    @classmethod
+    def _with_presentation_permissions(
+        cls,
+        research_payload: Mapping[str, Any],
+        projection: ResearchProjection,
+        valuation_payload: Mapping[str, object],
+        data_snapshot_payload: Mapping[str, object],
+        trusted_source_validation: Mapping[str, object] | None,
+    ) -> dict[str, Any]:
+        share_binding = cls._diluted_share_binding(
+            projection, data_snapshot_payload
+        )
+        ready_methods = (
+            cls._share_bound_ready_methods(
+                valuation_payload, share_binding[0], share_binding[1]
+            )
+            if share_binding is not None else set()
+        )
+        permissions = research_payload.get("permissions")
+        base_permissions = dict(permissions) if isinstance(permissions, Mapping) else {}
+        formal_per_share = (
+            research_payload.get("status") != "blocked"
+            and base_permissions.get("research_report") is True
+            and base_permissions.get("scenario_analysis") is True
+            and base_permissions.get("formal_per_share_valuation") is True
+            and bool(projection.diluted_share_identity)
+            and share_binding is not None
+            and isinstance(trusted_source_validation, Mapping)
+            and trusted_source_validation.get("passed") is True
+            and len(ready_methods) >= 2
+        )
+        return {
+            **research_payload,
+            "permissions": {
+                **base_permissions,
+                "formal_per_share_valuation": formal_per_share,
+            },
+        }
+
     def _validate_artifacts(
         self,
         data_snapshot: ResearchArtifactView,
@@ -377,13 +577,7 @@ class ResearchDecisionViewBuilder:
             )
             if item is not None
         }
-        payload_run_id = (
-            research_run_payload.get("research_run_id")
-            if str(research_run_payload.get("schema_version", "")).startswith(
-                "ResearchDecisionView@"
-            )
-            else research_run_payload.get("run_id")
-        )
+        payload_run_id = research_run_payload.get("run_id")
         if len(identities) != 1 or payload_run_id != valuation.research_run_id:
             raise ResearchViewError("RESEARCH_VIEW_IDENTITY_MISMATCH")
 
@@ -897,7 +1091,7 @@ class ResearchDecisionViewBuilder:
         return {
             "metric_id": metric_id or str(node.get("node_id", "")).rsplit(".", 1)[0],
             "label": node.get("label"),
-            **quantity,
+            **(quantity or {}),
         }
 
     @staticmethod

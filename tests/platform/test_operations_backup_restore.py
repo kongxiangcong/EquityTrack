@@ -104,8 +104,9 @@ def test_maintenance_rejects_active_server_presence(tmp_path: Path) -> None:
         assert getattr(blocked.value, "code", None) == "MAINTENANCE_RUNTIME_ACTIVE"
 
 
+@pytest.mark.parametrize("nonterminal_status", ["queued", "running"])
 def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruption(
-    tmp_path: Path,
+    tmp_path: Path, nonterminal_status: str,
 ) -> None:
     live = tmp_path / "live"
     root = recovery_root(
@@ -117,13 +118,14 @@ def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruptio
         "SELECT workflow_run_id FROM workflow_run LIMIT 1"
     ).fetchone()[0]
     root._store.connection.execute(
-        "UPDATE workflow_run SET status='running',completed_at=NULL,lease_expires_at='2999-01-01T00:00:00+00:00' WHERE workflow_run_id=?",
-        (run_id,),
+        "UPDATE workflow_run SET status=?,completed_at=NULL,lease_expires_at='2999-01-01T00:00:00+00:00' WHERE workflow_run_id=?",
+        (nonterminal_status, run_id),
     )
     root._store.connection.commit()
     root.close()
-    with pytest.raises(OperationError, match="MAINTENANCE_WORKFLOW_ACTIVE"):
+    with pytest.raises(OperationError, match="MIGRATION_WORKFLOW_NOT_TERMINAL"):
         PlatformOperations(live).migrate()
+    assert not tuple(tmp_path.glob("live-pre-migrate-*.zip"))
     connection = sqlite3.connect(live / "platform.sqlite3")
     try:
         connection.execute("DROP TRIGGER artifact_manifest_no_update")

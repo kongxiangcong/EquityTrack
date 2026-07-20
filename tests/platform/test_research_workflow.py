@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -12,13 +13,24 @@ from trading_platform import ProductionCompositionRoot
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.application.workflow_ledger import WorkspaceWorkflowQuery
 from trading_platform.domain.workflow import FieldSemantics, ReferenceDisposition, ResearchProjection, ResearchWorkflowRequest
-from trading_platform.workflows.research import WorkflowError
-from trading_platform.workflows.registry import RESEARCH_WORKFLOW
+from trading_platform.workflows.research import ResearchExecution, ResearchWorkflow, WorkflowError
 from trading_platform.research import SnapshotToResearchRequestAssembler
 
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "yihua-002897"
+_DEFAULT_DRAFTS = None
+
+
+def test_workflow_and_execution_expose_one_task_each() -> None:
+    assert tuple(inspect.signature(ResearchWorkflow.handle).parameters) == (
+        "self",
+        "command",
+    )
+    assert tuple(inspect.signature(ResearchExecution.execute).parameters) == (
+        "self",
+        "command",
+    )
 
 
 class CountingEngine:
@@ -89,6 +101,13 @@ def _projection(context=None) -> ResearchProjection:
 
 
 def _request(invocation: str, projection: ResearchProjection | None = None, **changes) -> ResearchWorkflowRequest:
+    if "analysis_artifacts" not in changes:
+        global _DEFAULT_DRAFTS
+        from tests.platform.test_outlook_artifacts import _drafts
+
+        if _DEFAULT_DRAFTS is None:
+            _DEFAULT_DRAFTS = _drafts()
+        changes["analysis_artifacts"] = _DEFAULT_DRAFTS
     values = dict(
         invocation_id=invocation,
         security_id="security_yihua",
@@ -149,7 +168,7 @@ def test_public_workflow_creates_canonical_research_artifacts_and_replays_invoca
     assert replay == result
     assert result.disposition is ReferenceDisposition.CREATED
     assert engine.calls == 1
-    payload = json.loads(_artifact_bytes(root, result.json_artifact_id))
+    payload = root.facade.get_research_run_payload(result.research_run_id)
     direct = ResearchEngine().run(SnapshotToResearchRequestAssembler().assemble(_projection())).to_dict()
     assert payload == direct
     assert payload["schema_version"] == direct["schema_version"]
@@ -157,6 +176,8 @@ def test_public_workflow_creates_canonical_research_artifacts_and_replays_invoca
     assert payload["permissions"] == direct["permissions"]
     assert payload["run_id"] == result.research_run_id
     assert payload["as_of_date"] == "2026-07-07"
+    decision = json.loads(_artifact_bytes(root, result.json_artifact_id))
+    assert decision["schema_version"] == "ResearchDecisionView@2"
     assert _artifact_bytes(root, result.html_artifact_id).lower().startswith(b"<!doctype html>")
     history = root.facade.get_workflow_history(result.workflow_run_id)
     assert history.status in {"succeeded", "succeeded_with_limits"}
@@ -167,9 +188,8 @@ def test_public_workflow_creates_canonical_research_artifacts_and_replays_invoca
     manifest = root.facade.get_artifact_manifest(history.final_manifest_id)
     assert manifest.producer_id == result.workflow_run_id
     assert [(item["member_role"], item["direction"]) for item in manifest.members] == [
-        ("research_projection", "input"),
-        ("research_run_json", "output"),
-        ("research_report_html", "output"),
+        ("decision_view_json", "output"),
+        ("decision_view_html", "output"),
     ]
     root.close()
 
@@ -217,7 +237,7 @@ def test_new_invocation_reuses_immutable_research_and_market_only_snapshot(tmp_p
     assert second.workflow_run_id != first.workflow_run_id
     assert second.research_run_id == first.research_run_id
     assert second.research_snapshot_id == first.research_snapshot_id
-    assert (second.json_artifact_id, second.html_artifact_id) == (first.json_artifact_id, first.html_artifact_id)
+    assert (second.json_artifact_id, second.html_artifact_id) != (first.json_artifact_id, first.html_artifact_id)
     assert second.workflow_snapshot_id == "snapshot_market_20260710"
     assert second.disposition is ReferenceDisposition.REUSED
     assert second.reason_code == "ROUTINE_MARKET_ONLY_INPUTS"
@@ -328,20 +348,12 @@ def test_missing_diluted_shares_reaches_capability_degradation(tmp_path: Path) -
     engine = CountingEngine()
     root = _root(tmp_path, engine)
 
-    result = root.facade.run_research_workflow(
-        _request("research:missing-diluted-shares", missing)
-    )
-
-    assert engine.calls == 1
-    run = json.loads(_artifact_bytes(root, result.json_artifact_id))
-    assert run["permissions"]["formal_per_share_valuation"] is False
-    assert any(
-        item["field_name"] == "diluted_shares"
-        for item in run["declared_missing"]
-    )
-    html = _artifact_bytes(root, result.html_artifact_id).decode("utf-8")
-    assert "diluted_shares" in html
-    assert "DCF 敏感性" not in html
+    with pytest.raises(WorkflowError) as caught:
+        root.facade.run_research_workflow(
+            _request("research:missing-diluted-shares", missing)
+        )
+    assert caught.value.code == "RESEARCH_ANALYSIS_PER_SHARE_GATE_FAILED"
+    assert engine.calls == 0
     root.close()
 
 
@@ -377,14 +389,10 @@ def test_missing_net_debt_component_reaches_capability_degradation(
     engine = CountingEngine()
     root = _root(tmp_path, engine)
 
-    result = root.facade.run_research_workflow(
-        _request("research:missing-debt", missing)
-    )
-
-    assert engine.calls == 1
-    run = json.loads(_artifact_bytes(root, result.json_artifact_id))
-    assert run["permissions"]["formal_per_share_valuation"] is False
-    assert any(item["field_name"] == "debt" for item in run["declared_missing"])
+    with pytest.raises(WorkflowError):
+        root.facade.run_research_workflow(
+            _request("research:missing-debt", missing)
+        )
     root.close()
 
 
@@ -401,12 +409,15 @@ def test_engine_failure_publishes_diagnostic_not_empty_research_run(tmp_path: Pa
     root.close()
 
 
-def test_registry_contracts_are_versioned_and_diagnostics_are_redacted(tmp_path: Path) -> None:
-    assert all(node.preconditions and node.required and node.cache_policy and node.retry_policy and node.failure_codes for node in RESEARCH_WORKFLOW.nodes)
+def test_workflow_definition_is_versioned_and_diagnostics_are_redacted(tmp_path: Path) -> None:
     engine = CountingEngine("token=super-secret C:\\Users\\person\\private.txt https://private.example/path")
     root = _root(tmp_path, engine)
     with pytest.raises(WorkflowError):
         root.facade.run_research_workflow(_request("research:redaction"))
+    definition = root._store.connection.execute(
+        "SELECT workflow_id,workflow_version FROM workflow_run"
+    ).fetchone()
+    assert tuple(definition) == ("research-workflow", "2")
     artifact_id = root._store.connection.execute("SELECT diagnostic_artifact_id FROM workflow_node_attempt WHERE disposition='failed'").fetchone()[0]
     diagnostic = _artifact_bytes(root, artifact_id)
     assert b"super-secret" not in diagnostic and b"private.example" not in diagnostic and b"Users" not in diagnostic
@@ -423,21 +434,6 @@ def test_workspace_workflow_evidence_is_scoped_to_one_security(tmp_path: Path) -
             "security_other", "SZSE", "000001", "CNY", "1991-04-03"
         ),
     )
-    second_request = _request("workspace-scope:second")
-    second = root.facade.run_research_workflow(
-        replace(
-            second_request,
-            security_id="security_other",
-            projection=replace(
-                second_request.projection,
-                context={
-                    **second_request.projection.context,
-                    "workspace_scope": "security_other",
-                },
-            ),
-        )
-    )
-
     first_evidence = root._store.workflow_ledger.load(
         WorkspaceWorkflowQuery("security_yihua")
     )
@@ -448,7 +444,5 @@ def test_workspace_workflow_evidence_is_scoped_to_one_security(tmp_path: Path) -
     assert {row["workflow_run_id"] for row in first_evidence.workflows} == {
         first.workflow_run_id
     }
-    assert {row["workflow_run_id"] for row in second_evidence.workflows} == {
-        second.workflow_run_id
-    }
+    assert second_evidence.workflows == ()
     root.close()
