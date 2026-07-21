@@ -9,4 +9,5 @@ dist/
 *.egg-info/
 outputs/
 docs/data/
+.env.local
 skills/scripts/fixtures/model_workbooks/generated/

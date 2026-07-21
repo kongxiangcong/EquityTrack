@@ -6,6 +6,8 @@ from decimal import Decimal
 from .evidence import (
     CompanyArchetype,
     CompanyOpeningBalanceSheet,
+    DataInsufficientForecastRequest,
+    DataInsufficientSnapshot,
     DataSnapshot,
     ForecastAssumption,
     ForecastEvidence,
@@ -47,7 +49,12 @@ class ForecastEngine:
         self._manufacturing = ManufacturingForecast()
         self._graph = ForecastGraphCompiler()
 
-    def build(self, request: ForecastRequest) -> ForecastGraph:
+    def build(
+        self,
+        request: ForecastRequest | DataInsufficientForecastRequest,
+    ) -> ForecastGraph:
+        if isinstance(request, DataInsufficientForecastRequest):
+            return self._build_data_insufficient(request)
         baselines, overrides = ForecastEvidence.validate(request)
         if (
             request.security.archetype
@@ -67,6 +74,59 @@ class ForecastEngine:
                 f"No Forecast template is registered for {request.security.archetype.value}.",
             )
         return self._manufacturing.project(request, baselines, overrides)
+
+    def _build_data_insufficient(
+        self,
+        request: DataInsufficientForecastRequest,
+    ) -> ForecastGraph:
+        """Publish an explicit blocked graph without creating financial facts."""
+
+        period = request.forecast_periods[-1]
+        missing_identity = hashlib.sha256(
+            json.dumps(
+                list(request.data_snapshot.missing_fields),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        available = self._graph.input_node(
+            request,
+            node_id="availability.required_inputs",
+            label="required financial inputs unavailable",
+            quantity=self._graph.quantity(
+                Decimal("1"),
+                unit="availability_state",
+                currency="N/A",
+                period=period,
+                as_of=request.as_of,
+                lineage_refs=(f"Assumption:data_insufficient:{missing_identity}",),
+            ),
+        )
+        blocked, edges = self._graph.derived_node(
+            request,
+            node_id=f"availability.blocked.{period}",
+            kind=ForecastNodeKind.DRIVER,
+            label="forecast and valuation blocked",
+            period=period,
+            unit="availability_state",
+            currency="N/A",
+            formula=FormulaId.PASSTHROUGH,
+            operands=(("value", available, Decimal("1")),),
+            probability=Decimal("1"),
+        )
+        return self._graph.compile(
+            self._graph.blueprint(
+                request=request,
+                template_id="data_insufficient@1",
+                routing_explanation=(
+                    "Required official financial inputs are missing; forecast and "
+                    "valuation remain blocked."
+                ),
+                nodes=(available, blocked),
+                edges=tuple(edges),
+            )
+        )
 
 
     def _build_financial_institution_shell(
@@ -225,6 +285,8 @@ __all__ = [
     "CompanyArchetype",
     "CompanyOpeningBalanceSheet",
     "ConditionOperator",
+    "DataInsufficientForecastRequest",
+    "DataInsufficientSnapshot",
     "DataSnapshot",
     "FormulaId",
     "ForecastAssumption",

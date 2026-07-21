@@ -137,6 +137,7 @@ from trading_platform.application.workflow_ledger import (
     MarkRetryable,
     NodeNameQuery,
     ObjectInventoryQuery,
+    WorkflowDiagnosticQuery,
     ObjectCommitResult,
     PersistenceCountsQuery,
     ProjectionCheckpointCommit,
@@ -260,6 +261,7 @@ class WorkflowLedger:
         | ResearchPayloadQuery
         | NonterminalWorkflowQuery
         | ObjectInventoryQuery
+        | WorkflowDiagnosticQuery
         | PersistenceCountsQuery
         | ArtifactBundlePreviewQuery,
     ) -> LedgerLoadResult:
@@ -284,6 +286,42 @@ class WorkflowLedger:
                     "SELECT sha256,size_bytes,relative_path FROM object_blob ORDER BY sha256"
                 )
             )
+        if isinstance(query, WorkflowDiagnosticQuery):
+            row = self.__connection.execute(
+                "SELECT a.object_sha256,a.media_type,a.schema_version,o.size_bytes,"
+                "o.relative_path FROM artifact a JOIN object_blob o "
+                "ON o.sha256=a.object_sha256 WHERE a.artifact_id=?",
+                (query.diagnostic_artifact_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["media_type"] != "application/json"
+                or not str(row["schema_version"]).startswith("WorkflowDiagnostic@")
+            ):
+                raise WorkflowPersistenceError(
+                    "WORKFLOW_DIAGNOSTIC_NOT_FOUND",
+                    "diagnostic.read",
+                    query.diagnostic_artifact_id,
+                )
+            path = self.__data_root / row["relative_path"]
+            payload = path.read_bytes()
+            if (
+                len(payload) != row["size_bytes"]
+                or hashlib.sha256(payload).hexdigest() != row["object_sha256"]
+            ):
+                raise WorkflowPersistenceError(
+                    "OBJECT_INTEGRITY_FAILED",
+                    "diagnostic.read",
+                    query.diagnostic_artifact_id,
+                )
+            value = json.loads(payload)
+            if not isinstance(value, dict):
+                raise WorkflowPersistenceError(
+                    "WORKFLOW_DIAGNOSTIC_INVALID",
+                    "diagnostic.read",
+                    query.diagnostic_artifact_id,
+                )
+            return value
         if isinstance(query, PersistenceCountsQuery):
             return {
                 "object_count": self.__connection.execute(
@@ -572,8 +610,9 @@ class WorkflowLedger:
         self, command: ForecastReviewCommit | GenericObjectCommit
     ) -> ObjectCommitResult | str:
         if isinstance(command, GenericObjectCommit):
-            published = self._publish_durable(command.payload)
-            with self.__writer_lock.acquire(f"object:{published.sha256}"):
+            digest = hashlib.sha256(command.payload).hexdigest()
+            with self.__writer_lock.acquire(f"object:{digest}"):
+                published = self._publish_durable(command.payload)
                 self.__connection.execute("BEGIN IMMEDIATE")
                 try:
                     existed = self.__connection.execute(

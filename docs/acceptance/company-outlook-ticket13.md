@@ -68,7 +68,7 @@ recommendation or a price conclusion.
 
 - Both Yihua and Duofuduo now publish `DataSnapshot`, `Forecast`, `Valuation`,
   `Simulation`, `MarketDataSnapshot` and `MarketPathSimulation` through the
-  public facade.
+  canonical research task.
 - Duofuduo uses a hash-bound 73-row daily/adjustment-factor raw asset. The
   simulation window begins after the last adjustment-factor change and ends on
   2026-07-16; the frozen starting close is the 2026-07-17 session.
@@ -137,7 +137,7 @@ separate `published_at`, `available_at` and `retrieved_at` timestamps.
   narrow mobile wrapper, with no unintended per-share presentation.
 - Specification review found a caller-controlled calibration-gate tolerance;
   the gate now uses a platform-owned `1e-12` serialization tolerance and a
-  public-facade negative test proves a forged artifact tolerance cannot mask
+  canonical research-task negative test proves a forged artifact tolerance cannot mask
   changed vectors.
 - Standards review found the weekend heuristic, implicit tick-size policy and
   missing official PIT timestamps. Each finding is resolved as described above.

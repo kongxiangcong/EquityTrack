@@ -23,6 +23,19 @@ from trading_platform.identity import CanonicalDate, build_code_identity, canoni
 
 ROOT = Path(__file__).resolve().parents[2]
 
+OWNING_SQLITE_TESTS = {
+    "test_chart_annotations.py",
+    "test_data_sync_pit.py",
+    "test_workflow_ledger_forecast_review.py",
+    "test_market_evaluation.py",
+    "test_market_path_simulation_artifact.py",
+    "test_operations_backup_restore.py",
+    "test_trade_plans.py",
+    "test_workflow_ledger.py",
+    "test_workflow_ledger_recovery.py",
+    "test_workspace_persistence.py",
+}
+
 
 class Mode(str, Enum):
     FIXTURE = "fixture"
@@ -129,6 +142,20 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
             assert not any(token in lowered or token in resource.name.lower() for token in forbidden_tokens), resource
             compact = re.sub(r"[^a-z]", "", f"{resource.name} {lowered}")
             assert not any(token in compact for token in forbidden_execution_symbols), resource
+
+
+def test_direct_sql_fixture_is_confined_to_owning_persistence_and_fault_suites() -> None:
+    platform_tests = ROOT / "tests/platform"
+    fixture_module = "tests.platform.owning_adapter_fixture"
+    importers: set[str] = set()
+    for path in platform_tests.glob("test_*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.ImportFrom) and node.module == fixture_module
+            for node in ast.walk(tree)
+        ):
+            importers.add(path.name)
+    assert importers == OWNING_SQLITE_TESTS
 
 
 def test_forecast_package_has_one_canonical_seam_and_inward_dependencies() -> None:

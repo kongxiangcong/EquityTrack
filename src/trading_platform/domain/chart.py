@@ -74,6 +74,20 @@ class AnnotationCommand:
 
 
 @dataclass(frozen=True)
+class AnnotationLifecycleCommand:
+    invocation_id: str
+    operation: str
+    security_id: str
+    data_snapshot_id: str
+    author_id: str
+    annotation_id: str | None = None
+    expected_version_no: int = 0
+    kind: str | None = None
+    style: str | None = None
+    anchors: tuple[AnnotationAnchor, ...] = ()
+
+
+@dataclass(frozen=True)
 class CoordinateMigration:
     invocation_id: str
     annotation_id: str

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+
 from trading_platform.application.contracts import StartResearchWorkflow
 
 
@@ -28,8 +30,8 @@ def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid",
     root.research_run_id = research.research_run_id
     for stable_id, code in (("security_benchmark", "000300"), ("security_peer", "000002")):
         root.watchlist.add(f"watch:{stable_id}", SecurityIdentity(stable_id, "SZSE", code, "CNY", "2010-01-01"))
-    connection = root.faults.adapter_connection
-    with connection:
+    connection = SQLiteOwningAdapterFixture(root.data_root)
+    with connection.transaction():
         universe_members = [
             {"security_id": security_id, "listed_from": "2010-01-01", "delisted_after": None, "st_from": None, "st_to": None, "source_ref": f"fixture:{security_id}"}
             for security_id in ("security_yihua", "security_peer")
@@ -98,9 +100,9 @@ def test_transparent_market_snapshot_and_read_only_plan_evaluation(tmp_path: Pat
     changed_code = replace(_market_command("market:code"), code_identity=replace(_market_command().code_identity, source_hash="changed-source"))
     assert root.market.build_market_snapshot(changed_code).market_snapshot_id != market.market_snapshot_id
     with pytest.raises(Exception, match="MARKET_UNIVERSE_IMMUTABLE"):
-        root.faults.adapter_connection.execute("UPDATE market_universe_member SET source_ref='changed' WHERE market_universe_version_id='universe_market' AND security_id='security_yihua'")
+        SQLiteOwningAdapterFixture(root.data_root).execute("UPDATE market_universe_member SET source_ref='changed' WHERE market_universe_version_id='universe_market' AND security_id='security_yihua'")
     with pytest.raises(Exception, match="MARKET_CONSTRAINT_IMMUTABLE"):
-        root.faults.adapter_connection.execute("UPDATE security_market_constraint SET limit_up_decimal='999' WHERE data_snapshot_id='snapshot_market'")
+        SQLiteOwningAdapterFixture(root.data_root).execute("UPDATE security_market_constraint SET limit_up_decimal='999' WHERE data_snapshot_id='snapshot_market'")
     before = root.plans.get_lifecycle(plan.plan_id)
     evaluation = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:one", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     replay = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:two", plan.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
@@ -118,14 +120,16 @@ def test_transparent_market_snapshot_and_read_only_plan_evaluation(tmp_path: Pat
     v2 = root.plans.confirm_draft(ConfirmPlanDraftCommand("market:plan:v2-confirm", second_draft.draft_id, 1, "activate"))
     v2_evaluation = root.market.evaluate_plan(EvaluatePlanCommand("evaluation:v2", v2.plan_version_id, market.market_snapshot_id, "plan-evaluator@1", "evaluation-policy@1"))
     assert v2_evaluation.plan_version_id == v2.plan_version_id and root.market.get_plan_evaluation(evaluation.plan_evaluation_id).plan_version_id == plan.plan_version_id
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_version,source_policy_version,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
-        root.faults.adapter_connection.execute("INSERT INTO data_snapshot_member SELECT 'snapshot_market_revision',normalized_version_id,member_role,member_order FROM data_snapshot_member WHERE data_snapshot_id='snapshot_market'")
-        root.faults.adapter_connection.execute("INSERT INTO data_snapshot_universe_ref VALUES('snapshot_market_revision','universe_market','CN_A_SHARE')")
+    adapter = SQLiteOwningAdapterFixture(root.data_root)
+    with adapter.transaction():
+        adapter.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_version,source_policy_version,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
+        adapter.execute("INSERT INTO data_snapshot_member SELECT 'snapshot_market_revision',normalized_version_id,member_role,member_order FROM data_snapshot_member WHERE data_snapshot_id='snapshot_market'")
+        adapter.execute("INSERT INTO data_snapshot_universe_ref VALUES('snapshot_market_revision','universe_market','CN_A_SHARE')")
+    adapter.close()
     revised_market = root.market.build_market_snapshot(_market_command("market:revision", data_snapshot_id="snapshot_market_revision"))
     assert revised_market.market_snapshot_id != market.market_snapshot_id and root.market.get_market_snapshot(market.market_snapshot_id) == market
     with pytest.raises(Exception, match="PLAN_EVALUATION_IMMUTABLE"):
-        root.faults.adapter_connection.execute("DELETE FROM plan_evaluation WHERE plan_evaluation_id=?", (evaluation.plan_evaluation_id,))
+        SQLiteOwningAdapterFixture(root.data_root).execute("DELETE FROM plan_evaluation WHERE plan_evaluation_id=?", (evaluation.plan_evaluation_id,))
     root.close()
 
 

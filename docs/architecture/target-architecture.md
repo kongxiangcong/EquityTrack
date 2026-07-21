@@ -22,10 +22,9 @@ the live qualification sequence. Watchlist identity, invocation replay, and
 transaction rules are implemented by the canonical SQLite Watchlist task;
 `PlatformStore` does not forward them.
 
-The Web adapter temporarily retains a Web-only `ApplicationFacade` for chart,
-annotation, workspace-update authorization, and plan-confirmation routes. It
-contains no CLI, research, data, watchlist, account, market, health, or
-maintenance operation and is removed by the following Web cutover.
+The Web adapter receives explicit DecisionWorkspace, ChartWorkspace,
+ChartAnnotations, TradePlan, and update-authorization tasks. It projects typed
+results and does not receive a root object, container, or facade.
 
 ## Research and presentation
 

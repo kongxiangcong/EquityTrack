@@ -64,6 +64,6 @@ export function methodSummary(method) {
   return `${method.method_id} · ${level} ${value} · ${basisLabel(method.value_basis)} · ${horizonLabel(method.horizon)}${warning}`
 }
 
-export function renderSandboxReport(view) {
+export function persistedResearchHtml(view) {
   return view.html_projection ?? "<p>持久化研究 HTML 缺失。</p>"
 }

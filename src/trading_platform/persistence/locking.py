@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,9 +41,11 @@ class DataRootWriterLock:
 
     @contextmanager
     def acquire(self, owner_ref: str) -> Iterator[None]:
+        lease_id = uuid.uuid4().hex
         payload = {
             "owner_ref": owner_ref,
             "pid": os.getpid(),
+            "lease_id": lease_id,
             "acquired_at": datetime.now(timezone.utc).isoformat(),
         }
         for attempt in range(2):
@@ -69,5 +73,12 @@ class DataRootWriterLock:
                 current = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError, TypeError):
                 current = {}
-            if current.get("owner_ref") == owner_ref and current.get("pid") == os.getpid():
-                self.path.unlink(missing_ok=True)
+            if current.get("lease_id") == lease_id:
+                for attempt in range(40):
+                    try:
+                        self.path.unlink(missing_ok=True)
+                        break
+                    except PermissionError:
+                        if attempt == 39:
+                            raise
+                        time.sleep(0.05)

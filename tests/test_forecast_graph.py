@@ -10,6 +10,8 @@ from trading_platform.domain.research_inputs import ResearchInputs
 from equity_research.forecast import (
     CompanyArchetype,
     CompanyOpeningBalanceSheet,
+    DataInsufficientForecastRequest,
+    DataInsufficientSnapshot,
     DataSnapshot,
     ForecastEdge,
     ForecastEngine,
@@ -23,6 +25,42 @@ from equity_research.forecast import (
     SegmentForecastOverride,
     SnapshotFact,
 )
+
+
+def test_forecast_build_owns_typed_data_insufficient_degradation() -> None:
+    snapshot = DataInsufficientSnapshot(
+        "snapshot_missing",
+        "security_missing",
+        AS_OF,
+        ("official_financial_statements",),
+    )
+    request = DataInsufficientForecastRequest(
+        Security(
+            "security_missing",
+            "Missing-data subject",
+            "SZSE",
+            "CNY",
+            CompanyArchetype.GENERAL_MANUFACTURING,
+            ("company",),
+        ),
+        AS_OF,
+        snapshot,
+        ("2027E",),
+        "2026-08-07",
+    )
+
+    graph = ForecastEngine().build(request)
+
+    assert graph.template_id == "data_insufficient@1"
+    assert {node.quantity.unit for node in graph.nodes} == {"availability_state"}
+    with pytest.raises(ForecastInvariantError):
+        DataInsufficientForecastRequest(
+            request.security,
+            AS_OF,
+            snapshot,
+            ("2027FY",),
+            request.review_date,
+        )
 
 
 AS_OF = "2026-07-07"

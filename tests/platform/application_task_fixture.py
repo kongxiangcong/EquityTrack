@@ -8,7 +8,6 @@ from equity_research import ResearchEngine
 from trading_platform.account import AccountOpeningService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.account_history import AccountHistoryImportService
-from trading_platform.application.facade import ApplicationFacade
 from trading_platform.application.health import Health
 from trading_platform.application.research_tasks import (
     ForecastReview,
@@ -28,7 +27,10 @@ from trading_platform.persistence.workspace import WorkspaceService
 from trading_platform.plans import PlanService
 from trading_platform.operations import PlatformOperations
 from trading_platform.research import SnapshotToResearchRequestAssembler
-from trading_platform.workflows.research import ResearchWorkflow, research_engine_identity
+from trading_platform.workflows.research import (
+    ResearchWorkflow,
+    research_engine_identity,
+)
 
 
 class StorageFaultFixture:
@@ -36,44 +38,81 @@ class StorageFaultFixture:
 
     def __init__(self, store: PlatformStore) -> None:
         self._store = store
-        self.data_repository: DataRepository | None = None
+        self._data_repository: DataRepository | None = None
 
-    @property
-    def adapter_connection(self):
-        """SQLite seam for adapter ownership, rollback, and corruption tests."""
-        return self._store.connection
+    def set_workflow_fault_injector(self, injector) -> None:
+        self._store.workflow_ledger.fault_injector = injector
 
-    @property
-    def workflow_ledger(self):
-        """Persistence adapter seam for ledger-specific integrity tests."""
-        return self._store.workflow_ledger
+    def set_data_fault_injector(self, injector) -> None:
+        if self._data_repository is None:
+            raise AssertionError("Data repository is not configured for this fixture.")
+        self._data_repository.fault_injector = injector
 
-    def artifact_bytes(self, artifact_id: str) -> bytes:
-        """Read an immutable artifact through its owning persistence schema."""
-        row = self._store.connection.execute(
-            "SELECT o.relative_path FROM artifact a JOIN object_blob o ON o.sha256=a.object_sha256 WHERE a.artifact_id=?",
-            (artifact_id,),
-        ).fetchone()
-        if row is None:
-            raise AssertionError(f"Unknown artifact fixture: {artifact_id}")
-        return (self._store.data_root / row["relative_path"]).read_bytes()
+    def attach_data_repository(self, fault_injector=None) -> DataRepository:
+        """Own the raw sync adapter used by data-fault tests."""
+        repository = DataRepository(
+            self._store.connection,
+            self._store.workflow_ledger,
+            self._store.data_root,
+            self._store.writer_lock,
+        )
+        repository.fault_injector = fault_injector
+        self._data_repository = repository
+        return repository
 
     def corrupt_object(self, relative_path: str, payload: bytes) -> None:
         """Mutate one object payload for integrity-failure tests."""
         (self._store.data_root / relative_path).write_bytes(payload)
 
-    def delete_update_authorizations(self) -> None:
-        """Attempt a forbidden adapter mutation for immutability tests."""
-        self._store.connection.execute("DELETE FROM update_authorization")
+    def legacy_research_cutover(self):
+        """Own otherwise-unrepresentable legacy migration state."""
+        from tests.platform.research_cutover_fixture import LegacyResearchCutoverFixture
 
-    @property
-    def legacy_store(self) -> PlatformStore:
-        """One-way ResearchDecisionView migration fixture only."""
-        return self._store
+        return LegacyResearchCutoverFixture(self._store)
 
-    def doctor(self):
-        return self._store.doctor()
+    def record_incomplete_account(self) -> None:
+        """Create an account lacking a position snapshot for projection tests."""
+        with self._store.connection:
+            self._store.connection.execute(
+                "INSERT INTO account VALUES(?,?,?,?,?)",
+                (
+                    "incomplete-account",
+                    "local",
+                    "CNY",
+                    "2026-07-10",
+                    "incomplete-source",
+                ),
+            )
 
+    def record_market_only_workflow_snapshot(self) -> None:
+        """Create a market-only workflow candidate for reuse-policy tests."""
+        with self._store.connection:
+            self._store.connection.execute(
+                "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "snapshot_market_20260710", "security_yihua", "workflow",
+                    "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00",
+                    "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1",
+                    "freshness@1", "market-members", "valid", "pass", 0, 0, 0,
+                    0, 0, "test workflow snapshot", "2026-07-11T00:00:00+00:00",
+                ),
+            )
+            self._store.connection.execute(
+                "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("attempt_market", "market-refresh", "fixture", "fixture@1", "daily", "derived-fixture", "fixture", "urn:test:daily", "{}", "{}", "date", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"),
+            )
+            self._store.connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_market", "daily", "security_yihua:2026-07-10"))
+            self._store.connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("daily:2026-07-10", "record_market", 1, "market-content", "attempt_market", "2026-07-10", "2026-07-10", "date", "2026-07-10T09:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
+            self._store.connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_market_20260710", "daily:2026-07-10", "daily", 0))
+
+    def record_official_filing_workflow_snapshot(self) -> None:
+        """Create a research-relevant filing candidate for PIT policy tests."""
+        with self._store.connection:
+            self._store.connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_filing", "filing-refresh", "official", "official@1", "financial_statement", "CNINFO", "official", "urn:test:filing", "{}", "{}", "timestamp", "official-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"))
+            self._store.connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_filing", "financial_statement", "security_yihua:2026Q2"))
+            self._store.connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
+            self._store.connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1", "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
+            self._store.connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_filing", "filing:2026Q2", "financial_statement", 0))
 
 class PlatformTaskFixture:
     """Test composition whose fields are the production named task seams."""
@@ -88,6 +127,7 @@ class PlatformTaskFixture:
         workflow_fault_injector=None,
     ) -> None:
         repo_root = Path(__file__).resolve().parents[2]
+        self.data_root = data_root.resolve()
         migration_path = migrations_root or repo_root / "migrations"
         if not (data_root / "platform.sqlite3").is_file():
             result = PlatformOperations(data_root, migration_path).bootstrap()
@@ -102,16 +142,8 @@ class PlatformTaskFixture:
         self.watchlist = store.watchlist
         self.data = None
         if providers:
-            self.faults.data_repository = DataRepository(
-                store.connection,
-                ledger,
-                store.data_root,
-                store.writer_lock,
-            )
-            self.faults.data_repository.fault_injector = workflow_fault_injector
-            self.data = DataSyncService(
-                self.faults.data_repository, providers, fixture_rights
-            )
+            repository = self.faults.attach_data_repository(workflow_fault_injector)
+            self.data = DataSyncService(repository, providers, fixture_rights)
         self.research = ResearchWorkflow(
             ledger,
             research_engine or ResearchEngine(),
@@ -143,11 +175,6 @@ class PlatformTaskFixture:
         self.account_history = AccountHistoryImportService(data_root, repo_root)
         self.account_acceptance = AccountAcceptanceService(
             data_root, migrations_root or repo_root / "migrations"
-        )
-        self.web = ApplicationFacade(
-            chart=self.chart,
-            plans=self.plans,
-            workspace=self.workspace,
         )
 
     def close(self) -> None:

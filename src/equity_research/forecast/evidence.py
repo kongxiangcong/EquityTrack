@@ -1026,6 +1026,65 @@ class DataSnapshot:
 
 
 @dataclass(frozen=True)
+class DataInsufficientSnapshot:
+    """Explicit missing-data state; it carries no financial facts."""
+
+    snapshot_id: str
+    security_id: str
+    as_of: str
+    missing_fields: tuple[str, ...]
+    content_hash: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            date.fromisoformat(self.as_of)
+        except (TypeError, ValueError) as exc:
+            raise ForecastInvariantError(
+                "FORECAST_AS_OF_INVALID",
+                "DataInsufficientSnapshot.as_of must be an ISO date.",
+            ) from exc
+        if (
+            not self.snapshot_id
+            or not self.security_id
+            or not self.missing_fields
+            or len(self.missing_fields) != len(set(self.missing_fields))
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_DATA_INSUFFICIENT_INVALID",
+                "Missing-data snapshots require identity and unique missing fields.",
+            )
+        payload = self.to_dict()
+        payload.pop("content_hash")
+        digest = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.content_hash and self.content_hash != digest:
+            raise ForecastInvariantError(
+                "FORECAST_SNAPSHOT_HASH_MISMATCH",
+                "Data-insufficient snapshot content hash does not replay.",
+            )
+        object.__setattr__(self, "content_hash", digest)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "snapshot_id": self.snapshot_id,
+            "security_id": self.security_id,
+            "as_of": self.as_of,
+            "content_hash": self.content_hash,
+            "segment_baselines": [],
+            "company_opening_balance_sheet": None,
+            "facts": [],
+            "missing_fields": list(self.missing_fields),
+            "degradation_code": "DATA_INSUFFICIENT",
+        }
+
+
+@dataclass(frozen=True)
 class Security:
     security_id: str
     company_name: str
@@ -1066,6 +1125,41 @@ class Security:
             "archetype": self.archetype.value,
             "segment_ids": list(self.segment_ids),
         }
+
+
+@dataclass(frozen=True)
+class DataInsufficientForecastRequest:
+    security: Security
+    as_of: str
+    data_snapshot: DataInsufficientSnapshot
+    forecast_periods: tuple[str, ...]
+    review_date: str
+    assumption_overrides: tuple[SegmentForecastOverride, ...] = ()
+    assumptions: tuple[ForecastAssumption, ...] = ()
+    narrative_statements: tuple[ForecastNarrativeStatement, ...] = ()
+
+    def __post_init__(self) -> None:
+        try:
+            date.fromisoformat(self.as_of)
+            date.fromisoformat(self.review_date)
+        except (TypeError, ValueError) as exc:
+            raise ForecastInvariantError(
+                "FORECAST_DATA_INSUFFICIENT_REQUEST_INVALID",
+                "Degraded forecast dates must be ISO dates.",
+            ) from exc
+        if (
+            self.security.security_id != self.data_snapshot.security_id
+            or self.as_of != self.data_snapshot.as_of
+            or not self.forecast_periods
+            or any(not period.endswith("E") for period in self.forecast_periods)
+            or self.assumption_overrides
+            or self.assumptions
+            or self.narrative_statements
+        ):
+            raise ForecastInvariantError(
+                "FORECAST_DATA_INSUFFICIENT_REQUEST_INVALID",
+                "Degraded forecasts require one subject, forecast periods, and no assumptions.",
+            )
 
 
 @dataclass(frozen=True)

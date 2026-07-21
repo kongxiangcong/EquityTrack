@@ -139,7 +139,7 @@ class DataRepository:
                         version_id = f"version_{canonical_hash({'record': record_id, 'content': content_hash})[:24]}"
                         self.connection.execute(
                             "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (version_id, record_id, revision, content_hash, attempt_id, item.event_at, item.published_at, item.published_precision, item.available_at, item.availability_basis, datetime.now(timezone.utc).isoformat(), item.quality.value, previous["normalized_version_id"] if previous else None),
+                            (version_id, record_id, revision, content_hash, attempt_id, item.event_at, item.published_at, item.published_precision, item.available_at, item.availability_basis, item.retrieved_at, item.quality.value, previous["normalized_version_id"] if previous else None),
                         )
                         created_count += 1
                         self._persist_typed_payload(version_id, attempt_id, item)

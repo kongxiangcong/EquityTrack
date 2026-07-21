@@ -22,6 +22,7 @@ class NormalizedItem:
     published_precision: str | None
     available_at: str
     availability_basis: str
+    retrieved_at: str
     quality: QualityStatus
     issues: tuple[tuple[str, str], ...]
 
@@ -105,9 +106,45 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
             if not required.issubset(row): raise ValueError("SCHEMA_DRIFT")
             natural_key = f"{row['market_scope_id']}:{row['security_id']}:{row['listed_from']}"
             event_at = str(row["listed_from"])
+        elif dataset == "forecast_actual":
+            required = {
+                "security_id",
+                "metric_id",
+                "value",
+                "unit",
+                "scale",
+                "currency",
+                "period",
+                "published_at",
+                "available_at",
+                "source_id",
+                "official",
+                "comparability_status",
+            }
+            if not required.issubset(row):
+                raise ValueError("SCHEMA_DRIFT")
+            natural_key = f"{row['security_id']}:{row['metric_id']}:{row['period']}"
+            event_at = str(row["period"])
+            row = {
+                key: row[key]
+                for key in (
+                    "metric_id",
+                    "value",
+                    "unit",
+                    "scale",
+                    "currency",
+                    "period",
+                    "published_at",
+                    "available_at",
+                    "source_id",
+                    "official",
+                    "comparability_status",
+                )
+            }
         else:
             raise ValueError("DATASET_UNSUPPORTED")
-        items.append(NormalizedItem(dataset, natural_key, row, event_at, row.get("published_at"), row.get("published_precision"), available_at, basis, quality, tuple(issues)))
+        retrieved = (retrieved_at or datetime.now().astimezone()).isoformat()
+        items.append(NormalizedItem(dataset, natural_key, row, event_at, row.get("published_at"), row.get("published_precision"), available_at, basis, retrieved, quality, tuple(issues)))
     return tuple(items)
 
 

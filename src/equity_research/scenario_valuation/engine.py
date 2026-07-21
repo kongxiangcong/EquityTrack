@@ -9,14 +9,17 @@ from ..financial import FinancialQuantity, valuation_decimal_context
 from ..forecast import (
     CompanyArchetype,
     ForecastEngine,
+    ForecastGraph,
     SegmentForecastOverride,
 )
 from .contracts import (
     DeterministicScenarioRequest,
     DeterministicScenarioResult,
+    DataInsufficientScenarioRequest,
     ProbabilityMode,
     ScenarioDefinition,
     ScenarioInvariantError,
+    ScenarioMethodResult,
     ScenarioRole,
     ScenarioValuationResult,
     WeightedMethodRange,
@@ -39,7 +42,66 @@ class ScenarioValuationEngine:
         self._financial = FinancialInstitutionValuation(self._basis)
         self._biopharma = BiopharmaValuation(self._basis)
 
-    def run(self, request: DeterministicScenarioRequest) -> DeterministicScenarioResult:
+    def _run_data_insufficient(
+        self,
+        request: DataInsufficientScenarioRequest,
+    ) -> DeterministicScenarioResult:
+        """Return the canonical conditional-only result for missing inputs."""
+
+        if (
+            not request.forecast_graph.nodes
+            or any(
+                node.quantity.unit != "availability_state"
+                for node in request.forecast_graph.nodes
+            )
+        ):
+            raise ScenarioInvariantError(
+                "VALUATION_DATA_INSUFFICIENT_INPUT_INVALID",
+                "Blocked valuation requires a canonical data-insufficient Forecast graph.",
+            )
+        scenarios = tuple(
+            ScenarioValuationResult(
+                scenario_id=role.value,
+                role=role,
+                label=role.value.title(),
+                probability_evidence=None,
+                rationale_refs=(f"Assumption:data_insufficient:{role.value}",),
+                forecast_graph=request.forecast_graph,
+                methods=(
+                    ScenarioMethodResult(
+                        method_id="data_insufficient",
+                        status="blocked",
+                        applicability=(
+                            "Required official financial inputs are missing."
+                        ),
+                        value_basis="enterprise_value",
+                        horizon=request.horizon,
+                        assumptions=(),
+                        formula_version="data-insufficient@1",
+                        conditional_value_range=None,
+                        sensitivity=(),
+                        diagnostics=("VALUATION_INPUTS_UNAVAILABLE",),
+                        lineage_refs=(
+                            f"Assumption:data_insufficient:{role.value}",
+                        ),
+                    ),
+                ),
+            )
+            for role in ScenarioRole
+        )
+        return DeterministicScenarioResult(
+            probability_mode="conditional_only",
+            scenarios=scenarios,
+            weighted_method_ranges=(),
+            weighting_diagnostics=("VALUATION_INPUTS_UNAVAILABLE",),
+        )
+
+    def run(
+        self,
+        request: DeterministicScenarioRequest | DataInsufficientScenarioRequest,
+    ) -> DeterministicScenarioResult:
+        if isinstance(request, DataInsufficientScenarioRequest):
+            return self._run_data_insufficient(request)
         with valuation_decimal_context():
             self._validate_scenarios(request)
             probability_mode = self._probability_mode(request.scenarios)

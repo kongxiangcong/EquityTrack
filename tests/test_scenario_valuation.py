@@ -16,6 +16,7 @@ from equity_research.scenario_valuation import (
     CommodityCurvePoint,
     DcfApplicability,
     DcfValuationSpec,
+    DataInsufficientScenarioRequest,
     DeterministicScenarioRequest,
     EquityBridgeSpec,
     EquityBridgeTiming,
@@ -42,7 +43,11 @@ from equity_research.scenario_valuation.basis import ValuationBasis
 from equity_research.scenario_valuation.industrial import IndustrialValuation
 from equity_research.forecast import (
     CompanyArchetype,
+    DataInsufficientForecastRequest,
+    DataInsufficientSnapshot,
+    ForecastEngine,
     ForecastQuantity,
+    Security,
     SegmentForecastOverride,
     SnapshotFact,
 )
@@ -3946,3 +3951,43 @@ def test_reverse_dcf_failure_does_not_disable_other_methods() -> None:
         assert item.method("reverse_dcf").status == "blocked"
         assert item.method("fcff_dcf").status == "ready"
         assert item.method("sotp").status == "ready"
+
+
+def test_scenario_run_owns_typed_data_insufficient_degradation() -> None:
+    snapshot = DataInsufficientSnapshot(
+        "snapshot_missing",
+        "security_missing",
+        AS_OF,
+        ("valuation_method_inputs",),
+    )
+    graph = ForecastEngine().build(
+        DataInsufficientForecastRequest(
+            Security(
+                "security_missing",
+                "Missing-data subject",
+                "SZSE",
+                "CNY",
+                CompanyArchetype.GENERAL_MANUFACTURING,
+                ("company",),
+            ),
+            AS_OF,
+            snapshot,
+            ("2027E",),
+            "2026-08-07",
+        )
+    )
+
+    result = ScenarioValuationEngine().run(
+        DataInsufficientScenarioRequest(graph, "2027E")
+    )
+
+    assert all(
+        method.status == "blocked" and method.conditional_value_range is None
+        for scenario in result.scenarios
+        for method in scenario.methods
+    )
+    with pytest.raises(ScenarioInvariantError):
+        DataInsufficientScenarioRequest(
+            ForecastEngine().build(forecast_request_fixture()),
+            "2027E",
+        )

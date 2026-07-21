@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+
 from trading_platform.application.contracts import StartResearchWorkflow
 
 
@@ -11,6 +13,7 @@ import sys
 import time
 import stat
 import sqlite3
+import shutil
 from urllib.request import urlopen
 import zipfile
 import warnings
@@ -19,9 +22,13 @@ from pathlib import Path
 import pytest
 
 from tests.platform.test_chart_annotations import _root
-from tests.platform.test_research_workflow import _request as research_request
+from tests.platform.test_research_workflow import (
+    _request as research_request,
+    _root as research_root,
+)
 from tests.platform.test_research_workflow import CountingEngine
-from tests.platform.test_workflow_recovery import (
+from tests.platform.application_task_fixture import PlatformTaskFixture
+from tests.platform.test_workflow_ledger_recovery import (
     CrashAt,
     InjectedCrash,
     _expire,
@@ -31,6 +38,7 @@ from trading_platform.application.workflow_ledger import GenericObjectCommit, In
 from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.persistence.presence import RuntimePresence
+from trading_platform.persistence import PlatformStore
 from trading_platform.provider_config import load_sync_job
 
 
@@ -52,9 +60,161 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
         rebuilt.workspace.build("security_yihua", "snapshot_chart")["task"]
         == before["task"]
     )
-    assert rebuilt.faults.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
+    restored_store = PlatformStore(restored, Path.cwd() / "migrations")
+    assert restored_store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
+    restored_store.close()
     rebuilt.close()
     assert (restored / "restore-report.json").is_file()
+
+
+def _assert_backup_hashes(archive: Path) -> tuple[int, int]:
+    with zipfile.ZipFile(archive) as bundle:
+        manifest = json.loads(bundle.read("backup-manifest.json"))
+        files = manifest["files"]
+        assert files
+        for member in files:
+            payload = bundle.read(member["path"])
+            assert hashlib.sha256(payload).hexdigest() == member["sha256"]
+            assert len(payload) == member["size"]
+        return len(files), sum(member["size"] for member in files)
+
+
+def _exercise_release_root(
+    tmp_path: Path,
+    label: str,
+    live: Path,
+    workflow_result=None,
+    legacy_forecast_sha256: str | None = None,
+) -> None:
+    operations = PlatformOperations(live)
+    before = tmp_path / f"{label}-before.zip"
+    before_result = operations.backup(before)
+    before_counts = _assert_backup_hashes(before)
+    assert before_result["status"] == "succeeded"
+
+    assert operations.migrate()["status"] == "passed"
+    assert operations.doctor()["status"] == "passed"
+    if legacy_forecast_sha256 is not None:
+        legacy_path = (
+            live
+            / "objects/sha256"
+            / legacy_forecast_sha256[:2]
+            / legacy_forecast_sha256
+        )
+        legacy_bytes = legacy_path.read_bytes()
+        assert json.loads(legacy_bytes)["graph_id"].startswith("fg_")
+        assert hashlib.sha256(legacy_bytes).hexdigest() == legacy_forecast_sha256
+    if workflow_result is not None:
+        tasks = PlatformTaskFixture(live)
+        history = tasks.inspection.inspect(workflow_result.workflow_run_id)
+        manifest = tasks.archive.manifest(history.final_manifest_id)
+        refs = tuple(item["ref_role"] for item in history.refs)
+        assert refs.count("decision_view_manifest") == 1
+        assert {"research_json", "research_source_identity_html"} <= set(refs)
+        forecast = next(
+            tasks.archive.artifact(record_id)
+            for record_id in workflow_result.artifact_record_ids
+            if tasks.archive.artifact(record_id).artifact_kind == "Forecast"
+        )
+        assert forecast.payload["graph_id"].startswith("fg2_")
+        assert manifest.artifact_manifest_id == history.final_manifest_id
+        tasks.close()
+
+    after = tmp_path / f"{label}-after.zip"
+    after_result = operations.backup(after)
+    after_counts = _assert_backup_hashes(after)
+    assert after_result["status"] == "succeeded"
+    assert after_counts[0] >= before_counts[0]
+
+    restored = tmp_path / f"{label}-restored"
+    restore = PlatformOperations.restore(after, restored)
+    assert restore["status"] == "succeeded"
+    assert PlatformOperations(restored).doctor()["status"] == "passed"
+    if legacy_forecast_sha256 is not None:
+        restored_legacy = (
+            restored
+            / "objects/sha256"
+            / legacy_forecast_sha256[:2]
+            / legacy_forecast_sha256
+        ).read_bytes()
+        assert json.loads(restored_legacy)["graph_id"].startswith("fg_")
+        assert hashlib.sha256(restored_legacy).hexdigest() == legacy_forecast_sha256
+    if workflow_result is not None:
+        restored_tasks = PlatformTaskFixture(restored)
+        restored_history = restored_tasks.inspection.inspect(
+            workflow_result.workflow_run_id
+        )
+        assert restored_history.final_manifest_id == workflow_result.final_manifest_id
+        assert (
+            restored_tasks.archive.manifest(restored_history.final_manifest_id)
+            .artifact_manifest_id
+            == workflow_result.final_manifest_id
+        )
+        restored_tasks.close()
+
+
+def test_release_migration_matrix_covers_fresh_prior_created_and_reused_roots(
+    tmp_path: Path,
+) -> None:
+    fresh = tmp_path / "fresh"
+    PlatformOperations(fresh).bootstrap()
+    _exercise_release_root(tmp_path, "fresh", fresh)
+
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
+    for source in migration_files[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    prior = tmp_path / "prior"
+    prior_store = PlatformStore(prior, prior_migrations)
+    prior_store.migrate()
+    prior_store.close()
+    _exercise_release_root(tmp_path, "prior", prior)
+
+    created = tmp_path / "created"
+    created_tasks = research_root(created, CountingEngine())
+    legacy_bytes = (
+        Path.cwd() / "tests/fixtures/legacy_forecast_graph_fg1.json"
+    ).read_bytes()
+    created_store = PlatformStore(created, Path.cwd() / "migrations")
+    legacy_sha = created_store.workflow_ledger.commit_artifacts(
+        GenericObjectCommit(legacy_bytes)
+    ).sha256
+    created_store.close()
+    created_result = created_tasks.research.handle(
+        StartResearchWorkflow(research_request("release-matrix:created"))
+    )
+    created_tasks.close()
+    _exercise_release_root(
+        tmp_path,
+        "created",
+        created,
+        created_result,
+        legacy_sha,
+    )
+
+    reused = tmp_path / "reused"
+    reused_tasks = research_root(reused, CountingEngine())
+    reused_store = PlatformStore(reused, Path.cwd() / "migrations")
+    reused_legacy_sha = reused_store.workflow_ledger.commit_artifacts(
+        GenericObjectCommit(legacy_bytes)
+    ).sha256
+    reused_store.close()
+    first = reused_tasks.research.handle(
+        StartResearchWorkflow(research_request("release-matrix:reused:first"))
+    )
+    replay = reused_tasks.research.handle(
+        StartResearchWorkflow(research_request("release-matrix:reused:second"))
+    )
+    assert first.research_run_id == replay.research_run_id
+    reused_tasks.close()
+    _exercise_release_root(
+        tmp_path,
+        "reused",
+        reused,
+        replay,
+        reused_legacy_sha,
+    )
 
 
 def test_backup_rejects_target_inside_live_root(tmp_path: Path) -> None:
@@ -70,7 +230,11 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    root.faults.workflow_ledger.commit_artifacts(GenericObjectCommit(b"backup-object"))
+    object_store = PlatformStore(live, Path.cwd() / "migrations")
+    object_store.workflow_ledger.commit_artifacts(
+        GenericObjectCommit(b"backup-object")
+    )
+    object_store.close()
     root.close()
     operations = PlatformOperations(live)
     archive = tmp_path / "immutable.zip"
@@ -117,14 +281,13 @@ def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruptio
     )
     with pytest.raises(InjectedCrash):
         root.research.handle(StartResearchWorkflow(research_request("operations:maintenance")))
-    run_id = root.faults.adapter_connection.execute(
+    run_id = SQLiteOwningAdapterFixture(root.data_root).execute(
         "SELECT workflow_run_id FROM workflow_run LIMIT 1"
     ).fetchone()[0]
-    root.faults.adapter_connection.execute(
+    SQLiteOwningAdapterFixture(root.data_root).execute(
         "UPDATE workflow_run SET status=?,completed_at=NULL,lease_expires_at='2999-01-01T00:00:00+00:00' WHERE workflow_run_id=?",
         (nonterminal_status, run_id),
     )
-    root.faults.adapter_connection.commit()
     root.close()
     with pytest.raises(OperationError, match="MIGRATION_WORKFLOW_NOT_TERMINAL"):
         PlatformOperations(live).migrate()
@@ -518,7 +681,7 @@ def test_windows_cli_resume_executes_recovery_and_returns_refs(tmp_path: Path) -
     )
     with pytest.raises(InjectedCrash):
         root.research.handle(StartResearchWorkflow(research_request("operations:resume")))
-    run_id = root.faults.adapter_connection.execute(
+    run_id = SQLiteOwningAdapterFixture(root.data_root).execute(
         "SELECT workflow_run_id FROM workflow_run LIMIT 1"
     ).fetchone()[0]
     _expire(root, run_id)

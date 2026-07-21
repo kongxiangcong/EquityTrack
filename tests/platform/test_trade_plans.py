@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+
 from trading_platform.application.contracts import StartResearchWorkflow
 
 
@@ -25,8 +27,10 @@ def _root(path: Path):
         StartResearchWorkflow(research_request("plan:research"))
     )
     root.research_run_id = research.research_run_id
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute("INSERT OR IGNORE INTO price_factor_set VALUES(?,?,?,?,?)", ("factor_set_fixture", "snapshot_chart", "fixture:corporate-action-factor", "unique_deterministic", "deterministic_reverse@1"))
+    adapter = SQLiteOwningAdapterFixture(root.data_root)
+    with adapter.transaction():
+        adapter.execute("INSERT OR IGNORE INTO price_factor_set VALUES(?,?,?,?,?)", ("factor_set_fixture", "snapshot_chart", "fixture:corporate-action-factor", "unique_deterministic", "deterministic_reverse@1"))
+    adapter.close()
     return root
 
 
@@ -82,11 +86,11 @@ def test_atomic_confirmation_idempotency_preview_and_restart(tmp_path: Path) -> 
 def test_confirmation_failure_rolls_back_every_record(tmp_path: Path) -> None:
     root = _root(tmp_path)
     draft = _create(root)
-    root.faults.adapter_connection.execute("CREATE TRIGGER reject_activation BEFORE INSERT ON plan_activation BEGIN SELECT RAISE(ABORT,'INJECTED'); END")
+    SQLiteOwningAdapterFixture(root.data_root).execute("CREATE TRIGGER reject_activation BEFORE INSERT ON plan_activation BEGIN SELECT RAISE(ABORT,'INJECTED'); END")
     with pytest.raises(PlanError, match="PLAN_CONFIRMATION_ATOMIC_FAILURE"):
         root.plans.confirm_draft(ConfirmPlanDraftCommand("plan:confirm:fail", draft.draft_id, 1, "activate"))
     for table in ("trade_plan", "trade_plan_version", "plan_activation", "trade_plan_transition"):
-        assert root.faults.adapter_connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        assert SQLiteOwningAdapterFixture(root.data_root).execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     assert root.plans.get_draft(draft.draft_id).status == "open"
     root.close()
 
@@ -170,8 +174,10 @@ def test_typed_ast_references_account_applicability_and_adjusted_evidence(tmp_pa
         _create(root, "adjusted:wrong", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, rule_id="other"),)))
     with pytest.raises(PlanError, match="PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID"):
         _create(root, "adjusted:factor-missing", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, factor_set_id="missing"),)))
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute("INSERT INTO price_factor_set VALUES(?,?,?,?,?)", ("wrong_algorithm", "snapshot_chart", "fixture:factor", "unique_deterministic", "other@1"))
+    adapter = SQLiteOwningAdapterFixture(root.data_root)
+    with adapter.transaction():
+        adapter.execute("INSERT INTO price_factor_set VALUES(?,?,?,?,?)", ("wrong_algorithm", "snapshot_chart", "fixture:factor", "unique_deterministic", "other@1"))
+    adapter.close()
     with pytest.raises(PlanError, match="PLAN_ADJUSTED_PRICE_EVIDENCE_INVALID"):
         _create(root, "adjusted:factor-algorithm", replace(_content(root), rules=(adjusted_rule,), adjusted_price_evidence=(replace(evidence, factor_set_id="wrong_algorithm"),)))
     root.close()

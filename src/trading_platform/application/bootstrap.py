@@ -28,15 +28,25 @@ from trading_platform.provider_config import load_sync_job
 from trading_platform.provider_qualification import ProviderQualificationService
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.research import SnapshotToResearchRequestAssembler
-from trading_platform.workflows.research import ResearchWorkflow, research_engine_identity
-from trading_platform.verification import ProjectVerification, SubprocessVerificationExecutor
+from trading_platform.workflows.research import ResearchWorkflow
+from trading_platform.verification import (
+    ProjectVerification,
+    SubprocessVerificationExecutor,
+)
 
-from .facade import ApplicationFacade
 from .cli_tasks import DailyResearchCycle, DataSynchronization
 from .health import Health
 from .watchlist import Watchlist
-from .research_tasks import ForecastReview, ResearchArchive, WorkflowInspection
+from .research_tasks import ResearchArchive, WorkflowInspection
 from .workflow_ledger import ResearchViewCutoverCompleteQuery, WorkflowLedgerPort
+from .web_tasks import (
+    ChartAnnotations,
+    ChartWorkspace,
+    DecisionWorkspace,
+    TradePlan,
+    UpdateAuthorizations,
+)
+from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 
 
 def _repo_root() -> Path:
@@ -48,7 +58,9 @@ def _ledger(store: PlatformStore) -> WorkflowLedgerPort:
 
 
 @contextmanager
-def _store(data_root: Path, migrations_root: Path | None = None) -> Iterator[PlatformStore]:
+def _store(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[PlatformStore]:
     database = data_root.resolve() / "platform.sqlite3"
     if not database.is_file():
         raise OperationError(
@@ -73,9 +85,7 @@ def _store(data_root: Path, migrations_root: Path | None = None) -> Iterator[Pla
         store.close()
 
 
-def _assert_store_ready(
-    data_root: Path, migrations_root: Path | None = None
-) -> None:
+def _assert_store_ready(data_root: Path, migrations_root: Path | None = None) -> None:
     with _store(data_root, migrations_root):
         pass
 
@@ -106,26 +116,6 @@ def open_watchlist(
 ) -> Iterator[Watchlist]:
     with _store(data_root, migrations_root) as store:
         yield store.watchlist
-
-
-@contextmanager
-def open_data_sync(
-    data_root: Path,
-    *,
-    providers: Sequence[DataProvider],
-    fixture_rights: Mapping[tuple[str, str], FixtureRights] | None = None,
-    migrations_root: Path | None = None,
-    fault_injector=None,
-) -> Iterator[DataSyncService]:
-    with _store(data_root, migrations_root) as store:
-        repository = DataRepository(
-            store.connection,
-            _ledger(store),
-            store.data_root,
-            store.writer_lock,
-        )
-        repository.fault_injector = fault_injector
-        yield DataSyncService(repository, providers, fixture_rights)
 
 
 @contextmanager
@@ -169,9 +159,7 @@ def open_provider_qualification(
             store.writer_lock,
         )
         data = DataSyncService(repository, (provider,))
-        synchronization = DataSynchronization(
-            job, request, store.watchlist, data
-        )
+        synchronization = DataSynchronization(job, request, store.watchlist, data)
         yield ProviderQualificationService(
             dict(job["provider"]), request, synchronization, data
         )
@@ -250,37 +238,73 @@ def open_research_archive(
 
 
 @contextmanager
-def open_forecast_review(
+def open_decision_workspace(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[ForecastReview]:
+) -> Iterator[DecisionWorkspace]:
     with _store(data_root, migrations_root) as store:
-        yield ForecastReview(_ledger(store), research_engine_identity(_repo_root()))
+        yield WorkspaceService(store.connection, _ledger(store), store.writer_lock)
 
 
 @contextmanager
-def open_workspace(
+def open_chart_workspace(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[WorkspaceService]:
-    with _store(data_root, migrations_root) as store:
-        yield WorkspaceService(
-            store.connection, _ledger(store), store.writer_lock
-        )
-
-
-@contextmanager
-def open_chart(
-    data_root: Path, migrations_root: Path | None = None
-) -> Iterator[ChartService]:
+) -> Iterator[ChartWorkspace]:
     with _store(data_root, migrations_root) as store:
         yield ChartService(store.connection, store.writer_lock)
 
 
 @contextmanager
-def open_plans(
+def open_chart_annotations(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[PlanService]:
+) -> Iterator[ChartAnnotations]:
+    with _store(data_root, migrations_root) as store:
+        yield ChartService(store.connection, store.writer_lock)
+
+
+@contextmanager
+def open_trade_plan(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[TradePlan]:
     with _store(data_root, migrations_root) as store:
         yield PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
+
+
+@contextmanager
+def open_update_authorizations(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[UpdateAuthorizations]:
+    with _store(data_root, migrations_root) as store:
+        yield WorkspaceService(store.connection, _ledger(store), store.writer_lock)
+
+
+@contextmanager
+def open_browser_acceptance_fixture(
+    data_root: Path,
+    fixture_manifest: Path,
+    repo_root: Path,
+    migrations_root: Path | None = None,
+) -> Iterator[BrowserAcceptanceFixture]:
+    provider, rights = load_browser_fixture(fixture_manifest)
+    with _store(data_root, migrations_root) as store:
+        ledger = _ledger(store)
+        repository = DataRepository(
+            store.connection,
+            ledger,
+            store.data_root,
+            store.writer_lock,
+        )
+        yield BrowserAcceptanceFixture(
+            store.watchlist,
+            DataSyncService(repository, (provider,), rights),
+            ResearchWorkflow(
+                ledger,
+                ResearchEngine(),
+                SnapshotToResearchRequestAssembler(),
+                repo_root,
+            ),
+            PlanService(SQLitePlanRepository(store.connection, store.writer_lock)),
+            repo_root,
+        )
 
 
 @contextmanager
@@ -302,9 +326,7 @@ def open_account(
     root = repo_root or _repo_root()
     migration_path = migrations_root or root / "migrations"
     _assert_store_ready(data_root, migration_path)
-    return AccountOpeningService(
-        data_root, root, migration_path
-    )
+    return AccountOpeningService(data_root, root, migration_path)
 
 
 def open_platform_operations(data_root: Path) -> PlatformOperations:
@@ -342,34 +364,19 @@ def open_account_acceptance(
     return AccountAcceptanceService(data_root, migrations_root)
 
 
-@contextmanager
-def open_web_application(
-    data_root: Path, migrations_root: Path | None = None
-) -> Iterator[ApplicationFacade]:
-    """Temporary Web-only composition seam removed by Ticket 14."""
-
-    with _store(data_root, migrations_root) as store:
-        chart = ChartService(store.connection, store.writer_lock)
-        plans = PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
-        workspace = WorkspaceService(
-            store.connection, _ledger(store), store.writer_lock
-        )
-        yield ApplicationFacade(chart=chart, plans=plans, workspace=workspace)
-
-
 __all__ = [
     "open_account",
     "open_account_acceptance",
     "open_account_history",
     "open_acceptance_evidence",
-    "open_chart",
-    "open_data_sync",
+    "open_chart_annotations",
+    "open_chart_workspace",
+    "open_browser_acceptance_fixture",
     "open_data_synchronization",
     "open_daily_research_cycle",
-    "open_forecast_review",
     "open_import_preview",
     "open_market",
-    "open_plans",
+    "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",
     "open_project_verification",
@@ -377,9 +384,9 @@ __all__ = [
     "open_research_archive",
     "open_research_workflow",
     "open_watchlist",
-    "open_web_application",
+    "open_trade_plan",
+    "open_update_authorizations",
     "open_server_runtime",
     "open_workflow_runtime",
     "open_workflow_inspection",
-    "open_workspace",
 ]

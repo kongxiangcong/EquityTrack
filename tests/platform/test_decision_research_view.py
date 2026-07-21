@@ -16,10 +16,8 @@ from tests.platform.test_outlook_artifacts import (
 )
 from tests.platform.test_research_workflow import (
     CountingEngine,
-    _artifact_bytes,
     _root,
 )
-from tests.platform.research_cutover_fixture import LegacyResearchCutoverFixture
 from trading_platform.research_presentation import render_research_decision_html
 from trading_platform.research_view import (
     ResearchDecisionInput,
@@ -37,6 +35,7 @@ from trading_platform.application.research_view_cutover import (
     CanonicalResearchDecisionViewMaterializer,
 )
 from trading_platform.persistence.locking import PersistenceError
+from trading_platform.persistence import PlatformStore
 
 
 def test_decision_view_builder_has_one_typed_input() -> None:
@@ -53,7 +52,7 @@ def test_incomplete_populated_root_rejects_workflow_and_workspace(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     first = root.research.handle(StartResearchWorkflow(_request("cutover:baseline")))
-    LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_reference(
+    root.faults.legacy_research_cutover().remove_decision_reference(
         first.workflow_run_id
     )
 
@@ -81,7 +80,7 @@ def test_incomplete_populated_root_rejects_workflow_and_workspace(
         "security_yihua", first.research_snapshot_id
     )
     assert workspace["research_views"][0]["view_id"] == json.loads(
-        _artifact_bytes(rebuilt, first.json_artifact_id)
+        rebuilt.archive.decision_view(first.workflow_run_id).json_bytes
     )["view_id"]
     assert rebuilt.inspection.inspect(
         first.workflow_run_id
@@ -92,8 +91,8 @@ def test_incomplete_populated_root_rejects_workflow_and_workspace(
 def test_cutover_materializes_missing_view_identity_stably(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:materialize")))
-    original_json = _artifact_bytes(root, result.json_artifact_id)
-    manifest_id = LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_manifest(
+    original_json = root.archive.decision_view(result.workflow_run_id).json_bytes
+    manifest_id = root.faults.legacy_research_cutover().remove_decision_manifest(
         result.workflow_run_id
     )
     root.close()
@@ -107,7 +106,7 @@ def test_cutover_materializes_missing_view_identity_stably(tmp_path: Path) -> No
         "decision_view_json",
         "decision_view_html",
     ]
-    assert _artifact_bytes(rebuilt, result.json_artifact_id) == original_json
+    assert rebuilt.archive.decision_view(result.workflow_run_id).json_bytes == original_json
     rebuilt.close()
 
 
@@ -116,7 +115,7 @@ def test_cutover_rejects_multiple_exact_source_candidates_atomically(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:source-ambiguous")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     legacy.add_duplicate_source_json(result.research_run_id)
     legacy.remove_decision_reference(result.workflow_run_id)
     original_pointer = legacy.source_json_artifact_id(result.research_run_id)
@@ -126,7 +125,7 @@ def test_cutover_rejects_multiple_exact_source_candidates_atomically(
         PlatformOperations(tmp_path).migrate()
     assert caught.value.code == "RESEARCH_SOURCE_ARTIFACT_NOT_UNIQUE"
     rebuilt = _root(tmp_path, CountingEngine())
-    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store)
+    rebuilt_legacy = rebuilt.faults.legacy_research_cutover()
     assert rebuilt_legacy.source_json_artifact_id(result.research_run_id) == original_pointer
     assert rebuilt_legacy.decision_ref_count(result.workflow_run_id) == 0
     rebuilt.close()
@@ -137,7 +136,7 @@ def test_cutover_rejects_missing_exact_source_candidate_atomically(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:source-missing")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     source_artifact_id = legacy.hide_exact_source_json(result.research_run_id)
     legacy.remove_decision_reference(result.workflow_run_id)
     root.close()
@@ -146,7 +145,7 @@ def test_cutover_rejects_missing_exact_source_candidate_atomically(
         PlatformOperations(tmp_path).migrate()
     assert caught.value.code == "RESEARCH_SOURCE_ARTIFACT_NOT_UNIQUE"
     rebuilt = _root(tmp_path, CountingEngine())
-    rebuilt_legacy = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store)
+    rebuilt_legacy = rebuilt.faults.legacy_research_cutover()
     assert rebuilt_legacy.source_json_artifact_id(result.research_run_id) == source_artifact_id
     assert rebuilt_legacy.decision_ref_count(result.workflow_run_id) == 0
     rebuilt.close()
@@ -157,7 +156,7 @@ def test_cutover_ignores_source_html_with_nonexact_run_identity(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:html-exact")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     legacy.add_misleading_source_html(
         result.workflow_run_id, result.research_run_id
     )
@@ -176,7 +175,7 @@ def test_cutover_ignores_source_html_with_nonexact_engine_schema(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:schema-exact")))
-    LegacyResearchCutoverFixture(root.faults.legacy_store).add_misleading_source_schema(
+    root.faults.legacy_research_cutover().add_misleading_source_schema(
         result.workflow_run_id, result.research_run_id
     )
     root.close()
@@ -194,7 +193,7 @@ def test_conflicting_decision_ref_rolls_back_source_pointer_repair(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:conflicting-ref")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     wrong_pointer = legacy.prepare_conflicting_decision_reference(
         result.workflow_run_id,
         result.research_run_id,
@@ -202,9 +201,13 @@ def test_conflicting_decision_ref_rolls_back_source_pointer_repair(
     )
 
     with pytest.raises(PersistenceError) as caught:
-        root.faults.workflow_ledger.cutover_research_decision_views(
-            CanonicalResearchDecisionViewMaterializer()
-        )
+        cutover_store = PlatformStore(root.data_root, Path.cwd() / "migrations")
+        try:
+            cutover_store.workflow_ledger.cutover_research_decision_views(
+                CanonicalResearchDecisionViewMaterializer()
+            )
+        finally:
+            cutover_store.close()
     assert caught.value.code == "RESEARCH_VIEW_CUTOVER_INCOMPLETE"
     assert legacy.source_json_artifact_id(result.research_run_id) == wrong_pointer
     assert legacy.decision_ref_count(result.workflow_run_id) == 2
@@ -216,7 +219,7 @@ def test_noncanonical_decision_manifest_fails_completeness_gate(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:manifest-corrupt")))
-    LegacyResearchCutoverFixture(root.faults.legacy_store).corrupt_decision_manifest_identity(
+    root.faults.legacy_research_cutover().corrupt_decision_manifest_identity(
         result.workflow_run_id
     )
     with pytest.raises(WorkflowError) as blocked:
@@ -230,28 +233,31 @@ def test_cutover_commit_fault_rolls_back_and_retry_reuses_exact_identity(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:commit-fault")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     legacy.remove_decision_reference(result.workflow_run_id)
 
     def fail_before_commit(boundary: str) -> None:
         if boundary == "research_view_cutover.before_commit":
             raise RuntimeError("injected cutover commit fault")
 
-    ledger = root.faults.workflow_ledger
-    ledger.fault_injector = fail_before_commit
-    with pytest.raises(RuntimeError, match="injected cutover commit fault"):
-        ledger.cutover_research_decision_views(
+    cutover_store = PlatformStore(root.data_root, Path.cwd() / "migrations")
+    try:
+        cutover_store.workflow_ledger.fault_injector = fail_before_commit
+        with pytest.raises(RuntimeError, match="injected cutover commit fault"):
+            cutover_store.workflow_ledger.cutover_research_decision_views(
+                CanonicalResearchDecisionViewMaterializer()
+            )
+        assert legacy.decision_ref_count(result.workflow_run_id) == 0
+
+        cutover_store.workflow_ledger.fault_injector = None
+        cutover_store.workflow_ledger.cutover_research_decision_views(
             CanonicalResearchDecisionViewMaterializer()
         )
-    assert legacy.decision_ref_count(result.workflow_run_id) == 0
-
-    ledger.fault_injector = None
-    ledger.cutover_research_decision_views(
-        CanonicalResearchDecisionViewMaterializer()
-    )
+    finally:
+        cutover_store.close()
     restored = legacy.decision_ref_id(result.workflow_run_id)
     assert restored == result.final_manifest_id
-    assert _artifact_bytes(root, result.json_artifact_id)
+    assert root.archive.decision_view(result.workflow_run_id).json_bytes
     root.close()
 
 
@@ -260,34 +266,41 @@ def test_cutover_object_fault_leaves_only_orphan_and_retry_is_identity_stable(
 ) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:object-fault")))
-    legacy = LegacyResearchCutoverFixture(root.faults.legacy_store)
+    legacy = root.faults.legacy_research_cutover()
     legacy.remove_decision_graph(result.workflow_run_id)
 
     def fail_after_rename(boundary: str) -> None:
         if boundary == "object.renamed":
             raise RuntimeError("injected cutover object fault")
 
-    ledger = root.faults.workflow_ledger
-    ledger.fault_injector = fail_after_rename
-    with pytest.raises(RuntimeError, match="injected cutover object fault"):
-        ledger.cutover_research_decision_views(
+    cutover_store = PlatformStore(root.data_root, Path.cwd() / "migrations")
+    try:
+        cutover_store.workflow_ledger.fault_injector = fail_after_rename
+        with pytest.raises(RuntimeError, match="injected cutover object fault"):
+            cutover_store.workflow_ledger.cutover_research_decision_views(
+                CanonicalResearchDecisionViewMaterializer()
+            )
+        assert legacy.decision_ref_count(result.workflow_run_id) == 0
+
+        cutover_store.workflow_ledger.fault_injector = None
+        cutover_store.workflow_ledger.cutover_research_decision_views(
             CanonicalResearchDecisionViewMaterializer()
         )
-    assert legacy.decision_ref_count(result.workflow_run_id) == 0
-
-    ledger.fault_injector = None
-    ledger.cutover_research_decision_views(
-        CanonicalResearchDecisionViewMaterializer()
-    )
+    finally:
+        cutover_store.close()
     restored = root.inspection.inspect(result.workflow_run_id)
     restored_manifest = root.archive.manifest(restored.final_manifest_id)
     restored_ids = tuple(item["artifact_id"] for item in restored_manifest.members)
-    ledger.cutover_research_decision_views(
-        CanonicalResearchDecisionViewMaterializer()
-    )
+    replay_store = PlatformStore(root.data_root, Path.cwd() / "migrations")
+    try:
+        replay_store.workflow_ledger.cutover_research_decision_views(
+            CanonicalResearchDecisionViewMaterializer()
+        )
+    finally:
+        replay_store.close()
     replayed = root.archive.manifest(restored.final_manifest_id)
     assert tuple(item["artifact_id"] for item in replayed.members) == restored_ids
-    restored_json = json.loads(_artifact_bytes(root, restored_ids[0]))
+    restored_json = json.loads(root.archive.decision_view(result.workflow_run_id).json_bytes)
     assert restored_json["workflow_run_id"] == result.workflow_run_id
     assert restored_json["research_run_id"] == result.research_run_id
     root.close()
@@ -301,7 +314,7 @@ def test_cutover_preserves_shared_source_and_creates_workflow_scoped_views(
     second = root.research.handle(StartResearchWorkflow(_request("cutover:shared:second")))
     assert second.research_run_id == first.research_run_id
     assert second.workflow_run_id != first.workflow_run_id
-    LegacyResearchCutoverFixture(root.faults.legacy_store).remove_decision_references(
+    root.faults.legacy_research_cutover().remove_decision_references(
         (first.workflow_run_id, second.workflow_run_id)
     )
     root.close()
@@ -311,11 +324,11 @@ def test_cutover_preserves_shared_source_and_creates_workflow_scoped_views(
     first_history = rebuilt.inspection.inspect(first.workflow_run_id)
     second_history = rebuilt.inspection.inspect(second.workflow_run_id)
     assert first_history.final_manifest_id != second_history.final_manifest_id
-    first_view = json.loads(_artifact_bytes(rebuilt, first.json_artifact_id))
-    second_view = json.loads(_artifact_bytes(rebuilt, second.json_artifact_id))
+    first_view = json.loads(rebuilt.archive.decision_view(first.workflow_run_id).json_bytes)
+    second_view = json.loads(rebuilt.archive.decision_view(second.workflow_run_id).json_bytes)
     assert first_view["research_run_id"] == second_view["research_run_id"]
     assert first_view["workflow_run_id"] != second_view["workflow_run_id"]
-    source_ids = LegacyResearchCutoverFixture(rebuilt.faults.legacy_store).source_artifact_ids(
+    source_ids = rebuilt.faults.legacy_research_cutover().source_artifact_ids(
         first.research_run_id
     )
     assert all(source_ids)
@@ -325,7 +338,7 @@ def test_cutover_preserves_shared_source_and_creates_workflow_scoped_views(
 def test_completed_v1_workflow_is_inspection_only(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("cutover:legacy-v1")))
-    LegacyResearchCutoverFixture(root.faults.legacy_store).mark_completed_workflow_v1(
+    root.faults.legacy_research_cutover().mark_completed_workflow_v1(
         result.workflow_run_id
     )
 
@@ -346,7 +359,7 @@ def test_workspace_builds_decision_first_view_from_typed_artifacts_not_html(
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("decision-view:v1")))
 
-    source_html = LegacyResearchCutoverFixture(root.faults.legacy_store).source_html_path(
+    source_html = root.faults.legacy_research_cutover().source_html_path(
         result.research_run_id
     ).read_bytes()
 
@@ -415,9 +428,9 @@ def test_formal_json_and_html_share_the_exact_decision_view(
     result = root.research.handle(StartResearchWorkflow(_request("decision-view:canonical-presentation")))
 
     payload = json.loads(
-        _artifact_bytes(root, result.json_artifact_id)
+        root.archive.decision_view(result.workflow_run_id).json_bytes
     )
-    html = _artifact_bytes(root, result.html_artifact_id).decode("utf-8")
+    html = root.archive.decision_view(result.workflow_run_id).html_bytes.decode("utf-8")
     embedded = re.search(
         r'<script type="application/json" '
         r'id="research-decision-view">(.*?)</script>',
@@ -559,7 +572,7 @@ def test_workspace_exposes_parallel_historical_view_versions(tmp_path: Path) -> 
     assert len({view["view_id"] for view in views}) == 2
     assert len({view["valuation_artifact_record_id"] for view in views}) == 2
     second_payload = json.loads(
-        _artifact_bytes(root, second.json_artifact_id)
+        root.archive.decision_view(second.workflow_run_id).json_bytes
     )
     assert second_payload["model_identity"] == "company-outlook-model@2"
     root.close()

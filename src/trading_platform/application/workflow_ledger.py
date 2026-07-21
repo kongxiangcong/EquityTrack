@@ -279,6 +279,11 @@ class ObjectInventoryQuery:
 
 
 @dataclass(frozen=True)
+class WorkflowDiagnosticQuery:
+    diagnostic_artifact_id: str
+
+
+@dataclass(frozen=True)
 class PersistenceCountsQuery:
     pass
 
@@ -530,6 +535,7 @@ LedgerQuery: TypeAlias = (
     | ResearchViewCutoverCompleteQuery
     | NonterminalWorkflowQuery
     | ObjectInventoryQuery
+    | WorkflowDiagnosticQuery
     | PersistenceCountsQuery
     | ArtifactBundlePreviewQuery
     | ProjectionPreviewQuery
@@ -613,6 +619,8 @@ class WorkflowLedgerPort(Protocol):
     def load(self, query: NonterminalWorkflowQuery) -> bool: ...
     @overload
     def load(self, query: ObjectInventoryQuery) -> tuple[DurableObject, ...]: ...
+    @overload
+    def load(self, query: WorkflowDiagnosticQuery) -> Mapping[str, object]: ...
     @overload
     def load(self, query: PersistenceCountsQuery) -> Mapping[str, object]: ...
     @overload

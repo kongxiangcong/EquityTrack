@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -67,12 +69,12 @@ def test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity(tmp_path
     assert result.freshness is FreshnessStatus.VALID and result.quality is QualityStatus.PASS
     assert result.coverage == type(result.coverage)(expected=3, eligible=2, excluded=1, missing=0)
     assert result.disposition.raw_created == 3 and result.disposition.normalized_created > 0 and result.disposition.snapshot_created
-    cursor_times = {tuple(row) for row in root.faults.adapter_connection.execute("SELECT dataset,advanced_at FROM sync_cursor")}
+    cursor_times = {tuple(row) for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT dataset,advanced_at FROM sync_cursor")}
     replay = root.data.sync(_request("sync-2"))
     assert replay.snapshot_id == result.snapshot_id
     assert replay.disposition.raw_reused == 3 and replay.disposition.normalized_reused > 0 and replay.disposition.snapshot_reused
-    assert {tuple(row) for row in root.faults.adapter_connection.execute("SELECT dataset,advanced_at FROM sync_cursor")} == cursor_times
-    connection = root.faults.adapter_connection  # production composition state verified through persisted contracts
+    assert {tuple(row) for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT dataset,advanced_at FROM sync_cursor")} == cursor_times
+    connection = SQLiteOwningAdapterFixture(root.data_root)  # production composition state verified through persisted contracts
     assert connection.execute("SELECT count(*) FROM provider_attempt").fetchone()[0] == 6
     assert connection.execute("SELECT count(*) FROM sync_cursor").fetchone()[0] == 3
     assert connection.execute("SELECT count(*) FROM provider_attempt WHERE cursor_disposition='advanced'").fetchone()[0] == 3
@@ -92,7 +94,7 @@ def test_startup_and_unauthorized_http_provider_make_no_network_call(tmp_path: P
     result = root.data.sync(_request())
     assert calls == []
     assert result.status == "missing"
-    attempt = root.faults.adapter_connection.execute("SELECT source_identity,error_code,raw_sha256 FROM provider_attempt").fetchone()
+    attempt = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT source_identity,error_code,raw_sha256 FROM provider_attempt").fetchone()
     assert tuple(attempt) == ("compatible-gateway-not-official", "NETWORK_NOT_AUTHORIZED", None)
     root.close()
 
@@ -121,8 +123,8 @@ def test_missing_or_git_unsafe_fixture_rights_never_persist_raw(tmp_path: Path) 
     result = root.data.sync(_request())
     assert result.status is SyncStatus.MISSING
     assert result.distribution_qualification is DistributionQualification.EXTERNAL_BLOCKED
-    assert root.faults.adapter_connection.execute("SELECT count(*) FROM object_blob").fetchone()[0] == 0
-    errors = {row[0] for row in root.faults.adapter_connection.execute("SELECT error_code FROM provider_attempt")}
+    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM object_blob").fetchone()[0] == 0
+    errors = {row[0] for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT error_code FROM provider_attempt")}
     assert errors == {"PRIVATE_FIXTURE_IN_GIT_WORKTREE"}
     root.close()
 
@@ -138,8 +140,8 @@ def test_same_authority_source_conflict_blocks_new_revision_and_cursor(tmp_path:
     second = PlatformTaskFixture(tmp_path, providers=(second_provider,), fixture_rights=_rights("p2", "source:p2"))
     result = second.data.sync(_request("conflict"))
     assert result.status is SyncStatus.BLOCKED
-    assert second.faults.adapter_connection.execute("SELECT count(*) FROM data_quality_issue WHERE code='SOURCE_CONFLICT'").fetchone()[0] >= 1
-    assert second.faults.adapter_connection.execute("SELECT count(*) FROM sync_cursor WHERE provider_id='p2' AND dataset='daily'").fetchone()[0] == 0
+    assert SQLiteOwningAdapterFixture(second.data_root).execute("SELECT count(*) FROM data_quality_issue WHERE code='SOURCE_CONFLICT'").fetchone()[0] >= 1
+    assert SQLiteOwningAdapterFixture(second.data_root).execute("SELECT count(*) FROM sync_cursor WHERE provider_id='p2' AND dataset='daily'").fetchone()[0] == 0
     second.close()
 
 
@@ -159,12 +161,12 @@ def test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path(tm
     result = root.data.sync(replace(_request("authorized-live"), network_authorized=True))
     assert result.status is SyncStatus.MISSING
     assert calls == ["trade_cal", "stock_basic", "daily"]
-    row = root.faults.adapter_connection.execute("SELECT open_decimal,close_decimal,volume_decimal,amount_decimal FROM ohlcv_version").fetchone()
+    row = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT open_decimal,close_decimal,volume_decimal,amount_decimal FROM ohlcv_version").fetchone()
     assert tuple(row) == ("88.51", "82.33", "221879.03", "1926373.75544")
-    attempts_json = json.dumps([dict(row) for row in root.faults.adapter_connection.execute("SELECT * FROM provider_attempt")])
+    attempts_json = json.dumps([dict(row) for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT * FROM provider_attempt")])
     assert "not-logged-secret" not in attempts_json
     assert "preconfigured_tushare_compatible_non_official" in attempts_json
-    assert root.faults.adapter_connection.execute("SELECT count(*) FROM data_snapshot_member").fetchone()[0] == 0
+    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM data_snapshot_member").fetchone()[0] == 0
     root.close()
 
 
@@ -196,7 +198,7 @@ def test_revision_creates_parallel_version_and_new_snapshot(tmp_path: Path) -> N
     second_root = _root(tmp_path, _payloads("83.00"))
     second = second_root.data.sync(_request("sync-revision"))
     assert second.snapshot_id != first.snapshot_id
-    revisions = second_root.faults.adapter_connection.execute("SELECT revision_no FROM normalized_version nv JOIN normalized_record nr USING(normalized_record_id) WHERE nr.dataset='daily' AND nr.natural_key='security_yihua:2026-07-10:none' ORDER BY revision_no").fetchall()
+    revisions = SQLiteOwningAdapterFixture(second_root.data_root).execute("SELECT revision_no FROM normalized_version nv JOIN normalized_record nr USING(normalized_record_id) WHERE nr.dataset='daily' AND nr.natural_key='security_yihua:2026-07-10:none' ORDER BY revision_no").fetchall()
     assert [row[0] for row in revisions] == [1, 2, 3]
     second_root.close()
 
@@ -226,10 +228,10 @@ def test_empty_rate_limit_and_schema_drift_do_not_advance_cursor_and_fallback_at
         root.watchlist.add(f"watch:{stable_id}", SecurityIdentity(stable_id, "SZSE", code, "CNY", "2010-01-01"))
     result = root.data.sync(_request())
     assert result.status is SyncStatus.COMPLETE
-    attempts = root.faults.adapter_connection.execute("SELECT provider_id,status,error_code FROM provider_attempt ORDER BY rowid").fetchall()
+    attempts = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT provider_id,status,error_code FROM provider_attempt ORDER BY rowid").fetchall()
     assert any(tuple(row) == ("empty", "complete", "EMPTY") for row in attempts)
     assert any(tuple(row) == ("limited", "rate_limited", "RATE_LIMITED") for row in attempts)
-    assert root.faults.adapter_connection.execute("SELECT count(*) FROM sync_cursor WHERE provider_id IN ('empty','limited')").fetchone()[0] == 0
+    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM sync_cursor WHERE provider_id IN ('empty','limited')").fetchone()[0] == 0
     root.close()
 
 
@@ -242,6 +244,6 @@ def test_private_fixture_rights_are_preserved_without_upgrading_redistribution(t
     private_result = root.data.sync(_request())
     assert private_result.status is SyncStatus.COMPLETE
     assert private_result.distribution_qualification is DistributionQualification.EXTERNAL_BLOCKED
-    recorded = root.faults.adapter_connection.execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM fixture_rights_profile").fetchall()
+    recorded = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM fixture_rights_profile").fetchall()
     assert recorded and all(tuple(row) == (0, 0) for row in recorded)
     root.close()

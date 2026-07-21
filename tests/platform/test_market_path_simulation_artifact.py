@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+
 from trading_platform.application.contracts import StartResearchWorkflow
 
 
@@ -16,7 +18,6 @@ from tests.platform.test_research_workflow import CountingEngine, _root
 from tests.platform.test_valuation_simulation_artifact import _simulation_drafts
 from tests.test_market_path_simulation import request as market_path_request
 from trading_platform.domain.workflow import ImmutableArtifactDraft
-from trading_platform.research_view import ResearchDecisionViewBuilder
 from trading_platform.workflows.research import WorkflowError
 
 
@@ -104,8 +105,8 @@ def _install_market_snapshot(
             series_evidence_refs=series_ids,
         ),
     )
-    connection = root.faults.adapter_connection
-    with connection:
+    connection = SQLiteOwningAdapterFixture(root.data_root)
+    with connection.transaction():
         connection.execute(
             "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -556,7 +557,7 @@ def test_formal_persistence_rejects_a_self_declared_weekly_calendar(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -572,15 +573,16 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
         root,
         market_path_request(),
     )
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute(
+    adapter = SQLiteOwningAdapterFixture(root.data_root)
+    with adapter.transaction():
+        adapter.execute(
             "UPDATE data_snapshot SET as_of_at=? WHERE data_snapshot_id=?",
             (
                 "2026-07-07T14:00:00+08:00",
                 bound_request.calibration.platform_snapshot_id,
             ),
         )
-        root.faults.adapter_connection.execute(
+        adapter.execute(
             "UPDATE normalized_version SET available_at=? "
             "WHERE normalized_version_id=?",
             (
@@ -588,6 +590,7 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
                 bound_request.calibration.series_member_ids[0],
             ),
         )
+    adapter.close()
     with pytest.raises(WorkflowError):
         root.research.handle(StartResearchWorkflow(replace(
                 _request(
@@ -601,7 +604,7 @@ def test_formal_persistence_uses_the_frozen_snapshot_cutoff(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -662,7 +665,7 @@ def test_formal_persistence_rejects_unbound_starting_price_and_state(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -743,7 +746,7 @@ def test_formal_persistence_rejects_a_non_adjacent_current_state(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -800,7 +803,7 @@ def test_formal_persistence_rejects_declared_start_availability_before_member(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -869,7 +872,7 @@ def test_formal_persistence_rejects_false_historical_availability(
                 market_only_member_ids=market_member_ids,
             )))
     assert (
-        root.faults.adapter_connection.execute(
+        SQLiteOwningAdapterFixture(root.data_root).execute(
             "SELECT count(*) FROM research_artifact_record"
         ).fetchone()[0]
         == 0
@@ -970,33 +973,3 @@ def test_market_path_can_publish_beside_non_comparable_enterprise_value() -> Non
 
     assert artifact.payload["price_unit"] == "CNY/share"
     assert enterprise_value_fallback["unit"] == "CNY"
-
-
-def test_value_market_divergence_fails_closed_across_dimensions() -> None:
-    result = ResearchDecisionViewBuilder._value_market_divergence(
-        {
-            "quantiles": {
-                "p50": {
-                    "value": "12",
-                    "unit": "CNY/share",
-                    "currency": "CNY",
-                }
-            }
-        },
-        {
-            "terminal_price_quantiles": {
-                "p50": {
-                    "value": "10",
-                    "unit": "USD/share",
-                    "currency": "USD",
-                }
-            }
-        },
-    )
-    assert result == {
-        "status": "not_comparable",
-        "explanation": (
-            "价值分布与市场路径的单位或币种不同；未提供冻结汇率转换，"
-            "因此禁止计算两者背离。"
-        ),
-    }

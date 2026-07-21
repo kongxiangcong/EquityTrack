@@ -71,7 +71,9 @@ def test_health_cli_uses_named_task_and_preserves_json_envelope(tmp_path: Path) 
     assert envelope["result"]["capabilities"]["persistence"] == "available"
 
 
-def test_named_task_openers_never_bootstrap_or_migrate_implicitly(tmp_path: Path) -> None:
+def test_named_task_openers_never_bootstrap_or_migrate_implicitly(
+    tmp_path: Path,
+) -> None:
     data_root = tmp_path / "uninitialized"
     with pytest.raises(OperationError) as caught:
         with open_platform_health(data_root):
@@ -95,22 +97,24 @@ def test_cli_imports_public_named_tasks_not_root_facade_or_persistence() -> None
     source = (ROOT / "src/trading_platform/cli.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = {
-        node.module or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     }
     assert "trading_platform.application.root" not in imports
     assert "trading_platform.application.facade" not in imports
-    assert not any(module.startswith("trading_platform.persistence") for module in imports)
+    assert not any(
+        module.startswith("trading_platform.persistence") for module in imports
+    )
     application_imports = {
-        module for module in imports if module.startswith("trading_platform.application")
+        module
+        for module in imports
+        if module.startswith("trading_platform.application")
     }
     assert application_imports == {"trading_platform.application"}
     assert "ProductionCompositionRoot" not in source
     assert ".facade" not in source
 
 
-def test_retired_non_web_routes_and_forwarders_are_deleted() -> None:
+def test_retired_routes_facade_ports_and_forwarders_are_deleted() -> None:
     retired = (
         ROOT / "scripts/research.py",
         ROOT / "scripts/serve_chart_workspace.py",
@@ -119,6 +123,8 @@ def test_retired_non_web_routes_and_forwarders_are_deleted() -> None:
         ROOT / "src/equity_research/report.py",
         ROOT / "src/equity_research/professional_report.py",
         ROOT / "src/trading_platform/application/root.py",
+        ROOT / "src/trading_platform/application/facade.py",
+        ROOT / "src/trading_platform/application/ports.py",
     )
     assert not any(path.exists() for path in retired)
 
@@ -126,37 +132,11 @@ def test_retired_non_web_routes_and_forwarders_are_deleted() -> None:
     assert 'trading-platform = "trading_platform.cli:main"' in project
     assert "equity_research.cli" not in project
 
-    facade_source = (
-        ROOT / "src/trading_platform/application/facade.py"
-    ).read_text(encoding="utf-8")
-    facade = next(
-        node
-        for node in ast.parse(facade_source).body
-        if isinstance(node, ast.ClassDef) and node.name == "ApplicationFacade"
-    )
-    public_methods = {
-        node.name
-        for node in facade.body
-        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
-    }
-    assert public_methods == {
-        "authorize_workspace_update",
-        "confirm_plan_draft",
-        "create_annotation",
-        "delete_annotation",
-        "get_annotation_history",
-        "get_chart_series",
-        "get_workspace",
-        "list_annotation_history",
-        "restore_annotation",
-        "revise_annotation",
-    }
-
 
 def test_application_tasks_depend_inward_and_composition_has_no_locator() -> None:
     application = ROOT / "src/trading_platform/application"
     for path in application.glob("*.py"):
-        if path.name in {"bootstrap.py", "facade.py", "ports.py"}:
+        if path.name == "bootstrap.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imports = {
@@ -177,10 +157,26 @@ def test_application_tasks_depend_inward_and_composition_has_no_locator() -> Non
 @pytest.mark.parametrize(
     ("decoder", "code", "substep"),
     (
-        (decode_watchlist_identity, "WATCHLIST_IDENTITY_INVALID", "watchlist_identity.decode"),
-        (decode_market_snapshot_command, "MARKET_SNAPSHOT_COMMAND_INVALID", "market_snapshot_command.decode"),
-        (decode_plan_evaluation_command, "PLAN_EVALUATION_COMMAND_INVALID", "plan_evaluation_command.decode"),
-        (decode_qualification_artifact, "QUALIFICATION_ARTIFACT_INVALID", "acceptance.qualification.decode"),
+        (
+            decode_watchlist_identity,
+            "WATCHLIST_IDENTITY_INVALID",
+            "watchlist_identity.decode",
+        ),
+        (
+            decode_market_snapshot_command,
+            "MARKET_SNAPSHOT_COMMAND_INVALID",
+            "market_snapshot_command.decode",
+        ),
+        (
+            decode_plan_evaluation_command,
+            "PLAN_EVALUATION_COMMAND_INVALID",
+            "plan_evaluation_command.decode",
+        ),
+        (
+            decode_qualification_artifact,
+            "QUALIFICATION_ARTIFACT_INVALID",
+            "acceptance.qualification.decode",
+        ),
     ),
 )
 def test_json_command_codecs_fail_with_stable_redacted_diagnostics(
@@ -198,9 +194,7 @@ def test_json_command_codecs_fail_with_stable_redacted_diagnostics(
 def test_research_cli_failure_is_typed_actionable_and_redacted(tmp_path: Path) -> None:
     secret = "local-secret-must-not-leak"
     request = tmp_path / "request.json"
-    request.write_text(
-        json.dumps({"unexpected": secret}), encoding="utf-8"
-    )
+    request.write_text(json.dumps({"unexpected": secret}), encoding="utf-8")
     completed = subprocess.run(
         [
             sys.executable,
@@ -266,9 +260,7 @@ def test_research_inspection_and_archive_cli_cross_named_tasks(tmp_path: Path) -
     fixture = PlatformTaskFixture(data_root)
     fixture.watchlist.add(
         "cli:watch",
-        SecurityIdentity(
-            "security_yihua", "SZSE", "002897", "CNY", "2017-09-07"
-        ),
+        SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"),
     )
     fixture.close()
     request_file = tmp_path / "request.json"

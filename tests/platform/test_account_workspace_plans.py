@@ -127,9 +127,19 @@ def test_workspace_distinguishes_position_and_plan_freezes_account_snapshot(
     }
     assert acceptance["current_slice_complete"] is True
     assert acceptance["long_term_platform_complete"] is False
-    assert root.plans.get_version(version.plan_version_id).content.account_snapshot_id == opening.portfolio_snapshot_id
+    assert (
+        root.plans.get_version(version.plan_version_id).content.account_snapshot_id
+        == opening.portfolio_snapshot_id
+    )
     server = LocalChartWorkspaceServer(
-        root.web, Path.cwd() / "web/dist", security_id, "snapshot_chart"
+        decision_workspace=root.workspace,
+        chart_workspace=root.chart,
+        chart_annotations=root.chart,
+        trade_plan=root.plans,
+        update_authorizations=root.workspace,
+        web_root=Path.cwd() / "web/dist",
+        security_id=security_id,
+        snapshot_id="snapshot_chart",
     )
     base = server.start()
     browser_model = json.loads(urlopen(base + "/api/workspace").read())
@@ -150,10 +160,7 @@ def test_watchlist_without_position_is_not_reported_as_missing_data(
     workspace = root.workspace.build("security_yihua", "snapshot_chart")
     assert workspace["security_relationship"] == "account_data_missing"
     assert workspace["current_positions"] == []
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute(
-            "INSERT INTO account VALUES('incomplete-account','local','CNY','2026-07-10','incomplete-source')"
-        )
+    root.faults.record_incomplete_account()
     assert (
         root.workspace.build("security_yihua", "snapshot_chart")[
             "security_relationship"
@@ -229,13 +236,18 @@ def test_incremental_snapshot_creates_parallel_evaluation_without_rewriting_hist
     )
     assert old_evaluation.plan_evaluation_id != new_evaluation.plan_evaluation_id
     assert (
-        root.plans.get_version(v1.plan_version_id).content.account_snapshot_id
-        is None
+        root.plans.get_version(v1.plan_version_id).content.account_snapshot_id is None
     )
     assert (
         root.plans.get_version(v2.plan_version_id).content.account_snapshot_id
         == imported.account_history_snapshot_id
     )
-    assert root.market.get_plan_evaluation(old_evaluation.plan_evaluation_id) == old_evaluation
-    assert root.market.get_plan_evaluation(new_evaluation.plan_evaluation_id) == new_evaluation
+    assert (
+        root.market.get_plan_evaluation(old_evaluation.plan_evaluation_id)
+        == old_evaluation
+    )
+    assert (
+        root.market.get_plan_evaluation(new_evaluation.plan_evaluation_id)
+        == new_evaluation
+    )
     root.close()

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import {formatPercent, formatQuantity, methodSummary, renderSandboxReport, researchViewLabel, selectResearchView} from "../src/research-view.js"
+import {formatPercent, formatQuantity, methodSummary, persistedResearchHtml, researchViewLabel, selectResearchView} from "../src/research-view.js"
 
 const view = {
   view_id: "research_view_1",
@@ -90,7 +90,7 @@ const view = {
 test("historical selection uses the persisted sandbox report without rebuilding semantics", () => {
   assert.equal(selectResearchView([view], "research_view_1"), view)
   assert.equal(selectResearchView([view], "missing"), null)
-  const report = renderSandboxReport(view)
+  const report = persistedResearchHtml(view)
   assert.equal(report, view.html_projection)
 })
 

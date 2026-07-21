@@ -6,6 +6,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
         open_account,
@@ -14,6 +15,10 @@ if TYPE_CHECKING:
         open_daily_research_cycle,
         open_data_synchronization,
         open_import_preview,
+        open_chart_annotations,
+        open_chart_workspace,
+        open_browser_acceptance_fixture,
+        open_decision_workspace,
         open_market,
         open_platform_health,
         open_platform_operations,
@@ -23,7 +28,8 @@ if TYPE_CHECKING:
         open_research_workflow,
         open_server_runtime,
         open_watchlist,
-        open_web_application,
+        open_trade_plan,
+        open_update_authorizations,
         open_workflow_inspection,
         open_workflow_runtime,
     )
@@ -44,8 +50,19 @@ if TYPE_CHECKING:
         StartResearchWorkflow,
     )
     from .research_request_codec import decode_research_workflow_request
+    from .web_tasks import (
+        ChartAnnotations,
+        ChartWorkspace,
+        DecisionWorkspace,
+        TradePlan,
+        UpdateAuthorizations,
+        WorkspaceUpdateCommand,
+    )
 
 _EXPORT_MODULES = {
+    "BrowserAcceptanceFixtureResult": ".browser_acceptance",
+    "ChartAnnotations": ".web_tasks",
+    "ChartWorkspace": ".web_tasks",
     "CommandCodecError": ".command_codecs",
     "Capability": ".contracts",
     "CapabilityStatus": ".contracts",
@@ -54,6 +71,10 @@ _EXPORT_MODULES = {
     "ResumeWorkflowCommand": ".contracts",
     "SecurityIdentity": ".contracts",
     "StartResearchWorkflow": ".contracts",
+    "DecisionWorkspace": ".web_tasks",
+    "TradePlan": ".web_tasks",
+    "UpdateAuthorizations": ".web_tasks",
+    "WorkspaceUpdateCommand": ".web_tasks",
     "decode_market_snapshot_command": ".command_codecs",
     "decode_plan_evaluation_command": ".command_codecs",
     "decode_qualification_artifact": ".command_codecs",
@@ -63,7 +84,11 @@ _EXPORT_MODULES = {
     "open_account": ".bootstrap",
     "open_account_acceptance": ".bootstrap",
     "open_account_history": ".bootstrap",
+    "open_chart_annotations": ".bootstrap",
+    "open_chart_workspace": ".bootstrap",
+    "open_browser_acceptance_fixture": ".bootstrap",
     "open_daily_research_cycle": ".bootstrap",
+    "open_decision_workspace": ".bootstrap",
     "open_data_synchronization": ".bootstrap",
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",
@@ -75,7 +100,8 @@ _EXPORT_MODULES = {
     "open_research_workflow": ".bootstrap",
     "open_server_runtime": ".bootstrap",
     "open_watchlist": ".bootstrap",
-    "open_web_application": ".bootstrap",
+    "open_trade_plan": ".bootstrap",
+    "open_update_authorizations": ".bootstrap",
     "open_workflow_inspection": ".bootstrap",
     "open_workflow_runtime": ".bootstrap",
 }

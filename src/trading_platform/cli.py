@@ -28,7 +28,11 @@ from trading_platform.application import (
     open_research_workflow,
     open_server_runtime,
     open_watchlist,
-    open_web_application,
+    open_chart_annotations,
+    open_chart_workspace,
+    open_decision_workspace,
+    open_trade_plan,
+    open_update_authorizations,
     open_workflow_inspection,
     open_workflow_runtime,
     HealthQuery,
@@ -53,40 +57,119 @@ def _parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(prog="trading-platform")
     sub = parser.add_subparsers(dest="operation", required=True)
     for name in ("bootstrap", "doctor", "migrate", "health"):
-        command = sub.add_parser(name); command.add_argument("--data-root", type=Path, required=True)
-        if name == "doctor": command.add_argument("--job-file", type=Path)
-    backup = sub.add_parser("backup"); backup.add_argument("--data-root", type=Path, required=True); backup.add_argument("--archive", type=Path, required=True)
-    restore = sub.add_parser("restore"); restore.add_argument("--archive", type=Path, required=True); restore.add_argument("--target-root", type=Path, required=True)
-    switch = sub.add_parser("switch-restored-root"); switch.add_argument("--restored-root", type=Path, required=True); switch.add_argument("--pointer-file", type=Path, required=True)
-    resume = sub.add_parser("resume"); resume.add_argument("--data-root", type=Path, required=True); resume.add_argument("--workflow-run-id", required=True); resume.add_argument("--owner-token", required=True)
-    history = sub.add_parser("history"); history.add_argument("--data-root", type=Path, required=True); history.add_argument("--workflow-run-id", required=True)
-    research = sub.add_parser("research"); research.add_argument("--data-root", type=Path, required=True); research.add_argument("--request-file", type=Path, required=True)
-    archive = sub.add_parser("archive"); archive.add_argument("--data-root", type=Path, required=True); archive.add_argument("--kind", choices=("manifest", "artifact", "source"), required=True); archive.add_argument("--id", required=True)
-    watch_add = sub.add_parser("watchlist-add"); watch_add.add_argument("--data-root", type=Path, required=True); watch_add.add_argument("--invocation-id", required=True); watch_add.add_argument("--identity-file", type=Path, required=True)
-    watch_list = sub.add_parser("watchlist-list"); watch_list.add_argument("--data-root", type=Path, required=True)
-    market_build = sub.add_parser("market-build"); market_build.add_argument("--data-root", type=Path, required=True); market_build.add_argument("--command-file", type=Path, required=True)
-    market_evaluate = sub.add_parser("market-evaluate"); market_evaluate.add_argument("--data-root", type=Path, required=True); market_evaluate.add_argument("--command-file", type=Path, required=True)
-    market_show = sub.add_parser("market-show"); market_show.add_argument("--data-root", type=Path, required=True); market_show.add_argument("--market-snapshot-id", required=True)
-    evaluation_show = sub.add_parser("evaluation-show"); evaluation_show.add_argument("--data-root", type=Path, required=True); evaluation_show.add_argument("--evaluation-id", required=True)
+        command = sub.add_parser(name)
+        command.add_argument("--data-root", type=Path, required=True)
+        if name == "doctor":
+            command.add_argument("--job-file", type=Path)
+    backup = sub.add_parser("backup")
+    backup.add_argument("--data-root", type=Path, required=True)
+    backup.add_argument("--archive", type=Path, required=True)
+    restore = sub.add_parser("restore")
+    restore.add_argument("--archive", type=Path, required=True)
+    restore.add_argument("--target-root", type=Path, required=True)
+    switch = sub.add_parser("switch-restored-root")
+    switch.add_argument("--restored-root", type=Path, required=True)
+    switch.add_argument("--pointer-file", type=Path, required=True)
+    resume = sub.add_parser("resume")
+    resume.add_argument("--data-root", type=Path, required=True)
+    resume.add_argument("--workflow-run-id", required=True)
+    resume.add_argument("--owner-token", required=True)
+    history = sub.add_parser("history")
+    history.add_argument("--data-root", type=Path, required=True)
+    history.add_argument("--workflow-run-id", required=True)
+    research = sub.add_parser("research")
+    research.add_argument("--data-root", type=Path, required=True)
+    research.add_argument("--request-file", type=Path, required=True)
+    archive = sub.add_parser("archive")
+    archive.add_argument("--data-root", type=Path, required=True)
+    archive.add_argument(
+        "--kind", choices=("manifest", "artifact", "source"), required=True
+    )
+    archive.add_argument("--id", required=True)
+    watch_add = sub.add_parser("watchlist-add")
+    watch_add.add_argument("--data-root", type=Path, required=True)
+    watch_add.add_argument("--invocation-id", required=True)
+    watch_add.add_argument("--identity-file", type=Path, required=True)
+    watch_list = sub.add_parser("watchlist-list")
+    watch_list.add_argument("--data-root", type=Path, required=True)
+    market_build = sub.add_parser("market-build")
+    market_build.add_argument("--data-root", type=Path, required=True)
+    market_build.add_argument("--command-file", type=Path, required=True)
+    market_evaluate = sub.add_parser("market-evaluate")
+    market_evaluate.add_argument("--data-root", type=Path, required=True)
+    market_evaluate.add_argument("--command-file", type=Path, required=True)
+    market_show = sub.add_parser("market-show")
+    market_show.add_argument("--data-root", type=Path, required=True)
+    market_show.add_argument("--market-snapshot-id", required=True)
+    evaluation_show = sub.add_parser("evaluation-show")
+    evaluation_show.add_argument("--data-root", type=Path, required=True)
+    evaluation_show.add_argument("--evaluation-id", required=True)
     for name in ("sync", "daily"):
-        command = sub.add_parser(name); command.add_argument("--data-root", type=Path, required=True); command.add_argument("--job-file", type=Path, required=True)
-    serve = sub.add_parser("serve"); serve.add_argument("--data-root", type=Path, required=True); serve.add_argument("--web-root", type=Path, required=True); serve.add_argument("--security-id", required=True); serve.add_argument("--snapshot-id", required=True)
-    test = sub.add_parser("test"); test.add_argument("--repo-root", type=Path, default=Path.cwd())
-    inventory = sub.add_parser("inventory"); inventory.add_argument("--repo-root", type=Path, default=Path.cwd())
-    acceptance = sub.add_parser("acceptance"); acceptance.add_argument("--data-root", type=Path, required=True); acceptance.add_argument("--fixture-manifest", type=Path, required=True); acceptance.add_argument("--repo-root", type=Path, default=Path.cwd()); acceptance.add_argument("--live-qualification-file", type=Path)
-    qualify = sub.add_parser("provider-qualify"); qualify.add_argument("--data-root", type=Path, required=True); qualify.add_argument("--job-file", type=Path, required=True); qualify.add_argument("--output", type=Path, required=True)
-    preview = sub.add_parser("import-preview"); preview.add_argument("--source", type=Path, action="append", required=True); preview.add_argument("--account-alias", required=True); preview.add_argument("--base-currency", required=True); preview.add_argument("--private-root", type=Path); preview.add_argument("--trading-session", action="append", default=[]); preview.add_argument("--repo-root", type=Path, default=Path.cwd())
-    initialize = sub.add_parser("account-initialize"); initialize.add_argument("--data-root", type=Path, required=True); initialize.add_argument("--source", type=Path, action="append", required=True); initialize.add_argument("--account-alias", required=True); initialize.add_argument("--base-currency", required=True); initialize.add_argument("--confirmed-as-of", required=True); initialize.add_argument("--private-root", type=Path, required=True); initialize.add_argument("--trading-session", action="append", required=True); initialize.add_argument("--invocation-id", required=True); initialize.add_argument("--repo-root", type=Path, default=Path.cwd())
-    account_show = sub.add_parser("account-show"); account_show.add_argument("--data-root", type=Path, required=True); account_show.add_argument("--account-id", required=True); account_show.add_argument("--repo-root", type=Path, default=Path.cwd())
-    history_import = sub.add_parser("account-history-import"); history_import.add_argument("--data-root", type=Path, required=True); history_import.add_argument("--account-id", required=True); history_import.add_argument("--source", type=Path, action="append", required=True); history_import.add_argument("--private-root", type=Path, required=True); history_import.add_argument("--trading-session", action="append", default=[]); history_import.add_argument("--invocation-id", required=True); history_import.add_argument("--repo-root", type=Path, default=Path.cwd())
-    account_acceptance = sub.add_parser("account-acceptance"); account_acceptance.add_argument("--data-root", type=Path, required=True); account_acceptance.add_argument("--account-id", required=True); account_acceptance.add_argument("--suite-artifact", type=Path, action="append", required=True); account_acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
+        command = sub.add_parser(name)
+        command.add_argument("--data-root", type=Path, required=True)
+        command.add_argument("--job-file", type=Path, required=True)
+    serve = sub.add_parser("serve")
+    serve.add_argument("--data-root", type=Path, required=True)
+    serve.add_argument("--web-root", type=Path, required=True)
+    serve.add_argument("--security-id", required=True)
+    serve.add_argument("--snapshot-id", required=True)
+    test = sub.add_parser("test")
+    test.add_argument("--repo-root", type=Path, default=Path.cwd())
+    inventory = sub.add_parser("inventory")
+    inventory.add_argument("--repo-root", type=Path, default=Path.cwd())
+    acceptance = sub.add_parser("acceptance")
+    acceptance.add_argument("--data-root", type=Path, required=True)
+    acceptance.add_argument("--fixture-manifest", type=Path, required=True)
+    acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
+    acceptance.add_argument("--live-qualification-file", type=Path)
+    qualify = sub.add_parser("provider-qualify")
+    qualify.add_argument("--data-root", type=Path, required=True)
+    qualify.add_argument("--job-file", type=Path, required=True)
+    qualify.add_argument("--output", type=Path, required=True)
+    preview = sub.add_parser("import-preview")
+    preview.add_argument("--source", type=Path, action="append", required=True)
+    preview.add_argument("--account-alias", required=True)
+    preview.add_argument("--base-currency", required=True)
+    preview.add_argument("--private-root", type=Path)
+    preview.add_argument("--trading-session", action="append", default=[])
+    preview.add_argument("--repo-root", type=Path, default=Path.cwd())
+    initialize = sub.add_parser("account-initialize")
+    initialize.add_argument("--data-root", type=Path, required=True)
+    initialize.add_argument("--source", type=Path, action="append", required=True)
+    initialize.add_argument("--account-alias", required=True)
+    initialize.add_argument("--base-currency", required=True)
+    initialize.add_argument("--confirmed-as-of", required=True)
+    initialize.add_argument("--private-root", type=Path, required=True)
+    initialize.add_argument("--trading-session", action="append", required=True)
+    initialize.add_argument("--invocation-id", required=True)
+    initialize.add_argument("--repo-root", type=Path, default=Path.cwd())
+    account_show = sub.add_parser("account-show")
+    account_show.add_argument("--data-root", type=Path, required=True)
+    account_show.add_argument("--account-id", required=True)
+    account_show.add_argument("--repo-root", type=Path, default=Path.cwd())
+    history_import = sub.add_parser("account-history-import")
+    history_import.add_argument("--data-root", type=Path, required=True)
+    history_import.add_argument("--account-id", required=True)
+    history_import.add_argument("--source", type=Path, action="append", required=True)
+    history_import.add_argument("--private-root", type=Path, required=True)
+    history_import.add_argument("--trading-session", action="append", default=[])
+    history_import.add_argument("--invocation-id", required=True)
+    history_import.add_argument("--repo-root", type=Path, default=Path.cwd())
+    account_acceptance = sub.add_parser("account-acceptance")
+    account_acceptance.add_argument("--data-root", type=Path, required=True)
+    account_acceptance.add_argument("--account-id", required=True)
+    account_acceptance.add_argument(
+        "--suite-artifact", type=Path, action="append", required=True
+    )
+    account_acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     operation = "unknown"
     try:
-        args = _parser().parse_args(argv); operation = args.operation
+        args = _parser().parse_args(argv)
+        operation = args.operation
         if operation in {"bootstrap", "doctor", "migrate"}:
             operations = open_platform_operations(args.data_root)
             if operation == "bootstrap":
@@ -150,20 +233,31 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 else:
                     result = asdict(market_task.get_plan_evaluation(args.evaluation_id))
-        elif operation == "backup": result = open_platform_operations(args.data_root).backup(args.archive)
-        elif operation == "restore": result = open_platform_operations(args.target_root).restore(args.archive, args.target_root)
-        elif operation == "switch-restored-root": result = open_platform_operations(args.restored_root).switch_restored_root(args.restored_root, args.pointer_file)
+        elif operation == "backup":
+            result = open_platform_operations(args.data_root).backup(args.archive)
+        elif operation == "restore":
+            result = open_platform_operations(args.target_root).restore(
+                args.archive, args.target_root
+            )
+        elif operation == "switch-restored-root":
+            result = open_platform_operations(args.restored_root).switch_restored_root(
+                args.restored_root, args.pointer_file
+            )
         elif operation in {"sync", "daily"}:
             if operation == "daily":
                 with open_daily_research_cycle(args.data_root, args.job_file) as daily:
                     result = daily.run().to_dict()
             else:
-                with open_data_synchronization(args.data_root, args.job_file) as synchronization:
+                with open_data_synchronization(
+                    args.data_root, args.job_file
+                ) as synchronization:
                     result = asdict(synchronization.run())
         elif operation == "test":
             npm_executable = shutil.which("npm.cmd") or shutil.which("npm")
             if npm_executable is None:
-                raise OperationError("NPM_UNAVAILABLE", "The Web test runtime is unavailable.")
+                raise OperationError(
+                    "NPM_UNAVAILABLE", "The Web test runtime is unavailable."
+                )
             event_lock = threading.Lock()
 
             def emit(event: dict[str, object]) -> None:
@@ -188,74 +282,220 @@ def main(argv: list[str] | None = None) -> int:
                 }
             print(json.dumps(envelope, ensure_ascii=True, sort_keys=True))
             return 0 if report.status == "passed" else 2
-        elif operation == "inventory": result = open_platform_operations(args.repo_root).dependency_inventory(args.repo_root)
+        elif operation == "inventory":
+            result = open_platform_operations(args.repo_root).dependency_inventory(
+                args.repo_root
+            )
         elif operation == "provider-qualify":
-            with open_provider_qualification(args.data_root, args.job_file) as qualification_task:
+            with open_provider_qualification(
+                args.data_root, args.job_file
+            ) as qualification_task:
                 qualification = qualification_task.run()
                 qualification_task.write_artifact(qualification, args.output)
             result = qualification.to_dict()
-            if qualification.status != "qualified": raise OperationError("PROVIDER_QUALIFICATION_FAILED", "Provider qualification did not pass.")
+            if qualification.status != "qualified":
+                raise OperationError(
+                    "PROVIDER_QUALIFICATION_FAILED",
+                    "Provider qualification did not pass.",
+                )
         elif operation == "acceptance":
             live_qualification = (
-                decode_qualification_artifact(
-                    args.live_qualification_file.read_bytes()
-                )
+                decode_qualification_artifact(args.live_qualification_file.read_bytes())
                 if args.live_qualification_file
                 else None
             )
-            evidence = open_acceptance_evidence(args.data_root, args.repo_root).run(args.fixture_manifest, live_qualification)
-            result = {"slice_acceptance": evidence.slice_acceptance, "manifest_sha256": evidence.manifest_sha256, "manifest_ref": evidence.manifest_path.name}
-            print(json.dumps({"ok": evidence.slice_acceptance == "passed", "operation": operation, "result": result}, ensure_ascii=False, sort_keys=True))
+            evidence = open_acceptance_evidence(args.data_root, args.repo_root).run(
+                args.fixture_manifest, live_qualification
+            )
+            result = {
+                "slice_acceptance": evidence.slice_acceptance,
+                "manifest_sha256": evidence.manifest_sha256,
+                "manifest_ref": evidence.manifest_path.name,
+            }
+            print(
+                json.dumps(
+                    {
+                        "ok": evidence.slice_acceptance == "passed",
+                        "operation": operation,
+                        "result": result,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
             return 0 if evidence.slice_acceptance == "passed" else 2
         elif operation == "import-preview":
-            result = open_import_preview(args.repo_root).preview(args.source, args.account_alias, args.base_currency, args.private_root, args.trading_session).to_safe_dict()
+            result = (
+                open_import_preview(args.repo_root)
+                .preview(
+                    args.source,
+                    args.account_alias,
+                    args.base_currency,
+                    args.private_root,
+                    args.trading_session,
+                )
+                .to_safe_dict()
+            )
         elif operation == "account-initialize":
-            result = asdict(open_account(args.data_root, args.repo_root).initialize(args.invocation_id, args.source, args.account_alias, args.base_currency, args.confirmed_as_of, args.private_root, args.trading_session))
+            result = asdict(
+                open_account(args.data_root, args.repo_root).initialize(
+                    args.invocation_id,
+                    args.source,
+                    args.account_alias,
+                    args.base_currency,
+                    args.confirmed_as_of,
+                    args.private_root,
+                    args.trading_session,
+                )
+            )
         elif operation == "account-show":
-            result = asdict(open_account(args.data_root, args.repo_root).get_detail(args.account_id))
+            result = asdict(
+                open_account(args.data_root, args.repo_root).get_detail(args.account_id)
+            )
         elif operation == "account-history-import":
-            result = asdict(open_account_history(args.data_root, args.repo_root).import_history(args.invocation_id, args.account_id, args.source, args.private_root, args.trading_session))
+            result = asdict(
+                open_account_history(args.data_root, args.repo_root).import_history(
+                    args.invocation_id,
+                    args.account_id,
+                    args.source,
+                    args.private_root,
+                    args.trading_session,
+                )
+            )
         elif operation == "account-acceptance":
-            result = {"manifest": open_account_acceptance(args.data_root, args.repo_root / "migrations").write_manifest(args.account_id, tuple(args.suite_artifact)).name}
+            result = {
+                "manifest": open_account_acceptance(
+                    args.data_root, args.repo_root / "migrations"
+                )
+                .write_manifest(args.account_id, tuple(args.suite_artifact))
+                .name
+            }
         elif operation == "serve":
-            with open_web_application(args.data_root) as web:
-                server = LocalChartWorkspaceServer(web, args.web_root, args.security_id, args.snapshot_id)
+            with (
+                open_decision_workspace(args.data_root) as decision_workspace,
+                open_chart_workspace(args.data_root) as chart_workspace,
+                open_chart_annotations(args.data_root) as chart_annotations,
+                open_trade_plan(args.data_root) as trade_plan,
+                open_update_authorizations(args.data_root) as update_authorizations,
+            ):
+                server = LocalChartWorkspaceServer(
+                    decision_workspace=decision_workspace,
+                    chart_workspace=chart_workspace,
+                    chart_annotations=chart_annotations,
+                    trade_plan=trade_plan,
+                    update_authorizations=update_authorizations,
+                    web_root=args.web_root,
+                    security_id=args.security_id,
+                    snapshot_id=args.snapshot_id,
+                )
                 try:
                     with open_server_runtime(args.data_root):
-                        url = server.start(); print(json.dumps({"ok": True, "operation": operation, "result": {"status": "serving", "url": url}}, sort_keys=True), flush=True)
+                        url = server.start()
+                        print(
+                            json.dumps(
+                                {
+                                    "ok": True,
+                                    "operation": operation,
+                                    "result": {"status": "serving", "url": url},
+                                },
+                                sort_keys=True,
+                            ),
+                            flush=True,
+                        )
                         threading.Event().wait()
-                except KeyboardInterrupt: pass
-                finally: server.close()
+                except KeyboardInterrupt:
+                    pass
+                finally:
+                    server.close()
             return 0
         else:
             if operation == "resume":
                 with open_research_workflow(args.data_root) as workflow:
                     with open_workflow_runtime(args.data_root):
-                        result = asdict(workflow.handle(ResumeWorkflowCommand(args.workflow_run_id, args.owner_token)))
+                        result = asdict(
+                            workflow.handle(
+                                ResumeWorkflowCommand(
+                                    args.workflow_run_id, args.owner_token
+                                )
+                            )
+                        )
             else:
                 with open_workflow_inspection(args.data_root) as inspection:
                     result = asdict(inspection.inspect(args.workflow_run_id))
-        if operation in {"bootstrap", "doctor", "migrate"} and result.get("status") != "passed":
-            raise OperationError("DOCTOR_FAILED" if operation != "migrate" else "MIGRATION_VALIDATION_FAILED", ",".join(result.get("errors", ())))
+        if (
+            operation in {"bootstrap", "doctor", "migrate"}
+            and result.get("status") != "passed"
+        ):
+            raise OperationError(
+                (
+                    "DOCTOR_FAILED"
+                    if operation != "migrate"
+                    else "MIGRATION_VALIDATION_FAILED"
+                ),
+                ",".join(result.get("errors", ())),
+            )
         if operation == "daily" and result["doctor"]["status"] != "passed":
-            raise OperationError("DAILY_DOCTOR_FAILED", ",".join(result["doctor"]["errors"]))
-        print(json.dumps({"ok": True, "operation": operation, "result": result}, ensure_ascii=False, sort_keys=True, default=str))
+            raise OperationError(
+                "DAILY_DOCTOR_FAILED", ",".join(result["doctor"]["errors"])
+            )
+        print(
+            json.dumps(
+                {"ok": True, "operation": operation, "result": result},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
         return 0
-    except (OperationError, ValueError, KeyError, RuntimeError, OSError, sqlite3.DatabaseError, zipfile.BadZipFile, TypeError, AttributeError, json.JSONDecodeError) as error:
+    except (
+        OperationError,
+        ValueError,
+        KeyError,
+        RuntimeError,
+        OSError,
+        sqlite3.DatabaseError,
+        zipfile.BadZipFile,
+        TypeError,
+        AttributeError,
+        json.JSONDecodeError,
+    ) as error:
         code = getattr(error, "code", type(error).__name__.upper())
         diagnostic = {
             name: getattr(error, name)
             for name in ("substep", "cause_type", "workflow_run_id")
             if getattr(error, name, None) is not None
         }
-        payload = {"code": code, "message": "Operation failed; inspect the typed code and local diagnostics."}
+        payload = {
+            "code": code,
+            "message": "Operation failed; inspect the typed code and local diagnostics.",
+        }
         if diagnostic:
             payload["diagnostic"] = diagnostic
-        print(json.dumps({"ok": False, "operation": operation, "error": payload}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {"ok": False, "operation": operation, "error": payload},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 2
     except Exception:
-        print(json.dumps({"ok": False, "operation": operation, "error": {"code": "UNEXPECTED_OPERATION_FAILURE", "message": "Operation failed; inspect local diagnostics."}}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "operation": operation,
+                    "error": {
+                        "code": "UNEXPECTED_OPERATION_FAILURE",
+                        "message": "Operation failed; inspect local diagnostics.",
+                    },
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 3
 
 
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

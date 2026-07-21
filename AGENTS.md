@@ -16,7 +16,7 @@ apply especially to `skills/` and the `equity-researcher` skill.
 ### One Canonical Path
 
 - `AGENTS.md` is the sole project-wide Agent rule source. Do not create a second `agent.md`, nested replacement rule set, or conflicting operating guide.
-- `skills/SKILL.md` is the sole active Codex/Skill control-plane entry. Platform maintenance uses `python -m trading_platform.cli`; formal application use crosses task-level interfaces owned by `ApplicationFacade` and the typed domain contracts behind it.
+- `skills/SKILL.md` is the sole active Codex/Skill control-plane entry. Platform maintenance uses `python -m trading_platform.cli`; formal application use crosses the named task interfaces in `trading_platform.application` and the typed domain contracts behind them.
 - Every capability has one canonical command path, one application path, one persistence path, and one presentation model. Do not add a second CLI, script wrapper, renderer, schema, database access route, or direct-call shortcut for the same behavior.
 - README, Skill instructions, examples, tests, and runtime code must name the same current path. Update or delete stale instructions in the same change that replaces an interface.
 
@@ -32,7 +32,7 @@ apply especially to `skills/` and the `equity-researcher` skill.
 ### Deep Modules and Dependency Direction
 
 - Prefer deep modules: a small task-level interface that hides substantial implementation and gives callers leverage. Apply the deletion test: if deleting a module merely moves the same calls into its callers, the module is shallow and should not exist.
-- Do not expand `ApplicationFacade` by mirroring every method of each backing object. Add a facade operation only when it represents a complete user/application task and owns cross-module policy or orchestration.
+- Task-level interfaces must not mirror every method of each backing object. Add an application task operation only when it represents a complete user/application task and owns cross-module policy or orchestration.
 - Introduce a port only at a real seam with justified production and test adapters. Do not create speculative interfaces or one-implementation abstractions.
 - Keep dependencies pointing inward: CLI/Web/provider/filesystem adapters -> application interface -> domain modules. Persistence implements domain/application ports. Domain code must not import CLI, Web, concrete persistence, or presentation code.
 - Treat `equity_research` deterministic calculations as implementation behind the platform research task, not as an alternative application entry. Narrow its public exports to contracts genuinely required across the seam.
@@ -53,15 +53,6 @@ apply especially to `skills/` and the `equity-researcher` skill.
 - Long-running test and maintenance commands must expose substep progress, suite identity, duration, and the underlying redacted failure evidence while retaining one stable top-level command.
 - Verification is proportional to risk and runs through public interfaces. Report the exact commands, passing and failing counts, timeouts, skipped external checks, and any generated artifacts; never convert an incomplete or timed-out run into a pass.
 - Before completion, inspect `git status` and the final diff. Preserve unrelated user changes and never treat a dirty working tree as permission to rewrite or clean files outside the task.
-
-### Current Cleanup Priorities
-
-- Retire the legacy V3/file CLI route, legacy renderers, free-form context adapter, and duplicate `equity-research`/`scripts/research.py` entrypoints after migrating their remaining callers and fixtures. Do not add features to these paths.
-- Replace the broad, mostly delegating `ApplicationFacade` surface with cohesive task-level operations, and reduce the oversized `equity_research` package export surface.
-- Decompose the multi-responsibility forecast, scenario valuation, workflow repository, workflow execution, and research-view modules into deep domain modules without adding forwarding layers.
-- Separate persistence mechanics from artifact/domain validation currently concentrated in the workflow repository; keep transactions in persistence and invariants in the owning domain module.
-- Rewrite usage documentation around the formal platform route. Historical behavior belongs in Git history or migration fixtures, not the default README or active Skill flow.
-- Delete each cleanup-priority bullet when the underlying violation is actually removed; do not leave stale debt descriptions in this file.
 
 ## Financial Output Boundary
 

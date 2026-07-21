@@ -129,7 +129,7 @@ class AccountOpeningService:
         alias=preview.account_alias
         source_items={item.role:item for item in preview.files}
         for item in preview.files:
-            payload=(Path(private_root).resolve()/"sources/sha256"/item.source_object_sha256[:2]/item.source_object_sha256).read_bytes()
+            payload=self._read_private_object(private_root, item.source_object_sha256)
             for retry in range(40):
                 try:
                     published=store.workflow_ledger.commit_artifacts(GenericObjectCommit(payload)).sha256; break
@@ -204,11 +204,24 @@ class AccountOpeningService:
         return AccountOpeningResult(account_id,account["import_batch_id"],portfolio["portfolio_snapshot_id"],account["confirmed_as_of"],cash["amount_decimal"],positions,count,tuple(json.loads(portfolio["limitations_json"])))
 
     @staticmethod
+    def _read_private_object(private_root: Path, digest: str) -> bytes:
+        path = Path(private_root).resolve() / "sources/sha256" / digest[:2] / digest
+        for attempt in range(40):
+            try:
+                return path.read_bytes()
+            except PermissionError:
+                if attempt == 39:
+                    raise
+                time.sleep(0.05)
+        raise AssertionError("unreachable")
+
+    @staticmethod
     def _rows(preview, private_root: Path) -> dict[str,list[list[str]]]:
         result={}
         for item in preview.files:
-            path=Path(private_root).resolve()/"sources/sha256"/item.source_object_sha256[:2]/item.source_object_sha256
-            payload=path.read_bytes()
+            payload=AccountOpeningService._read_private_object(
+                private_root, item.source_object_sha256
+            )
             if hashlib.sha256(payload).hexdigest()!=item.source_object_sha256: raise AccountOpeningError("SOURCE_OBJECT_HASH_MISMATCH")
             lines=payload.decode("gb18030").splitlines(); header=lines[0].split("\t");
             if header[-1]=="": header.pop()

@@ -19,7 +19,6 @@ from trading_platform.research_view import ResearchDecisionView
 from tests.platform.test_outlook_artifacts import _request
 from tests.platform.test_research_workflow import (
     CountingEngine,
-    _artifact_bytes,
     _root,
 )
 
@@ -30,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _canonical_view(tmp_path: Path) -> ResearchDecisionView:
     root = _root(tmp_path / "store", CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("valuation-workbook:canonical")))
-    payload = json.loads(_artifact_bytes(root, result.json_artifact_id))
+    payload = json.loads(root.archive.decision_view(result.workflow_run_id).json_bytes)
     root.close()
     return ResearchDecisionView.from_dict(payload)
 

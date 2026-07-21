@@ -2930,6 +2930,22 @@ class DeterministicScenarioResult:
         }
 
 
+@dataclass(frozen=True)
+class DataInsufficientScenarioRequest:
+    forecast_graph: ForecastGraph
+    horizon: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.forecast_graph.template_id != "data_insufficient@1"
+            or not self.horizon.endswith("E")
+        ):
+            raise ScenarioInvariantError(
+                "VALUATION_DATA_INSUFFICIENT_INPUT_INVALID",
+                "Blocked valuation requires a canonical degraded Forecast graph.",
+            )
+
+
 class MethodBlocked(ValueError):
     pass
 

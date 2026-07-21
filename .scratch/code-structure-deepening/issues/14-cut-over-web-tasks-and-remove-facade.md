@@ -4,22 +4,38 @@
 
 **Blocked by:** 13 — 切换 CLI application tasks 并退役旧研究路径.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Web server构造时显式接收窄的 DecisionWorkspace、ChartWorkspace、ChartAnnotations、TradePlan/Plan Confirmation 与 update-authorization interfaces，不接收 root、container、Facade 或 nullable backing object。
-- [ ] GET routes 只投影 task 返回的 canonical workspace views；POST annotation/plan routes只调用一个 typed lifecycle command，不读取 history、series 或 storage后自行决定领域操作。
-- [ ] chart、annotation、TradePlan、PlanEvaluation、AccountSnapshot、MarketSnapshot、ResearchRun、WorkflowRun 与 DecisionView 的现有 HTTP shapes、immutable history、typed failures、安全和金融边界保持稳定。
-- [ ] production browser verifier通过 production bootstrap与canonical fixture tasks启动真实本地 server，不导入 test-private bootstrap/helper。
-- [ ] 所有 production/test callers 已迁移后，`ApplicationFacade`、mirror ports、root Facade access、private store/repository exposure、nullable backing objects与 forwarding assertions全部删除并搜索清零。
-- [ ] composition bootstrap只保留 wiring/lifetime；删除 Facade后不得出现 replacement bus、service locator、generic task bag、compatibility wrapper、dual route 或 adapter-side business workflow。
-- [ ] chart、plan 与 market persistence 的 direct-storage coverage只存在于各自 owning repository adapter tests；application/Web journeys只经 public tasks验证。
-- [ ] Web source tests覆盖 canonical projections、mutation lifecycle、authorization、security headers、keyboard、narrow viewport 与 reduced motion；build output从当前 source重新生成，依赖、lock、license与third-party notices无漂移。
-- [ ] 静态 release gate执行 diff/whitespace、AST dependency与forbidden-symbol检查；active runtime、tests、scripts和文档对 Facade、旧 workflow/repository、compatibility decoder、duplicate renderer、旧 CLI/script、root getter与被直接测试的 private helpers零命中。
-- [ ] canonical full Python verification 的全部 suites通过，测试清单中的每项恰好执行一次；Web tests与production build通过。任何 skipped、timeout、external check未运行或 nonzero 都不得记录为 pass。
-- [ ] bundled workbook runtime验收为4 passed、0 skipped，并覆盖 exact canonical DecisionView、reconciliation和tamper failures。
-- [ ] 真实 Chrome/Edge CDP验收覆盖HTTP、reload、server restart、chart/annotation lifecycle、plan confirmation、workspace DecisionView、security headers、keyboard、narrow viewport与reduced motion，并生成不泄露私密路径的 evidence。
-- [ ] fresh、prior-version fixture与created/reused populated roots均通过 canonical `backup -> migrate -> doctor -> history/archive -> backup -> restore -> doctor`，验证backup hashes/counts、database integrity、object hashes、GraphIdentity@2共存、source pointers、唯一 decision manifest、fault rollback与exact retry。
-- [ ] release-acceptance suite为0 skipped，随后canonical acceptance CLI在fresh root和fixture manifest上通过ledger、全部criteria、command identity、browser/backup/legacy-replacement evidence与immutable manifest自校验；provider不可用只能明确记录为`external_blocked`。
-- [ ] 最终行为/failure矩阵覆盖create/replay/conflict、restart、workflow lifecycle、artifact corruption、Forecast archetypes、Scenario方法族、DecisionView permission/comparability、chart/plan/account/market history、CLI JSON、HTTP security与金融输出边界，并保留owning module typed code与redacted substep evidence。
-- [ ] 最终检查确认README、Skill、examples、tests、runtime、dependencies、lock、notices与built assets只描述一个current path；无关dirty changes未被清理、覆盖、暂存或纳入本票。
-- [ ] 本票作为一个commit完成remaining caller cutover、Facade删除和全部release proof；任何未通过 gate、未声明真实 caller或无法安全迁移的数据都保持本票未完成，不以fallback/alias绕过。
+- [x] Web server构造时显式接收窄的 DecisionWorkspace、ChartWorkspace、ChartAnnotations、TradePlan/Plan Confirmation 与 update-authorization interfaces，不接收 root、container、Facade 或 nullable backing object。
+- [x] GET routes 只投影 task 返回的 canonical workspace views；POST annotation/plan routes只调用一个 typed lifecycle command，不读取 history、series 或 storage后自行决定领域操作。
+- [x] chart、annotation、TradePlan、PlanEvaluation、AccountSnapshot、MarketSnapshot、ResearchRun、WorkflowRun 与 DecisionView 的现有 HTTP shapes、immutable history、typed failures、安全和金融边界保持稳定。
+- [x] production browser verifier通过 production bootstrap与canonical fixture tasks启动真实本地 server，不导入 test-private bootstrap/helper。
+- [x] 所有 production/test callers 已迁移后，`ApplicationFacade`、mirror ports、root Facade access、private store/repository exposure、nullable backing objects与 forwarding assertions全部删除并搜索清零。
+- [x] composition bootstrap只保留 wiring/lifetime；删除 Facade后不得出现 replacement bus、service locator、generic task bag、compatibility wrapper、dual route 或 adapter-side business workflow。
+- [x] chart、plan 与 market persistence 的 direct-storage coverage只存在于各自 owning repository adapter tests；application/Web journeys只经 public tasks验证。
+- [x] Web source tests覆盖 canonical projections、mutation lifecycle、authorization、security headers、keyboard、narrow viewport 与 reduced motion；build output从当前 source重新生成，依赖、lock、license与third-party notices无漂移。
+- [x] 静态 release gate执行 diff/whitespace、AST dependency与forbidden-symbol检查；active runtime、tests、scripts和文档对 Facade、旧 workflow/repository、compatibility decoder、duplicate renderer、旧 CLI/script、root getter与被直接测试的 private helpers零命中。
+- [x] canonical full Python verification 的全部 suites通过，测试清单中的每项恰好执行一次；Web tests与production build通过。任何 skipped、timeout、external check未运行或 nonzero 都不得记录为 pass。
+- [x] bundled workbook runtime验收为4 passed、0 skipped，并覆盖 exact canonical DecisionView、reconciliation和tamper failures。
+- [x] 真实 Chrome/Edge CDP验收覆盖HTTP、reload、server restart、chart/annotation lifecycle、plan confirmation、workspace DecisionView、security headers、keyboard、narrow viewport与reduced motion，并生成不泄露私密路径的 evidence。
+- [x] fresh、prior-version fixture与created/reused populated roots均通过 canonical `backup -> migrate -> doctor -> history/archive -> backup -> restore -> doctor`，验证backup hashes/counts、database integrity、object hashes、GraphIdentity@2共存、source pointers、唯一 decision manifest、fault rollback与exact retry。
+- [x] release-acceptance suite为0 skipped，随后canonical acceptance CLI在fresh root和fixture manifest上通过ledger、全部criteria、command identity、browser/backup/legacy-replacement evidence与immutable manifest自校验；provider不可用只能明确记录为`external_blocked`。
+- [x] 最终行为/failure矩阵覆盖create/replay/conflict、restart、workflow lifecycle、artifact corruption、Forecast archetypes、Scenario方法族、DecisionView permission/comparability、chart/plan/account/market history、CLI JSON、HTTP security与金融输出边界，并保留owning module typed code与redacted substep evidence。
+- [x] 最终检查确认README、Skill、examples、tests、runtime、dependencies、lock、notices与built assets只描述一个current path；无关dirty changes未被清理、覆盖、暂存或纳入本票。
+- [x] 本票作为一个commit完成remaining caller cutover、Facade删除和全部release proof；任何未通过 gate、未声明真实 caller或无法安全迁移的数据都保持本票未完成，不以fallback/alias绕过。
+
+## Implementation Evidence
+
+- Web server 现在只接收五个窄 task Protocol（`application/web_tasks.py`：DecisionWorkspace、ChartWorkspace、ChartAnnotations、TradePlan、UpdateAuthorizations）；GET routes 投影 canonical workspace views，POST routes 各调用一个 typed lifecycle command（`AnnotationLifecycleCommand`、`ConfirmPlanDraftCommand`、`WorkspaceUpdateCommand`）。`application/facade.py`、`application/ports.py` 与 root Facade access 已删除，composition bootstrap 只剩 wiring/lifetime；无 bus、locator、compatibility wrapper 或 dual route。
+- 行为声明：plan-confirmation 的领域错误现在返回 typed `422 {"error_code"}`（旧代码中 `PlanError` 是 `ValueError` 子类，先被 400 分支捕获，422 分支是不可达死代码）；annotation route 原本即为 422 typed shape，两路现已一致。其余 HTTP shapes、immutable history、typed failures 与金融边界由完整 suite 与 acceptance 证明稳定。
+- `DataInsufficientSnapshot`/`DataInsufficientForecastRequest`/`DataInsufficientScenarioRequest` 与 `forecast_actual` 归一化是 production browser acceptance fixture 的 fail-closed 基础设施；`test_browser_analysis_fixture_contains_no_fabricated_financial_facts` 证明该 fixture 不含编造财务事实。
+- `python -m trading_platform.cli test --repo-root .`（配置 bundled artifact runtime 后最终运行）在 224.971 秒内通过：core 189、platform-1 28（含 workbook 3 项）、platform-2 77、platform-3 62、platform-4 88、web 18，共 462 passed；0 skipped、1 deselected（canonical 清单自身 marker）、0 failed。此前中断残留（`_artifact_bytes` 私有引用、`PlatformStore` 缺 `migrations_root`、cutover ledger 直调、doctor dict 访问、重复 import）已修复并回归。
+- Workbook：`CODEX_ARTIFACT_NODE(.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe)` 与 `CODEX_ARTIFACT_NODE_MODULES` 下运行 `python -m pytest -q tests/platform/test_valuation_workbook_adapter.py`：4 passed、0 skipped（58.18 秒），覆盖 exact canonical DecisionView、reconciliation 与 tamper failures。
+- Web：`npm test` 18 passed、0 skipped；`npm run build` 从当前 source 复现同一 content-hashed assets；package/lock/license/THIRD_PARTY_NOTICES 无漂移。
+- 真实 Chromium CDP：`python scripts/verify_issue05_browser.py --evidence-file .scratch/code-structure-deepening/ticket14-browser-evidence-final.json` —— status passed，覆盖 HTTP、CSP/nosniff/referrer/opener headers、reload、server restart、chart/annotation ledger、plan confirmation、workspace `ResearchDecisionView@2`、keyboard focus、narrow viewport、reduced motion 与 recoverable error；evidence 不含私密路径。
+- 迁移恢复矩阵：fresh、prior-version migration fixture、created 与 reused populated roots 均通过 `backup -> migrate -> doctor -> history/archive -> backup -> restore -> doctor`（`test_release_migration_matrix_covers_fresh_prior_created_and_reused_roots` 及 acceptance persistence_migration suite），含 backup hashes/counts、object integrity、GraphIdentity@2 共存、source pointers、唯一 decision manifest、fault rollback 与 exact retry。
+- Canonical acceptance CLI（fresh root + fixture manifest）：`.scratch/code-structure-deepening/ticket14-acceptance-closeout/acceptance/acceptance-c62c396099ad3b405f68261b7a2bb8450af190e94fdaeba0deef420d3b97068c.json` —— `slice_acceptance=passed`，51 条 criteria 全部 passed，`failure_codes=[]`，9 个 suites（domain、provider_contract、persistence_migration、application_journey、fault_recovery、browser、windows_maintenance、architecture_security、legacy_regression）共 351 条 assertions；无 external_blocked。
+- 静态门禁：`git diff --check` 干净；forbidden-symbol 扫描（`ApplicationFacade|ResearchWorkflowService|WorkflowRepository|ResearchRunCompatibility|ResearchReportHtmlCompatibility|renderSandboxReport|scripts/research.py|equity-research|_financial_projections|_discount_times|_financial_from_forecast|_value_market_divergence|root.facade|root._workflow_repository`）在 src、web/src、scripts、skills、README、docs、pyproject、tests 零命中（豁免：forbidden-symbol assertion 文本、版本字符串 `equity-research@0.3.0`、包名 `personal-equity-research`、skill 名 `equity-researcher`、未跟踪用户审计文档）；AST dependency guard 由 test_runtime_skeleton 与 test_cli_application_tasks 通过。
+- 双轴 code review（票范围 03d1ffb→working tree；跨票 54b2827→working tree，Standards + Spec 并行）：22 项发现全部处置 —— 8 项修复（AGENTS.md 陈旧 Facade 描述、`renderSandboxReport` 改名 `persistedResearchHtml`、`_value_market_divergence` 私有符号改名并删除冗余私有测试（`not_comparable` 已由公共 journey 覆盖）、fixture 私有属性改为 `attach_data_repository` 公开 seam、`BrowserAcceptanceFixture.analysis_artifacts` 公开化、删除 dead `open_data_sync`/`open_forecast_review` 及未用 import、重复 PersistenceError import、`ResearchViewError` 携带 typed `.code`）；14 项判定不改并记录依据（票面要求的接口隔离、既有结构/债务、spec 不冻结文件路径、用户未跟踪文件排除等）。复审后无未处理 actionable finding。
+- 非 gate 观察：仓库无 mypy 配置，默认 mypy 运行报告 29 个文件的 346 项既存类型问题（多为未触碰旧文件），未记录为 pass 也未纳入本票范围。
+- `docs/prompts/trading_platform_codex_prompt_optimized.md`（用户产品原则编辑）、`docs/current-state-audit.md`、`CONTEXT.md`、其他 `.scratch/` effort 与启动前 dirty changes 均未纳入本票提交。

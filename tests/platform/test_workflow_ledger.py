@@ -1,13 +1,18 @@
 from trading_platform.application.contracts import StartResearchWorkflow
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
 
 import hashlib
 import ast
+import sqlite3
+import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import PersistenceError
+from trading_platform.operations import PlatformOperations
 from trading_platform.application.workflow_ledger import (
     BeginNode,
     ArtifactPayload,
@@ -16,11 +21,19 @@ from trading_platform.application.workflow_ledger import (
     StartDisposition,
     StartWorkflow,
     IntegrityScope,
+    ArtifactBundlePreviewQuery,
+    ResearchArtifactBundle,
+    ResearchRunIdentityQuery,
     WorkflowRunQuery,
 )
 from trading_platform.persistence.workflow_ledger import WorkflowLedger
 from trading_platform.domain.workflow import NodeDefinition, WorkflowDefinition
 from tests.platform.test_research_workflow import CountingEngine, _request, _root
+from tests.platform.test_outlook_artifacts import _drafts
+from test_scenario_valuation import scenario_request
+from equity_research.forecast import ForecastEngine
+from equity_research.scenario_valuation import ScenarioValuationEngine
+from trading_platform.domain.workflow import ImmutableArtifactDraft
 
 
 TEST_WORKFLOW = WorkflowDefinition(
@@ -182,7 +195,7 @@ def test_concurrent_writer_fails_closed_with_stable_busy_code(tmp_path) -> None:
 def test_scoped_audit_detects_corrupt_workflow_object(tmp_path) -> None:
     root = _root(tmp_path, CountingEngine())
     result = root.research.handle(StartResearchWorkflow(_request("ledger:audit")))
-    row = root.faults.adapter_connection.execute(
+    row = SQLiteOwningAdapterFixture(root.data_root).execute(
         "SELECT o.relative_path FROM workflow_run_ref r "
         "JOIN artifact_manifest_member m ON m.artifact_manifest_id=r.ref_id "
         "JOIN artifact a USING(artifact_id) JOIN object_blob o ON o.sha256=a.object_sha256 "
@@ -191,9 +204,13 @@ def test_scoped_audit_detects_corrupt_workflow_object(tmp_path) -> None:
     ).fetchone()
     root.faults.corrupt_object(row["relative_path"], b"corrupt")
 
-    report = root.faults.workflow_ledger.audit_integrity(
+    adapter_store = PlatformStore(
+        root.data_root, Path(__file__).parents[2] / "migrations"
+    )
+    report = adapter_store.workflow_ledger.audit_integrity(
         IntegrityScope(result.workflow_run_id)
     )
+    adapter_store.close()
 
     assert "OBJECT_INTEGRITY_FAILED" in report.errors
     root.close()
@@ -268,3 +285,115 @@ def test_workflow_persistence_has_one_public_owner_and_no_cross_seam_sql() -> No
                 violations.append(f"{relative}:{node.lineno}")
     assert violations == []
     assert dependency_violations == []
+
+
+def test_artifact_bundle_validation_replay_and_integrity_fail_closed(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path, CountingEngine())
+    result = root.research.handle(StartResearchWorkflow(_request("outlook:integrity")))
+    migrations_root = Path(__file__).parents[2] / "migrations"
+    adapter_store = PlatformStore(root.data_root, migrations_root)
+    ledger = adapter_store.workflow_ledger
+    code_identity = ledger.load(
+        ResearchRunIdentityQuery(result.research_run_id)
+    ).code_identity
+    drafts = _drafts()
+    outputs: list[tuple[str, ...]] = []
+
+    source_request = scenario_request()
+    source_graph = ForecastEngine().build(source_request.base_forecast_request)
+    unrelated_graph = replace(
+        source_graph,
+        graph_id="graph_unrelated_same_snapshot",
+        template_id="unrelated-template@999",
+    )
+    with pytest.raises(ValueError, match="RESEARCH_ARTIFACT_VALUATION_LINEAGE_INVALID"):
+        ImmutableArtifactDraft.from_scenario_valuation(
+            ScenarioValuationEngine().run(source_request),
+            forecast_graph=unrelated_graph,
+            model_identity="company-outlook-model@1",
+            policy_identity="company-outlook-policy@1",
+        )
+    foreign_graph = replace(source_graph, security_id="OTHER.SECURITY")
+    foreign_drafts = (
+        drafts[0],
+        ImmutableArtifactDraft.from_forecast_graph(
+            foreign_graph,
+            model_identity="company-outlook-model@1",
+            policy_identity="company-outlook-policy@1",
+        ),
+    )
+    with pytest.raises(ValueError, match="RESEARCH_ARTIFACT_SUBJECT_LINEAGE_MISMATCH"):
+        ledger.load(
+            ArtifactBundlePreviewQuery(
+                ResearchArtifactBundle(
+                    research_run_id=result.research_run_id,
+                    data_snapshot_id=result.research_snapshot_id,
+                    code_identity=code_identity,
+                    drafts=foreign_drafts,
+                )
+            )
+        )
+
+    def replay() -> None:
+        outputs.append(
+            ledger.load(
+                ArtifactBundlePreviewQuery(
+                    ResearchArtifactBundle(
+                        research_run_id=result.research_run_id,
+                        data_snapshot_id=result.research_snapshot_id,
+                        code_identity=code_identity,
+                        drafts=drafts,
+                    )
+                )
+            ).record_ids
+        )
+
+    threads = [threading.Thread(target=replay) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert outputs == [result.artifact_record_ids, result.artifact_record_ids]
+    assert ledger.load(
+        ArtifactBundlePreviewQuery(
+            ResearchArtifactBundle(
+                research_run_id=result.research_run_id,
+                data_snapshot_id=result.research_snapshot_id,
+                code_identity=code_identity,
+                drafts=drafts,
+            )
+        )
+    ).record_ids == result.artifact_record_ids
+
+    view = root.archive.artifact(result.artifact_record_ids[1])
+    row = adapter_store.connection.execute(
+        "SELECT o.relative_path FROM research_artifact_record r "
+        "JOIN artifact a USING(artifact_id) JOIN object_blob o ON o.sha256=a.object_sha256 "
+        "WHERE r.artifact_record_id=?",
+        (view.artifact_record_id,),
+    ).fetchone()
+    adapter_store.close()
+    (tmp_path / row[0]).write_bytes(b"corrupt")
+    with pytest.raises(PersistenceError) as integrity:
+        root.archive.artifact(view.artifact_record_id)
+    assert integrity.value.code == "OBJECT_INTEGRITY_FAILED"
+    doctor = PlatformOperations(root.data_root).doctor()
+    assert doctor["status"] == "failed"
+    assert "OBJECT_INTEGRITY_FAILED" in doctor["errors"]
+    root.close()
+
+
+def test_research_artifact_schema_and_rows_are_immutable(tmp_path: Path) -> None:
+    root = _root(tmp_path, CountingEngine())
+    result = root.research.handle(StartResearchWorkflow(_request("ledger:immutability")))
+    connection = SQLiteOwningAdapterFixture(root.data_root)
+    assert len(connection.execute("PRAGMA table_info(research_run_record)").fetchall()) == 11
+    with pytest.raises(sqlite3.IntegrityError, match="RESEARCH_ARTIFACT_IMMUTABLE"):
+        connection.execute(
+            "UPDATE research_artifact_record SET status='blocked' WHERE artifact_record_id=?",
+            (result.artifact_record_ids[0],),
+        )
+    connection.close()
+    root.close()

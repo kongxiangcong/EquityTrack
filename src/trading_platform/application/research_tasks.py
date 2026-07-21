@@ -5,12 +5,15 @@ from typing import Mapping
 from equity_research import ForecastReviewEngine, ForecastReviewRequest
 from trading_platform.application.workflow_ledger import (
     ForecastReviewCommit,
+    DecisionViewPayload,
+    DecisionViewPayloadQuery,
     ManifestQuery,
     ResearchArtifactQuery,
     ResearchPayloadQuery,
     SnapshotEvidence,
     SnapshotEvidenceQuery,
     WorkflowHistoryQuery,
+    WorkflowDiagnosticQuery,
     WorkflowLedgerPort,
 )
 from trading_platform.domain.workflow import (
@@ -31,6 +34,9 @@ class WorkflowInspection:
     def snapshot(self, data_snapshot_id: str) -> SnapshotEvidence:
         return self._ledger.load(SnapshotEvidenceQuery(data_snapshot_id))
 
+    def diagnostic(self, diagnostic_artifact_id: str) -> Mapping[str, object]:
+        return self._ledger.load(WorkflowDiagnosticQuery(diagnostic_artifact_id))
+
 
 class ResearchArchive:
     def __init__(self, ledger: WorkflowLedgerPort) -> None:
@@ -44,6 +50,9 @@ class ResearchArchive:
 
     def source_payload(self, research_run_id: str) -> Mapping[str, object]:
         return self._ledger.load(ResearchPayloadQuery(research_run_id))
+
+    def decision_view(self, workflow_run_id: str) -> DecisionViewPayload:
+        return self._ledger.load(DecisionViewPayloadQuery(workflow_run_id))
 
 
 class ForecastReview:

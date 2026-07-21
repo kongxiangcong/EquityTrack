@@ -194,9 +194,7 @@ def _dfd_forecast_request() -> ForecastRequest:
         volume=_dfd_forecast_quantity(
             "1", "units", "dfd:activity_volume", currency="N/A"
         ),
-        asp=_dfd_forecast_quantity(
-            "9434247610.47", "CNY/unit", "dfd:revenue"
-        ),
+        asp=_dfd_forecast_quantity("9434247610.47", "CNY/unit", "dfd:revenue"),
         capacity=_dfd_forecast_quantity(
             "1", "units", "dfd:activity_capacity", currency="N/A"
         ),
@@ -213,9 +211,7 @@ def _dfd_forecast_request() -> ForecastRequest:
         working_capital=_dfd_forecast_quantity(
             "2479919210.4", "CNY", "dfd:segment_working_capital"
         ),
-        depreciation=_dfd_forecast_quantity(
-            "1057319278.58", "CNY", "dfd:depreciation"
-        ),
+        depreciation=_dfd_forecast_quantity("1057319278.58", "CNY", "dfd:depreciation"),
         tax_rate=_dfd_forecast_quantity(
             "0.28714203966508835",
             "decimal",
@@ -229,37 +225,78 @@ def _dfd_forecast_request() -> ForecastRequest:
             "2479919210.4", "CNY", "dfd:opening_working_capital"
         ),
         net_ppe=_dfd_forecast_quantity("8503083657", "CNY", "dfd:net_ppe"),
-        other_assets=_dfd_forecast_quantity(
-            "8901426186.22", "CNY", "dfd:other_assets"
-        ),
+        other_assets=_dfd_forecast_quantity("8901426186.22", "CNY", "dfd:other_assets"),
         debt=_dfd_forecast_quantity("6708875673.5", "CNY", "dfd:debt"),
         other_liabilities=_dfd_forecast_quantity(
             "7214625530.61", "CNY", "dfd:other_liabilities"
         ),
-        equity=_dfd_forecast_quantity(
-            "10991530152.74", "CNY", "dfd:total_equity"
-        ),
+        equity=_dfd_forecast_quantity("10991530152.74", "CNY", "dfd:total_equity"),
     )
     bindings = (
-        ("segment", "consolidated", "volume", "consolidated_activity_volume", baseline.volume),
+        (
+            "segment",
+            "consolidated",
+            "volume",
+            "consolidated_activity_volume",
+            baseline.volume,
+        ),
         ("segment", "consolidated", "asp", "revenue", baseline.asp),
-        ("segment", "consolidated", "capacity", "consolidated_activity_capacity", baseline.capacity),
-        ("segment", "consolidated", "utilization", "consolidated_activity_utilization", baseline.utilization),
+        (
+            "segment",
+            "consolidated",
+            "capacity",
+            "consolidated_activity_capacity",
+            baseline.capacity,
+        ),
+        (
+            "segment",
+            "consolidated",
+            "utilization",
+            "consolidated_activity_utilization",
+            baseline.utilization,
+        ),
         ("segment", "consolidated", "unit_cost", "operating_cost", baseline.unit_cost),
-        ("segment", "consolidated", "operating_expense", "operating_expense", baseline.operating_expense),
+        (
+            "segment",
+            "consolidated",
+            "operating_expense",
+            "operating_expense",
+            baseline.operating_expense,
+        ),
         ("segment", "consolidated", "capex", "capex", baseline.capex),
-        ("segment", "consolidated", "working_capital", "working_capital", baseline.working_capital),
-        ("segment", "consolidated", "depreciation", "depreciation_and_amortization", baseline.depreciation),
-        ("segment", "consolidated", "tax_rate", "effective_tax_rate", baseline.tax_rate),
-        *(("company", "", metric, field_name, quantity) for metric, field_name, quantity in (
-            ("cash", "cash", opening.cash),
-            ("working_capital", "working_capital", opening.working_capital),
-            ("net_ppe", "net_ppe", opening.net_ppe),
-            ("other_assets", "other_assets", opening.other_assets),
-            ("debt", "debt", opening.debt),
-            ("other_liabilities", "other_liabilities", opening.other_liabilities),
-            ("equity", "total_equity", opening.equity),
-        )),
+        (
+            "segment",
+            "consolidated",
+            "working_capital",
+            "working_capital",
+            baseline.working_capital,
+        ),
+        (
+            "segment",
+            "consolidated",
+            "depreciation",
+            "depreciation_and_amortization",
+            baseline.depreciation,
+        ),
+        (
+            "segment",
+            "consolidated",
+            "tax_rate",
+            "effective_tax_rate",
+            baseline.tax_rate,
+        ),
+        *(
+            ("company", "", metric, field_name, quantity)
+            for metric, field_name, quantity in (
+                ("cash", "cash", opening.cash),
+                ("working_capital", "working_capital", opening.working_capital),
+                ("net_ppe", "net_ppe", opening.net_ppe),
+                ("other_assets", "other_assets", opening.other_assets),
+                ("debt", "debt", opening.debt),
+                ("other_liabilities", "other_liabilities", opening.other_liabilities),
+                ("equity", "total_equity", opening.equity),
+            )
+        ),
     )
     calculated_fields = {
         "operating_expense",
@@ -300,9 +337,11 @@ def _dfd_forecast_request() -> ForecastRequest:
             evidence_kind=(
                 "model_derived"
                 if field_name.startswith("consolidated_activity_")
-                else "source_extracted"
-                if field_name in calculated_fields
-                else "reported"
+                else (
+                    "source_extracted"
+                    if field_name in calculated_fields
+                    else "reported"
+                )
             ),
             calculation_identity=(
                 "consolidated-one-unit-normalization@1"
@@ -399,10 +438,26 @@ def _dfd_forecast_request() -> ForecastRequest:
                 )
                 for index, (text, refs) in enumerate(
                     (
-                        ("LiPF6 单吨利润", ("Fact:dfd:revenue", "Fact:dfd:operating_cost")),
-                        ("经营现金流", ("Fact:dfd:capex", "Fact:dfd:opening_working_capital")),
-                        ("电子化学品收入占比", ("Assumption:electronic_materials_option_requires_validation",)),
-                        ("电池业务盈利", ("Assumption:battery_economics_require_segment_validation",)),
+                        (
+                            "LiPF6 单吨利润",
+                            ("Fact:dfd:revenue", "Fact:dfd:operating_cost"),
+                        ),
+                        (
+                            "经营现金流",
+                            ("Fact:dfd:capex", "Fact:dfd:opening_working_capital"),
+                        ),
+                        (
+                            "电子化学品收入占比",
+                            (
+                                "Assumption:electronic_materials_option_requires_validation",
+                            ),
+                        ),
+                        (
+                            "电池业务盈利",
+                            (
+                                "Assumption:battery_economics_require_segment_validation",
+                            ),
+                        ),
                         ("债务和资本开支", ("Fact:dfd:debt", "Fact:dfd:capex")),
                     ),
                     start=1,
@@ -436,10 +491,24 @@ def _dfd_forecast_request() -> ForecastRequest:
                 )
                 for index, (text, refs) in enumerate(
                     (
-                        ("半年报现金流转正且应收库存周转改善", ("Fact:dfd:opening_working_capital",)),
-                        ("官方披露锂盐订单与单吨盈利的可持续证据", ("Fact:dfd:revenue", "Fact:dfd:operating_cost")),
-                        ("电子化学品收入占比显著提升", ("Assumption:electronic_materials_option_requires_validation",)),
-                        ("利润修复但现金流继续恶化或债务持续上升", ("Fact:dfd:debt", "Fact:dfd:capex")),
+                        (
+                            "半年报现金流转正且应收库存周转改善",
+                            ("Fact:dfd:opening_working_capital",),
+                        ),
+                        (
+                            "官方披露锂盐订单与单吨盈利的可持续证据",
+                            ("Fact:dfd:revenue", "Fact:dfd:operating_cost"),
+                        ),
+                        (
+                            "电子化学品收入占比显著提升",
+                            (
+                                "Assumption:electronic_materials_option_requires_validation",
+                            ),
+                        ),
+                        (
+                            "利润修复但现金流继续恶化或债务持续上升",
+                            ("Fact:dfd:debt", "Fact:dfd:capex"),
+                        ),
                     ),
                     start=1,
                 )
@@ -503,6 +572,7 @@ def _dfd_scenario_request():
         "2029E": ("9200000000", "10400000000", "11600000000"),
         "2030E": ("9400000000", "10400000000", "11400000000"),
     }
+
     def curve_quantity(value: str, period: str, case: str) -> ForecastQuantity:
         return replace(
             _dfd_forecast_quantity(
@@ -511,9 +581,7 @@ def _dfd_scenario_request():
                 f"dfd:cycle_curve:{period}:{case}",
                 period=period,
             ),
-            lineage_refs=(
-                f"Assumption:dfd_cycle_curve:{period}:{case}",
-            ),
+            lineage_refs=(f"Assumption:dfd_cycle_curve:{period}:{case}",),
         )
 
     curve = tuple(
@@ -528,9 +596,7 @@ def _dfd_scenario_request():
     )
     curve_assumptions = tuple(
         ForecastAssumption(
-            assumption_id=quantity.lineage_refs[0].removeprefix(
-                "Assumption:"
-            ),
+            assumption_id=quantity.lineage_refs[0].removeprefix("Assumption:"),
             description=(
                 f"Analyst {case} consolidated cycle revenue path for {point.period}; "
                 "not an observed fact or consensus estimate."
@@ -696,12 +762,13 @@ def _dfd_analysis_drafts() -> tuple[ImmutableArtifactDraft, ...]:
         item for item in valuation.payload["scenarios"] if item["role"] == "base"
     )
     method = next(
-        item for item in scenario["methods"] if item["method_id"] == "mid_cycle_ev_ebitda"
+        item
+        for item in scenario["methods"]
+        if item["method_id"] == "mid_cycle_ev_ebitda"
     )
     value_range = method["conditional_value_range"]
     fallback_values = {
-        point: value_range[point]["basis_value"]
-        for point in ("low", "base", "high")
+        point: value_range[point]["basis_value"] for point in ("low", "base", "high")
     }
     fallback = DeterministicValueFallback(
         scenario_id=scenario["scenario_id"],
@@ -715,9 +782,7 @@ def _dfd_analysis_drafts() -> tuple[ImmutableArtifactDraft, ...]:
         period=fallback_values["base"]["period"],
         output_level="basis_value",
     )
-    calibration_asset = _load_dfd(
-        "assets/dfd_income_calibration_2018_2025.json"
-    )
+    calibration_asset = _load_dfd("assets/dfd_income_calibration_2018_2025.json")
     vectors = validated_income_calibration_vectors(
         _load_dfd("assets/dfd_income_selected_cumulative_2018_2025.json"),
         calibration_asset,
@@ -761,9 +826,7 @@ def _dfd_analysis_drafts() -> tuple[ImmutableArtifactDraft, ...]:
         )
     )
     base_result = next(
-        item
-        for item in valuation_result.scenarios
-        if item.role == ScenarioRole.BASE
+        item for item in valuation_result.scenarios if item.role == ScenarioRole.BASE
     )
     terminal_revenue = base_result.forecast_graph.quantity(
         f"company.revenue.{DFD_FORECAST_PERIODS[-1]}"
@@ -858,14 +921,8 @@ def _dfd_analysis_drafts() -> tuple[ImmutableArtifactDraft, ...]:
 
 
 def _dfd_market_path_request():
-    raw = _load_dfd(
-        "assets/dfd_market_path_calibration_20260401_20260717.json"
-    )
-    rows = [
-        item
-        for item in raw["rows"]
-        if 20260520 <= item["trade_date"] < 20260717
-    ]
+    raw = _load_dfd("assets/dfd_market_path_calibration_20260401_20260717.json")
+    rows = [item for item in raw["rows"] if 20260520 <= item["trade_date"] < 20260717]
     observations = []
     previous_ref = None
     previous_close = None
@@ -895,11 +952,11 @@ def _dfd_market_path_request():
                 market_state=(
                     "warmup"
                     if previous_close is None
-                    else "risk_on"
-                    if daily_return > 0
-                    else "risk_off"
-                    if daily_return < 0
-                    else "flat"
+                    else (
+                        "risk_on"
+                        if daily_return > 0
+                        else "risk_off" if daily_return < 0 else "flat"
+                    )
                 ),
                 close_available_at=f"{session_date}T15:00:00+08:00",
                 factor_available_at=f"{session_date}T15:00:00+08:00",
@@ -909,24 +966,22 @@ def _dfd_market_path_request():
                 limit_state=(
                     "up"
                     if abs(daily_return - Decimal("0.10")) <= limit_tolerance
-                    else "down"
-                    if abs(daily_return + Decimal("0.10")) <= limit_tolerance
-                    else "none"
+                    else (
+                        "down"
+                        if abs(daily_return + Decimal("0.10")) <= limit_tolerance
+                        else "none"
+                    )
                 ),
                 corporate_action_identity=None,
                 evidence_refs=tuple(
-                    ref
-                    for ref in (evidence_ref, previous_ref)
-                    if ref is not None
+                    ref for ref in (evidence_ref, previous_ref) if ref is not None
                 ),
             )
         )
         previous_ref = evidence_ref
         previous_close = close
     assert len(observations) >= 40
-    starting_ref = (
-        "Evidence:SRC_TUSHARE_DFD_DAILY_20260717:20260717"
-    )
+    starting_ref = "Evidence:SRC_TUSHARE_DFD_DAILY_20260717:20260717"
     base = market_path_request(rows=tuple(observations), state="risk_off")
     return replace(
         base,
@@ -954,27 +1009,19 @@ def _dfd_market_path_request():
             market="SZSE",
             market_timezone="Asia/Shanghai",
             series_identity="dfd-pit-unadjusted-close-stable-factor-window@1",
-            series_evidence_refs=tuple(
-                item.evidence_refs[0] for item in observations
-            ),
+            series_evidence_refs=tuple(item.evidence_refs[0] for item in observations),
             trading_calendar_identity="szse-trade-cal-20260717@1",
             calendar_evidence_refs=tuple(
-                f"Calendar:SZSE:{item.session_date}"
-                for item in observations
+                f"Calendar:SZSE:{item.session_date}" for item in observations
             )
             + ("Calendar:SZSE:2026-07-17",),
             calendar_member_ids=tuple(
-                f"Calendar:SZSE:{item.session_date}"
-                for item in observations
+                f"Calendar:SZSE:{item.session_date}" for item in observations
             ),
-            trading_sessions=tuple(
-                item.session_date for item in observations
-            ),
+            trading_sessions=tuple(item.session_date for item in observations),
             next_session_date="2026-07-17",
             next_session_calendar_member_id="Calendar:SZSE:2026-07-17",
-            series_member_ids=tuple(
-                item.evidence_refs[0] for item in observations
-            ),
+            series_member_ids=tuple(item.evidence_refs[0] for item in observations),
             observations=tuple(observations),
             window_start=observations[0].session_date,
             window_end=observations[-1].session_date,
@@ -1037,8 +1084,7 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     research_run = root.archive.source_payload(first.research_run_id)
     assert research_run["status"] != "blocked"
     artifacts = tuple(
-        root.archive.artifact(record_id)
-        for record_id in first.artifact_record_ids
+        root.archive.artifact(record_id) for record_id in first.artifact_record_ids
     )
     assert [item.artifact_kind for item in artifacts] == [
         "DataSnapshot",
@@ -1057,7 +1103,9 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     view = root.workspace.build(
         "security_yihua",
         first.research_snapshot_id,
-    )["research_views"][0]
+    )[
+        "research_views"
+    ][0]
     assert view["story"]["what_happens"]
     assert view["key_drivers"]
     assert [item["role"] for item in view["scenarios"]] == [
@@ -1082,10 +1130,11 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     root.close()
 
     rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
-    replay = rebuilt.research.handle(StartResearchWorkflow(replace(request, invocation_id="journey:yihua:replay")))
+    replay = rebuilt.research.handle(
+        StartResearchWorkflow(replace(request, invocation_id="journey:yihua:replay"))
+    )
     replayed = tuple(
-        rebuilt.archive.artifact(record_id)
-        for record_id in replay.artifact_record_ids
+        rebuilt.archive.artifact(record_id) for record_id in replay.artifact_record_ids
     )
     assert replay.research_run_id == first.research_run_id
     assert replay.research_snapshot_id == first.research_snapshot_id
@@ -1108,18 +1157,16 @@ def test_yihua_complete_outlook_replays_after_restart(tmp_path: Path) -> None:
     rebuilt.close()
 
 
-def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path) -> None:
+def test_duofuduo_real_sources_degrade_without_inventing_dilution(
+    tmp_path: Path,
+) -> None:
     artifacts = _dfd_analysis_drafts()
-    facts = {
-        item["field_name"]: item for item in artifacts[0].payload["facts"]
-    }
+    facts = {item["field_name"]: item for item in artifacts[0].payload["facts"]}
     assert facts["revenue"]["evidence_kind"] == "reported"
     assert facts["debt"]["evidence_kind"] == "source_extracted"
     assert not facts["debt"]["derivation_refs"]
     assert not facts["debt"]["calculation_formula"]
-    assert facts["consolidated_activity_volume"]["evidence_kind"] == (
-        "model_derived"
-    )
+    assert facts["consolidated_activity_volume"]["evidence_kind"] == ("model_derived")
     assert not any(
         item["metric_id"] == "commodity_curve_price"
         for item in artifacts[0].payload["facts"]
@@ -1164,11 +1211,12 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
         ]
         for item in simulation.payload["assumptions"]
     )
-    assert len(
-        simulation.payload["dependency_model"]["calibration"][
-            "observation_vectors"
-        ]
-    ) == 28
+    assert (
+        len(
+            simulation.payload["dependency_model"]["calibration"]["observation_vectors"]
+        )
+        == 28
+    )
     assert simulation.payload["dependency_model"]["user_override_identity"] is None
     assert simulation.payload["contributions"]
 
@@ -1190,16 +1238,13 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
             artifacts,
             bound_market_request,
         ),
-        workflow_snapshot_id=(
-            bound_market_request.calibration.platform_snapshot_id
-        ),
+        workflow_snapshot_id=(bound_market_request.calibration.platform_snapshot_id),
         candidate_member_ids=market_member_ids,
         market_only_member_ids=market_member_ids,
     )
     first = root.research.handle(StartResearchWorkflow(request))
     published = tuple(
-        root.archive.artifact(record_id)
-        for record_id in first.artifact_record_ids
+        root.archive.artifact(record_id) for record_id in first.artifact_record_ids
     )
     assert [item.artifact_kind for item in published] == [
         "DataSnapshot",
@@ -1215,7 +1260,9 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
     view = root.workspace.build(
         "security_duofuduo",
         first.research_snapshot_id,
-    )["research_views"][0]
+    )[
+        "research_views"
+    ][0]
     assert view["story"]["what_happens"]
     assert view["key_drivers"]
     assert view["valuation_simulation"]["output_level"] == "basis_value"
@@ -1228,18 +1275,17 @@ def test_duofuduo_real_sources_degrade_without_inventing_dilution(tmp_path: Path
     root.close()
 
     rebuilt = PlatformTaskFixture(tmp_path, research_engine=engine)
-    replay = rebuilt.research.handle(StartResearchWorkflow(replace(request, invocation_id="journey:dfd:replay")))
+    replay = rebuilt.research.handle(
+        StartResearchWorkflow(replace(request, invocation_id="journey:dfd:replay"))
+    )
     replayed = tuple(
-        rebuilt.archive.artifact(record_id)
-        for record_id in replay.artifact_record_ids
+        rebuilt.archive.artifact(record_id) for record_id in replay.artifact_record_ids
     )
     assert replay.research_run_id == first.research_run_id
     assert replay.research_snapshot_id == first.research_snapshot_id
     assert replay.artifact_record_ids == first.artifact_record_ids
     assert tuple(item.content_hash for item in replayed) == hashes
-    replay_manifest = rebuilt.archive.manifest(
-        replay.final_manifest_id
-    )
+    replay_manifest = rebuilt.archive.manifest(replay.final_manifest_id)
     assert [item["member_role"] for item in replay_manifest.members] == [
         item["member_role"] for item in manifest.members
     ]
@@ -1273,15 +1319,13 @@ def test_duofuduo_calibration_vectors_are_recomputed_from_raw_rows() -> None:
     assert caught.value.code == "SIMULATION_CALIBRATION_PERIOD_BINDING_INVALID"
 
 
-def test_public_facade_does_not_trust_artifact_calibration_tolerance(
+def test_research_workflow_does_not_trust_artifact_calibration_tolerance(
     tmp_path: Path,
 ) -> None:
     root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
     root.watchlist.add(
         "watch:security_duofuduo",
-        SecurityIdentity(
-            "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
-        ),
+        SecurityIdentity("security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"),
     )
     drafts = _dfd_analysis_drafts()
     simulation = drafts[-1]
@@ -1312,7 +1356,7 @@ def test_public_facade_does_not_trust_artifact_calibration_tolerance(
     root.close()
 
 
-def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
+def test_research_workflow_rejects_per_share_artifacts_without_dilution_identity(
     tmp_path: Path,
 ) -> None:
     engine = CountingEngine()
@@ -1347,7 +1391,7 @@ def test_public_facade_rejects_per_share_artifacts_without_dilution_identity(
     root.close()
 
 
-def test_public_facade_rejects_deleted_calibration_kind(tmp_path: Path) -> None:
+def test_research_workflow_rejects_deleted_calibration_kind(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
     drafts = _market_path_drafts()[:4]
     simulation = drafts[-1]
@@ -1377,15 +1421,13 @@ def test_public_facade_rejects_deleted_calibration_kind(tmp_path: Path) -> None:
     root.close()
 
 
-def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
+def test_research_workflow_rejects_nested_per_share_range_without_dilution_identity(
     tmp_path: Path,
 ) -> None:
     root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
     root.watchlist.add(
         "watch:security_duofuduo",
-        SecurityIdentity(
-            "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
-        ),
+        SecurityIdentity("security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"),
     )
     drafts = _dfd_analysis_drafts()[:3]
     valuation = drafts[-1]
@@ -1417,15 +1459,13 @@ def test_public_facade_rejects_nested_per_share_range_without_dilution_identity(
     root.close()
 
 
-def test_public_facade_revalidates_forged_sufficient_result(
+def test_research_workflow_revalidates_forged_sufficient_result(
     tmp_path: Path,
 ) -> None:
     root = PlatformTaskFixture(tmp_path, research_engine=CountingEngine())
     root.watchlist.add(
         "watch:security_duofuduo",
-        SecurityIdentity(
-            "security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"
-        ),
+        SecurityIdentity("security_duofuduo", "SZSE", "002407", "CNY", "2010-05-18"),
     )
     base = _dfd_projection()
     forged = {
@@ -1442,7 +1482,9 @@ def test_public_facade_revalidates_forged_sufficient_result(
     view = root.workspace.build(
         "security_duofuduo",
         result.research_snapshot_id,
-    )["research_views"][0]
+    )[
+        "research_views"
+    ][0]
     assert view["audit"]["permissions"]["formal_per_share_valuation"] is False
     root.close()
 
@@ -1464,4 +1506,9 @@ def test_cyclical_model_golden_is_separate_from_duofuduo_evidence() -> None:
         sensitivity = {
             item.name for item in scenario.method("resource_nav").sensitivity
         }
-        assert {"commodity_price", "production_volume", "unit_cost", "maintenance_capex"} <= sensitivity
+        assert {
+            "commodity_price",
+            "production_volume",
+            "unit_cost",
+            "maintenance_capex",
+        } <= sensitivity

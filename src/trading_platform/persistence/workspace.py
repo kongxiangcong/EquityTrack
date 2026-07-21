@@ -14,6 +14,7 @@ from trading_platform.application.workflow_ledger import (
     WorkspaceWorkflowQuery,
 )
 from trading_platform.research_view import ResearchDecisionView, ResearchViewError
+from trading_platform.application.web_tasks import WorkspaceUpdateCommand
 
 
 class WorkspaceService:
@@ -36,7 +37,9 @@ class WorkspaceService:
             "SELECT requested_date,effective_session_date,freshness_status,quality_status FROM data_snapshot WHERE data_snapshot_id=?",
             (snapshot_id,),
         )
-        workflow_evidence = self.workflow_ledger.load(WorkspaceWorkflowQuery(security_id))
+        workflow_evidence = self.workflow_ledger.load(
+            WorkspaceWorkflowQuery(security_id)
+        )
         workflows = [dict(item) for item in workflow_evidence.workflows]
         evaluations = self._all(
             "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,e.outcome,e.completeness,e.created_at,e.evaluator_version,e.evaluation_policy_version FROM plan_evaluation e JOIN trade_plan_version p ON p.plan_version_id=e.plan_version_id WHERE p.security_id=? ORDER BY e.created_at",
@@ -118,7 +121,9 @@ class WorkspaceService:
         }
 
     def _research_views(self, security_id: str) -> list[dict[str, Any]]:
-        rows = self.workflow_ledger.load(WorkspaceWorkflowQuery(security_id)).artifact_uses
+        rows = self.workflow_ledger.load(
+            WorkspaceWorkflowQuery(security_id)
+        ).artifact_uses
         workflow_run_ids: dict[str, None] = {}
         for row in rows:
             workflow_run_ids.setdefault(str(row["workflow_run_id"]), None)
@@ -151,7 +156,9 @@ class WorkspaceService:
         )
         reviews: list[dict[str, Any]] = []
         for row in rows:
-            artifact = self.workflow_ledger.load(ResearchArtifactQuery(row["artifact_record_id"]))
+            artifact = self.workflow_ledger.load(
+                ResearchArtifactQuery(row["artifact_record_id"])
+            )
             reviews.append(
                 {
                     "artifact_record_id": artifact.artifact_record_id,
@@ -163,9 +170,7 @@ class WorkspaceService:
                     "reviewed_at": artifact.payload.get("reviewed_at"),
                     "status": artifact.status,
                     "model_identity": artifact.model_identity,
-                    "reviewer_identity": artifact.payload.get(
-                        "reviewer_identity"
-                    ),
+                    "reviewer_identity": artifact.payload.get("reviewer_identity"),
                     "numeric_interval_coverage": artifact.payload.get(
                         "numeric_interval_coverage"
                     ),
@@ -181,9 +186,7 @@ class WorkspaceService:
                         "driver_error_decomposition",
                         [],
                     ),
-                    "calibration_version": artifact.payload.get(
-                        "calibration_version"
-                    ),
+                    "calibration_version": artifact.payload.get("calibration_version"),
                     "interpretation": artifact.payload.get("interpretation"),
                     "diagnostics": artifact.payload.get("diagnostics", []),
                 }
@@ -198,11 +201,7 @@ class WorkspaceService:
         reviewed_targets = {
             (
                 review.get("forecast_artifact_record_id"),
-                result.get(
-                    "event_id"
-                    if key == "probability_results"
-                    else "target_id"
-                ),
+                result.get("event_id" if key == "probability_results" else "target_id"),
             )
             for review in self._forecast_reviews(security_id)
             for key in ("probability_results", "numeric_results")
@@ -217,7 +216,9 @@ class WorkspaceService:
         )
         registry: list[dict[str, Any]] = []
         for row in rows:
-            artifact = self.workflow_ledger.load(ResearchArtifactQuery(row["artifact_record_id"]))
+            artifact = self.workflow_ledger.load(
+                ResearchArtifactQuery(row["artifact_record_id"])
+            )
             for node in artifact.payload.get("nodes", ()):
                 if not isinstance(node, Mapping):
                     continue
@@ -230,17 +231,17 @@ class WorkspaceService:
                         target_id,
                     )
                     in reviewed_targets
-                    else "due"
-                    if effective_session_date
-                    and isinstance(review_date, str)
-                    and review_date <= effective_session_date
-                    else "registered"
+                    else (
+                        "due"
+                        if effective_session_date
+                        and isinstance(review_date, str)
+                        and review_date <= effective_session_date
+                        else "registered"
+                    )
                 )
                 registry.append(
                     {
-                        "forecast_artifact_record_id": (
-                            artifact.artifact_record_id
-                        ),
+                        "forecast_artifact_record_id": (artifact.artifact_record_id),
                         "target_id": target_id,
                         "kind": node.get("kind"),
                         "label": node.get("label"),
@@ -283,13 +284,11 @@ class WorkspaceService:
             return "position_data_missing"
         return "watchlist_not_held"
 
-    def authorize_update(
-        self,
-        invocation_id: str,
-        security_id: str,
-        requested_date: str,
-        effective_session_date: str,
-    ) -> dict[str, Any]:
+    def authorize(self, command: WorkspaceUpdateCommand) -> dict[str, Any]:
+        invocation_id = command.invocation_id
+        security_id = command.security_id
+        requested_date = command.requested_date
+        effective_session_date = command.effective_session_date
         if self.writer_lock is None:
             raise RuntimeError("WORKSPACE_MUTATION_UNAVAILABLE")
         with self.writer_lock.acquire(f"update-authorization:{invocation_id}"):

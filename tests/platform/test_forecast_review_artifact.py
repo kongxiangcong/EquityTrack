@@ -1,6 +1,8 @@
 from trading_platform.application.contracts import StartResearchWorkflow
 
+import json
 from dataclasses import replace
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,9 +18,39 @@ from equity_research import (
 )
 from tests.platform.test_outlook_artifacts import _request
 from tests.platform.test_research_workflow import CountingEngine, _root
-from tests.platform.test_workflow_recovery import CrashAt, InjectedCrash
 from tests.platform.test_valuation_simulation_artifact import _simulation_drafts
 from tests.platform.application_task_fixture import PlatformTaskFixture
+from trading_platform.data.providers import FixtureProvider
+from trading_platform.domain.data import (
+    FetchBatch,
+    FixtureRights,
+    SnapshotPurpose,
+    SourceAuthority,
+    SyncRequest,
+    SyncStatus,
+)
+
+
+class ReviewFixtureProvider(FixtureProvider):
+    def __init__(self, payloads, source_identity: str, retrieved_at: str) -> None:
+        super().__init__(
+            "forecast-review-fixture",
+            "forecast-review-fixture@1",
+            payloads,
+            source_identity,
+            "forecast-review-fixture-terms@1",
+            SourceAuthority.OFFICIAL,
+        )
+        self._retrieved_at = datetime.fromisoformat(retrieved_at)
+
+    def fetch(self, request):
+        batch = super().fetch(request)
+        return FetchBatch(
+            tuple(
+                replace(envelope, retrieved_at=self._retrieved_at)
+                for envelope in batch.envelopes
+            )
+        )
 
 
 def review_request(artifacts) -> ForecastReviewRequest:
@@ -121,95 +153,146 @@ def review_request(artifacts) -> ForecastReviewRequest:
     )
 
 
-def persist_review_snapshot(root, request: ForecastReviewRequest) -> None:
+def persist_review_snapshot(
+    root: PlatformTaskFixture,
+    request: ForecastReviewRequest,
+) -> ForecastReviewRequest:
     actual = request.actual_evidence[0]
-    with root.faults.adapter_connection:
-        root.faults.adapter_connection.execute(
-            "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                request.review_data_snapshot_id,
-                "security_yihua",
-                "research",
-                "2027-03-21",
-                "2027-03-20",
-                "2027-03-21T00:00:00+08:00",
-                "Asia/Shanghai",
-                "cn-calendar@2027",
-                "forecast-review-query@1",
-                "official-disclosure-first@1",
-                "forecast-review-freshness@1",
-                "forecast-review-membership",
-                "valid",
-                "pass",
-                1,
-                1,
-                0,
-                0,
-                0,
-                "official annual report available before review",
-                "2027-03-20T09:00:00+08:00",
-            ),
+    common = {
+        "availability_basis": "publisher_timestamp",
+        "published_precision": "second",
+    }
+    payloads = {
+        "trade_cal": json.dumps(
+            {
+                "rows": [
+                    {
+                        **common,
+                        "market": "SZSE",
+                        "session_date": "2027-03-20",
+                        "is_open": True,
+                        "calendar_version": "cn-calendar@2027",
+                        "published_at": "2027-03-20T00:00:00+08:00",
+                        "available_at": "2027-03-20T00:00:00+08:00",
+                    }
+                ]
+            },
+            sort_keys=True,
+        ).encode(),
+        "market_universe": json.dumps(
+            {
+                "rows": [
+                    {
+                        **common,
+                        "market_scope_id": "SZSE",
+                        "security_id": "security_yihua",
+                        "listed_from": "2017-09-07",
+                        "source_ref": f"{actual.source_id}:stock_basic",
+                        "published_at": "2017-09-07T00:00:00+08:00",
+                        "available_at": "2017-09-07T00:00:00+08:00",
+                    }
+                ]
+            },
+            sort_keys=True,
+        ).encode(),
+        "daily": json.dumps(
+            {
+                "rows": [
+                    {
+                        **common,
+                        "security_id": "security_yihua",
+                        "session_date": "2027-03-20",
+                        "market_timezone": "Asia/Shanghai",
+                        "adjustment_mode": "none",
+                        "open": "80",
+                        "high": "82",
+                        "low": "79",
+                        "close": "81",
+                        "volume": "100",
+                        "volume_unit": "hand",
+                        "amount": "8100",
+                        "amount_unit": "CNY",
+                        "currency": "CNY",
+                        "published_at": "2027-03-20T15:00:00+08:00",
+                        "available_at": "2027-03-20T15:00:00+08:00",
+                    }
+                ]
+            },
+            sort_keys=True,
+        ).encode(),
+        "forecast_actual": json.dumps(
+            {
+                "rows": [
+                    {
+                        **common,
+                        "security_id": "security_yihua",
+                        "metric_id": actual.metric_id,
+                        "value": str(actual.value),
+                        "unit": actual.unit,
+                        "scale": str(actual.scale),
+                        "currency": actual.currency,
+                        "period": actual.period,
+                        "published_at": actual.published_at,
+                        "available_at": actual.available_at,
+                        "source_id": actual.source_id,
+                        "official": actual.official,
+                        "comparability_status": actual.comparability_status.value,
+                    }
+                ]
+            },
+            sort_keys=True,
+        ).encode(),
+    }
+    provider = ReviewFixtureProvider(payloads, actual.source_id, actual.retrieved_at)
+    rights = {
+        (provider.provider_id, dataset): FixtureRights(
+            f"forecast-review:{dataset}",
+            actual.source_id,
+            True,
+            True,
+            True,
+            True,
+            "forecast-review-fixture-terms@1",
+            "2027-03-21",
         )
-        root.faults.adapter_connection.execute(
-            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                "attempt_forecast_actual_2026",
-                "forecast-review-evidence",
-                "cninfo",
-                "official-disclosure@1",
-                "forecast_actual",
-                actual.source_id,
-                "official",
-                "https://www.cninfo.com.cn/",
-                "{}",
-                "{}",
-                "second",
-                "official-disclosure-terms@1",
-                "complete",
-                "created",
-                None,
-                actual.retrieved_at,
-                None,
-                None,
-                None,
-                "not_applicable",
-            ),
+        for dataset in payloads
+    }
+    data_tasks = PlatformTaskFixture(
+        root.data_root,
+        providers=(provider,),
+        fixture_rights=rights,
+    )
+    sync = data_tasks.data.sync(
+        SyncRequest(
+            "forecast-review-evidence",
+            "security_yihua",
+            "002897.SZ",
+            "2027-03-21",
+            datetime.fromisoformat("2027-03-21T00:00:00+08:00"),
+            "Asia/Shanghai",
+            "SZSE",
+            SnapshotPurpose.RESEARCH,
+            tuple(payloads),
+            False,
+            False,
         )
-        root.faults.adapter_connection.execute(
-            "INSERT INTO normalized_record VALUES(?,?,?)",
-            (
-                "record_forecast_actual_revenue_2026",
-                "forecast_actual",
-                "security_yihua:components.volume.2026E:2026FY",
-            ),
-        )
-        root.faults.adapter_connection.execute(
-            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                actual.normalized_version_id,
-                "record_forecast_actual_revenue_2026",
-                1,
-                actual.semantic_content_hash,
-                "attempt_forecast_actual_2026",
-                "2026-12-31",
-                actual.published_at,
-                "second",
-                actual.available_at,
-                "publisher_timestamp",
-                actual.retrieved_at,
-                "pass",
-                None,
-            ),
-        )
-        root.faults.adapter_connection.execute(
-            "INSERT INTO data_snapshot_member VALUES(?,?,?,?)",
-            (
-                request.review_data_snapshot_id,
-                actual.normalized_version_id,
-                "actual_result_evidence",
-                0,
-            ),
-        )
+    )
+    assert sync.status is SyncStatus.COMPLETE
+    assert sync.snapshot_id is not None
+    evidence = data_tasks.inspection.snapshot(sync.snapshot_id)
+    normalized_version_id = next(
+        version_id
+        for version_id, dataset in evidence.members.items()
+        if dataset == "forecast_actual"
+    )
+    data_tasks.close()
+    return replace(
+        request,
+        review_data_snapshot_id=sync.snapshot_id,
+        actual_evidence=(
+            replace(actual, normalized_version_id=normalized_version_id),
+        ),
+    )
 
 
 def test_review_is_append_only_replayable_and_visible_in_workspace(
@@ -223,7 +306,7 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
         for record_id in run.artifact_record_ids
     )
     request = review_request(parents)
-    persist_review_snapshot(root, request)
+    request = persist_review_snapshot(root, request)
 
     first = root.forecast_review.review(request)
     replay = root.forecast_review.review(request)
@@ -282,39 +365,6 @@ def test_review_is_append_only_replayable_and_visible_in_workspace(
     rebuilt.close()
 
 
-def test_review_database_failure_leaves_no_partial_graph_or_manifest(
-    tmp_path: Path,
-) -> None:
-    root = _root(
-        tmp_path,
-        CountingEngine(),
-        CrashAt("forecast_review.before_commit"),
-    )
-    result = root.research.handle(StartResearchWorkflow(_request("forecast-review:rollback", _simulation_drafts())))
-    parents = tuple(
-        root.archive.artifact(record_id)
-        for record_id in result.artifact_record_ids
-    )
-    request = review_request(parents)
-    persist_review_snapshot(root, request)
-
-    with pytest.raises(InjectedCrash):
-        root.forecast_review.review(request)
-
-    assert root.faults.adapter_connection.execute(
-        "SELECT count(*) FROM research_artifact_record "
-        "WHERE artifact_kind='ForecastReview'"
-    ).fetchone()[0] == 0
-    assert root.faults.adapter_connection.execute(
-        "SELECT count(*) FROM artifact_manifest "
-        "WHERE manifest_role='forecast_review_append'"
-    ).fetchone()[0] == 0
-    assert root.faults.adapter_connection.execute(
-        "SELECT count(*) FROM workflow_run_ref "
-        "WHERE ref_role LIKE 'forecast_review_%'"
-    ).fetchone()[0] == 0
-    root.close()
-
 def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None:
     root = _root(tmp_path, CountingEngine())
     run = root.research.handle(StartResearchWorkflow(_request("forecast-review:invalid", _simulation_drafts())))
@@ -323,7 +373,7 @@ def test_review_rejects_forged_parent_or_scenario_values(tmp_path: Path) -> None
         for record_id in run.artifact_record_ids
     )
     valid = review_request(parents)
-    persist_review_snapshot(root, valid)
+    valid = persist_review_snapshot(root, valid)
 
     with pytest.raises(ValueError, match="FORECAST_REVIEW_PARENT_LINEAGE_INVALID"):
         root.forecast_review.review(

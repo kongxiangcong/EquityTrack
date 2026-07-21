@@ -9,7 +9,11 @@ from trading_platform.identity import canonical_hash
 
 
 class ResearchViewError(ValueError):
-    pass
+    """Typed research-view failure carrying a stable failure code."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        super().__init__(code if message is None else f"{code}: {message}")
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -251,7 +255,7 @@ class ResearchDecisionViewBuilder:
             if market_path is not None
             else None
         )
-        divergence_view = self._value_market_divergence(
+        divergence_view = self._divergence_view(
             simulation_view,
             market_path_view,
         )
@@ -731,7 +735,7 @@ class ResearchDecisionViewBuilder:
         }
 
     @staticmethod
-    def _value_market_divergence(
+    def _divergence_view(
         valuation_simulation: Mapping[str, Any] | None,
         market_path: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:

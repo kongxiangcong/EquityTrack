@@ -231,10 +231,13 @@ class ImmutableArtifactDraft:
         model_identity: str,
         policy_identity: str,
     ) -> ImmutableArtifactDraft:
-        from equity_research.forecast import DataSnapshot
+        from equity_research.forecast import DataInsufficientSnapshot, DataSnapshot
 
-        if not isinstance(snapshot, DataSnapshot):
-            raise TypeError("from_data_snapshot requires a typed DataSnapshot.")
+        if not isinstance(snapshot, (DataSnapshot, DataInsufficientSnapshot)):
+            raise TypeError(
+                "from_data_snapshot requires a typed DataSnapshot state."
+            )
+        insufficient = isinstance(snapshot, DataInsufficientSnapshot)
         return cls._build(
             artifact_kind="DataSnapshot",
             schema_version="DataSnapshotArtifact@1",
@@ -243,14 +246,23 @@ class ImmutableArtifactDraft:
             source_identity=snapshot.snapshot_id,
             model_identity=model_identity,
             policy_identity=policy_identity,
-            status="ready",
-            formula_identities=("data_snapshot_content_hash@1",),
+            status="blocked" if insufficient else "ready",
+            formula_identities=(
+                "data-insufficient@1"
+                if insufficient
+                else "data_snapshot_content_hash@1"
+            ,),
             dependency_kinds=(),
             payload=snapshot.to_dict(),
             summary={
                 "snapshot_id": snapshot.snapshot_id,
                 "content_hash": snapshot.content_hash,
-                "fact_count": len(snapshot.facts),
+                "fact_count": len(getattr(snapshot, "facts", ())),
+                **(
+                    {"missing_fields": list(snapshot.missing_fields)}
+                    if insufficient
+                    else {}
+                ),
             },
         )
 
@@ -277,6 +289,14 @@ class ImmutableArtifactDraft:
         graph_as_of_dates = {node.quantity.as_of for node in graph.nodes}
         if len(graph_as_of_dates) != 1:
             raise ValueError("RESEARCH_ARTIFACT_FORECAST_AS_OF_INVALID")
+        insufficient = graph.template_id == "data_insufficient@1"
+        if insufficient and (
+            not graph.nodes
+            or any(node.quantity.unit != "availability_state" for node in graph.nodes)
+            or graph.assumptions
+            or graph.narrative_statements
+        ):
+            raise ValueError("RESEARCH_ARTIFACT_DEGRADED_FORECAST_INVALID")
         return cls._build(
             artifact_kind="Forecast",
             schema_version="ForecastArtifact@1",
@@ -285,7 +305,7 @@ class ImmutableArtifactDraft:
             source_identity=graph.graph_id,
             model_identity=model_identity,
             policy_identity=policy_identity,
-            status="ready",
+            status="blocked" if insufficient else "ready",
             formula_identities=formulas,
             dependency_kinds=("DataSnapshot",),
             payload=graph.to_dict(),
@@ -360,7 +380,20 @@ class ImmutableArtifactDraft:
             for method in scenario.methods
         )
         formulas = tuple(sorted({method.formula_version for method in methods}))
-        status = "ready" if all(method.status == "ready" for method in methods) else "partial"
+        status = (
+            "ready"
+            if methods and all(method.status == "ready" for method in methods)
+            else (
+                "blocked"
+                if methods
+                and all(
+                    method.status == "blocked"
+                    and method.conditional_value_range is None
+                    for method in methods
+                )
+                else "partial"
+            )
+        )
         return cls._build(
             artifact_kind="Valuation",
             schema_version="ValuationArtifact@1",
