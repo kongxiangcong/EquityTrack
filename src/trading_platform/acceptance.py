@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from trading_platform.identity.canonical import CANONICALIZATION_VERSION, canonical_hash
 from trading_platform.identity.code import build_code_identity
+from trading_platform.verification import VerificationOutputRedactor
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,23 @@ class AcceptanceEvidenceResult:
     slice_acceptance: str
     manifest_sha256: str
     manifest_path: Path
+
+
+class BrowserAcceptanceError(RuntimeError):
+    code = "BROWSER_ACCEPTANCE_FAILED"
+    substep = "acceptance.browser_cdp"
+    cause_type = "SubprocessExit"
+
+    def __init__(
+        self,
+        exit_code: int,
+        command_identity: str,
+        output_tail: str,
+    ) -> None:
+        super().__init__(self.code)
+        self.exit_code = exit_code
+        self.command_identity = command_identity
+        self.output_tail = output_tail
 
 
 def _sha256(path: Path) -> str:
@@ -205,6 +223,45 @@ class AcceptanceEvidenceService:
             raise ValueError("FIXTURE_MANIFEST_OUTSIDE_TRUSTED_ROOT")
         evidence_root = self.data_root / ".acceptance-run"
         evidence_root.mkdir(parents=True, exist_ok=True)
+        browser_evidence_path = evidence_root / "browser-cdp.json"
+        browser_command = [
+            os.sys.executable,
+            str(self.repo_root / "scripts/verify_issue05_browser.py"),
+            "--evidence-file",
+            str(browser_evidence_path),
+        ]
+        browser_completed = subprocess.run(
+            browser_command,
+            cwd=self.repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if browser_completed.returncode != 0:
+            redactor = VerificationOutputRedactor()
+            combined = "\n".join(
+                part
+                for part in (browser_completed.stdout, browser_completed.stderr)
+                if part
+            )
+            raise BrowserAcceptanceError(
+                browser_completed.returncode,
+                hashlib.sha256(
+                    json.dumps(
+                        [
+                            "python",
+                            "scripts/verify_issue05_browser.py",
+                            "--evidence-file",
+                            "<redacted>",
+                        ],
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                redactor.redact(combined)[-2_000:],
+            )
+        self.validate_browser_evidence(browser_evidence_path)
         runner_temporary = tempfile.TemporaryDirectory(prefix="tp-accept-")
         runner_temp = Path(runner_temporary.name)
         artifacts: dict[str, dict[str, str]] = {}
@@ -297,6 +354,10 @@ class AcceptanceEvidenceService:
                     "artifact_refs": [name],
                 }
             )
+        artifacts["browser_cdp"] = {
+            "path": str(browser_evidence_path.resolve()),
+            "sha256": _sha256(browser_evidence_path.resolve()),
+        }
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
         fixture["manifest_sha256"] = _sha256(fixture_path)
         rights_profile = fixture.get("derived_fact_fixture", {})
@@ -357,6 +418,8 @@ class AcceptanceEvidenceService:
                     "artifact_refs": sorted(set(artifact_refs)),
                 }
             )
+            if suite_name == "browser":
+                criteria[-1]["artifact_refs"].append("browser_cdp")
         golden = (
             json.loads(golden_evidence_path.read_text(encoding="utf-8"))
             if golden_evidence_path.is_file()
@@ -468,12 +531,16 @@ class AcceptanceEvidenceService:
                 else []
             ),
             "final_artifact_manifest_id": golden.get("final_artifact_manifest_id"),
+            "browser_evidence_ref": "browser_cdp",
         }
         return self._freeze(supplied)
 
     def _freeze(self, supplied: Mapping[str, Any]) -> AcceptanceEvidenceResult:
         failure_codes: list[str] = []
         artifacts = self._validate_artifacts(supplied.get("artifacts"), failure_codes)
+        browser_evidence_ref = supplied.get("browser_evidence_ref")
+        if browser_evidence_ref != "browser_cdp" or browser_evidence_ref not in artifacts:
+            failure_codes.append("BROWSER_EVIDENCE_MISSING")
         criteria = list(supplied.get("criteria", ()))
         expected = {f"AC-{number:03d}" for number in range(1, 52)}
         actual = {
@@ -569,6 +636,9 @@ class AcceptanceEvidenceService:
                 "fixed_clock": supplied.get("fixed_clock"),
                 "network_policy": supplied.get("network_policy"),
                 "live_qualification": live,
+                "browser_evidence_sha256": artifacts.get(
+                    str(browser_evidence_ref), {}
+                ).get("sha256"),
                 "suites": [
                     {
                         key: item.get(key)
@@ -626,7 +696,7 @@ class AcceptanceEvidenceService:
             "doctor_report_ref": supplied.get(
                 "doctor_report_ref", "windows_maintenance"
             ),
-            "browser_evidence_ref": supplied.get("browser_evidence_ref", "browser"),
+            "browser_evidence_ref": browser_evidence_ref,
             "backup_restore_report_ref": supplied.get(
                 "backup_restore_report_ref", "windows_maintenance"
             ),
@@ -673,6 +743,83 @@ class AcceptanceEvidenceService:
         ):
             raise RuntimeError("ACCEPTANCE_SELF_VERIFICATION_FAILED")
         return AcceptanceEvidenceResult(slice_acceptance, digest, target)
+
+    def validate_browser_evidence(self, path: Path) -> Mapping[str, Any]:
+        try:
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("BROWSER_EVIDENCE_INVALID") from error
+        verifier = evidence.get("verifier") if isinstance(evidence, Mapping) else None
+        browser = evidence.get("browser") if isinstance(evidence, Mapping) else None
+        initial = evidence.get("initial") if isinstance(evidence, Mapping) else None
+        decision = evidence.get("decision") if isinstance(evidence, Mapping) else None
+        headers = decision.get("headers") if isinstance(decision, Mapping) else None
+        created = evidence.get("created") if isinstance(evidence, Mapping) else None
+        plan = evidence.get("plan_confirmation") if isinstance(evidence, Mapping) else None
+        focus = evidence.get("keyboard_focus") if isinstance(evidence, Mapping) else None
+        expected_source_hash = _sha256(
+            self.repo_root / "scripts/verify_issue05_browser.py"
+        )
+        expected_command_identity = hashlib.sha256(
+            json.dumps(
+                [
+                    "python",
+                    "scripts/verify_issue05_browser.py",
+                    "--evidence-file",
+                    "<redacted>",
+                ],
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        product = browser.get("product", "") if isinstance(browser, Mapping) else ""
+        reload_ledger = evidence.get("reload_ledger", "")
+        restart_ledger = evidence.get("restart_ledger", "")
+        valid = (
+            evidence.get("schema_version") == "BrowserAcceptanceEvidence@1"
+            and evidence.get("status") == "passed"
+            and isinstance(verifier, Mapping)
+            and verifier.get("identity") == "production-browser-cdp@1"
+            and verifier.get("source_sha256") == expected_source_hash
+            and verifier.get("command_identity") == expected_command_identity
+            and isinstance(browser, Mapping)
+            and isinstance(product, str)
+            and ("Chrome/" in product or "Edg/" in product)
+            and bool(browser.get("protocol_version"))
+            and isinstance(initial, Mapping)
+            and isinstance(initial.get("canvas"), int)
+            and initial["canvas"] >= 1
+            and initial.get("ledger") == 0
+            and initial.get("external") == []
+            and isinstance(decision, Mapping)
+            and decision.get("schema") == "ResearchDecisionView@2"
+            and bool(decision.get("workflow"))
+            and isinstance(decision.get("report"), int)
+            and decision["report"] > 0
+            and isinstance(headers, Mapping)
+            and "default-src 'self'" in headers.get("csp", "")
+            and headers.get("nosniff") == "nosniff"
+            and headers.get("referrer") == "no-referrer"
+            and headers.get("opener") == "same-origin"
+            and isinstance(created, Mapping)
+            and created.get("ledger") == 1
+            and "v1" in created.get("status", "")
+            and isinstance(plan, Mapping)
+            and plan == {"open": 0, "versions": 1}
+            and isinstance(focus, list)
+            and focus == ["end-price", "confirm"]
+            and all(
+                evidence.get(name) is True
+                for name in ("responsive", "reduced_motion", "recoverable_error")
+            )
+            and reload_ledger == restart_ledger
+            and all(
+                marker in reload_ledger
+                for marker in ("v1", "v2", "v3", "v4", "已删除")
+            )
+        )
+        if not valid:
+            raise ValueError("BROWSER_EVIDENCE_INVALID")
+        return evidence
 
     @staticmethod
     def _parse_junit(path: Path) -> tuple[int, int, int, list[str]]:

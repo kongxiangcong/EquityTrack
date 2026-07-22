@@ -51,6 +51,24 @@ def test_health_is_a_named_task_without_a_root_or_facade(tmp_path: Path) -> None
         assert not hasattr(health_task, "services")
 
 
+def test_production_web_index_references_tracked_build_assets() -> None:
+    index = ROOT / "web/dist/index.html"
+    references = re.findall(r'(?:src|href)="(/assets/[^"]+)"', index.read_text(encoding="utf-8"))
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files", "web/dist/assets"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.splitlines()
+    )
+
+    assert references
+    assert {f"web/dist{reference}" for reference in references} <= tracked
+
+
 def test_canonicalization_is_locale_independent_and_preserves_domain_encodings() -> None:
     instant = datetime(2026, 7, 11, 8, 30, tzinfo=timezone(timedelta(hours=8)))
     left = {"z": None, "amount": Decimal("10.500"), "at": instant, "day": CanonicalDate(date(2026, 7, 10)), "mode": Mode.FIXTURE, "members": {"b", "a"}}

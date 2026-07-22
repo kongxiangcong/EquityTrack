@@ -462,7 +462,14 @@ def main(argv: list[str] | None = None) -> int:
         code = getattr(error, "code", type(error).__name__.upper())
         diagnostic = {
             name: getattr(error, name)
-            for name in ("substep", "cause_type", "workflow_run_id")
+            for name in (
+                "substep",
+                "cause_type",
+                "workflow_run_id",
+                "exit_code",
+                "command_identity",
+                "output_tail",
+            )
             if getattr(error, name, None) is not None
         }
         payload = {

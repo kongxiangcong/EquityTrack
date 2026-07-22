@@ -36,7 +36,7 @@ class ChartAnnotations(Protocol):
     def list_history(self, security_id: str) -> tuple[AnnotationVersion, ...]: ...
 
 
-class TradePlan(Protocol):
+class PlanConfirmation(Protocol):
     def confirm_draft(
         self, command: ConfirmPlanDraftCommand
     ) -> TradePlanVersionView: ...
@@ -50,7 +50,7 @@ __all__ = [
     "ChartAnnotations",
     "ChartWorkspace",
     "DecisionWorkspace",
-    "TradePlan",
+    "PlanConfirmation",
     "UpdateAuthorizations",
     "WorkspaceUpdateCommand",
 ]

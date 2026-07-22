@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import socket
@@ -189,6 +190,7 @@ def main() -> None:
     restarted_stack: ExitStack | None = None
     try:
         cdp = _connect(port)
+        browser_version = cdp.call("Browser.getVersion")
         cdp.call("Runtime.enable")
         cdp.call("Page.enable")
         _navigate(cdp, base_url)
@@ -331,6 +333,26 @@ def main() -> None:
         if errors:
             raise AssertionError(errors)
         result = {
+            "schema_version": "BrowserAcceptanceEvidence@1",
+            "verifier": {
+                "identity": "production-browser-cdp@1",
+                "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "command_identity": hashlib.sha256(
+                    json.dumps(
+                        [
+                            "python",
+                            "scripts/verify_issue05_browser.py",
+                            "--evidence-file",
+                            "<redacted>",
+                        ],
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            },
+            "browser": {
+                "product": browser_version.get("product"),
+                "protocol_version": browser_version.get("protocolVersion"),
+            },
             "status": "passed",
             "initial": initial_state,
             "decision": decision,

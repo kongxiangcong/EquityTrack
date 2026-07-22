@@ -5,10 +5,11 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from trading_platform.acceptance import AcceptanceEvidenceService
+from trading_platform.acceptance import AcceptanceEvidenceService, BrowserAcceptanceError
 
 
 @pytest.mark.release_acceptance
@@ -42,8 +43,47 @@ def test_acceptance_cli_executes_fixed_suites_and_freezes_evidence(tmp_path: Pat
     assert {item["name"] for item in manifest["suites"]} == set(AcceptanceEvidenceService.REQUIRED_SUITES)
     assert all(item["status"] == "passed" and item["command_identity"] for item in manifest["suites"])
     assert all("path" not in item for item in manifest["artifact_evidence"].values())
+    assert manifest["browser_evidence_ref"] == "browser_cdp"
+    assert manifest["artifact_evidence"]["browser_cdp"]["sha256"]
     assert manifest_path.stat().st_mode & stat.S_IWUSR == 0
     assert str(tmp_path) not in completed.stdout
+
+
+def test_browser_evidence_must_prove_real_cdp_journey(tmp_path: Path) -> None:
+    evidence = tmp_path / "browser-evidence.json"
+    evidence.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="BROWSER_EVIDENCE_INVALID"):
+        AcceptanceEvidenceService(tmp_path / "data", Path.cwd()).validate_browser_evidence(evidence)
+
+
+def test_browser_verifier_failure_preserves_redacted_substep_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "browser-verifier-secret"
+    monkeypatch.setenv("BROWSER_API_TOKEN", secret)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=7,
+            stdout=f"token={secret}",
+            stderr="CDP connection refused",
+        ),
+    )
+    fixture = Path.cwd() / "tests/fixtures/platform_data/manifest.json"
+
+    with pytest.raises(BrowserAcceptanceError) as captured:
+        AcceptanceEvidenceService(tmp_path / "data", Path.cwd()).run(fixture)
+
+    error = captured.value
+    assert error.code == "BROWSER_ACCEPTANCE_FAILED"
+    assert error.substep == "acceptance.browser_cdp"
+    assert error.exit_code == 7
+    assert error.command_identity
+    assert secret not in error.output_tail
+    assert "[REDACTED]" in error.output_tail
+    assert "CDP connection refused" in error.output_tail
 
 
 def test_acceptance_rejects_fixture_manifest_outside_trusted_root(tmp_path: Path) -> None:

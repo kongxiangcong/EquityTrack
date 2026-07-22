@@ -81,7 +81,7 @@ class BrowserAcceptanceFixture:
         )
         self._watchlist.add(
             "browser-acceptance:watchlist-sentinel",
-            SecurityIdentity("security_old", "SZSE", "000001", "CNY", "2010-01-01"),
+            SecurityIdentity("security_old", "SZSE", "000001", "CNY", "1991-04-03"),
         )
         snapshot = self._data.sync(
             SyncRequest(
@@ -240,7 +240,7 @@ class BrowserAcceptanceFixture:
         request = DataInsufficientForecastRequest(
             security=Security(
                 security_id,
-                "Yihua Healthcare",
+                "温州意华接插件股份有限公司",
                 "SZSE",
                 "CNY",
                 CompanyArchetype.GENERAL_MANUFACTURING,

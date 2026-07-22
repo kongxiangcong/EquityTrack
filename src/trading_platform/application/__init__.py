@@ -54,7 +54,7 @@ if TYPE_CHECKING:
         ChartAnnotations,
         ChartWorkspace,
         DecisionWorkspace,
-        TradePlan,
+        PlanConfirmation,
         UpdateAuthorizations,
         WorkspaceUpdateCommand,
     )
@@ -72,7 +72,7 @@ _EXPORT_MODULES = {
     "SecurityIdentity": ".contracts",
     "StartResearchWorkflow": ".contracts",
     "DecisionWorkspace": ".web_tasks",
-    "TradePlan": ".web_tasks",
+    "PlanConfirmation": ".web_tasks",
     "UpdateAuthorizations": ".web_tasks",
     "WorkspaceUpdateCommand": ".web_tasks",
     "decode_market_snapshot_command": ".command_codecs",

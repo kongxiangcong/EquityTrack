@@ -13,7 +13,7 @@ from trading_platform.application import (
     ChartAnnotations,
     ChartWorkspace,
     DecisionWorkspace,
-    TradePlan,
+    PlanConfirmation,
     UpdateAuthorizations,
     WorkspaceUpdateCommand,
 )
@@ -30,7 +30,7 @@ class LocalChartWorkspaceServer:
         decision_workspace: DecisionWorkspace,
         chart_workspace: ChartWorkspace,
         chart_annotations: ChartAnnotations,
-        trade_plan: TradePlan,
+        trade_plan: PlanConfirmation,
         update_authorizations: UpdateAuthorizations,
         web_root: Path,
         security_id: str,

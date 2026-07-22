@@ -43,7 +43,7 @@ from .web_tasks import (
     ChartAnnotations,
     ChartWorkspace,
     DecisionWorkspace,
-    TradePlan,
+    PlanConfirmation,
     UpdateAuthorizations,
 )
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
@@ -264,7 +264,7 @@ def open_chart_annotations(
 @contextmanager
 def open_trade_plan(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[TradePlan]:
+) -> Iterator[PlanConfirmation]:
     with _store(data_root, migrations_root) as store:
         yield PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
 
