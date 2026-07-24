@@ -1,0 +1,203 @@
+{
+  "interpretation_boundary": "HTTP reachability does not establish schema stability, data entitlement, cache rights, or production qualification.",
+  "official_cross_validation": {
+    "companyfacts_cik": "0000320193",
+    "companyfacts_concepts": 505,
+    "companyfacts_taxonomies": [
+      "dei",
+      "us-gaap"
+    ],
+    "companyfacts_units": [
+      "Store",
+      "USD",
+      "USD/shares",
+      "Year",
+      "pure",
+      "shares"
+    ],
+    "facts_linked_to_latest_10k_accession": 427,
+    "latest_10k": {
+      "acceptance_datetime": "2025-10-31T10:01:26.000Z",
+      "accession": "0000320193-25-000079",
+      "filing_date": "2025-10-31",
+      "form": "10-K",
+      "primary_document": "aapl-20250927.htm",
+      "report_date": "2025-09-27"
+    },
+    "mapped_cik": null,
+    "production_user_agent_compliant": false,
+    "reason": "audit identity deliberately has no truthful contact address",
+    "submissions_cik": "0000320193",
+    "submissions_companyfacts_normalized_cik_match": true,
+    "submissions_has_historical_files": true,
+    "submissions_recent_rows": 1000,
+    "ticker_identity_match": true,
+    "ticker_map_normalized_cik_match": null
+  },
+  "probes": [
+    {
+      "bytes": 1599,
+      "content_type": "application/json;charset=utf-8",
+      "duration_ms": 561,
+      "name": "yahoo-chart-AAPL",
+      "schema": {
+        "kind": "object",
+        "top_level_keys": [
+          "chart"
+        ]
+      },
+      "sha256": "286329d1ece5c019b6d82c6ca0aa9d03d0b3fd0d8e06e7b2d858955ccd3cc819",
+      "status": 200
+    },
+    {
+      "bytes": 1555,
+      "content_type": "application/json;charset=utf-8",
+      "duration_ms": 604,
+      "name": "yahoo-chart-0700.HK",
+      "schema": {
+        "kind": "object",
+        "top_level_keys": [
+          "chart"
+        ]
+      },
+      "sha256": "5653530e179cb67eada35952deca16b3b30484d4f1dad515bec91b1dc8106d9d",
+      "status": 200
+    },
+    {
+      "bytes": 157,
+      "content_type": "text/html",
+      "duration_ms": 2560,
+      "name": "eastmoney-us-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "24fe03fdb26088bfff8b1363911c29c79a19614bca42cdcdb9fefdf52917aeb1",
+      "status": 502
+    },
+    {
+      "bytes": 157,
+      "content_type": "text/html",
+      "duration_ms": 2253,
+      "name": "eastmoney-hk-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "24fe03fdb26088bfff8b1363911c29c79a19614bca42cdcdb9fefdf52917aeb1",
+      "status": 502
+    },
+    {
+      "bytes": 344,
+      "content_type": "application/javascript; charset=GB18030",
+      "duration_ms": 811,
+      "name": "sina-us-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "3023db1347ef0517df2a5379e4e9dc5b3b405a5a2ca1e671d3172fec1480d9c9",
+      "status": 200
+    },
+    {
+      "bytes": 250,
+      "content_type": "application/javascript; charset=GB18030",
+      "duration_ms": 678,
+      "name": "sina-hk-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "ecc55ba638e7a3528d3c1520873f24464a241b29caf8333f12cae247865068aa",
+      "status": 200
+    },
+    {
+      "bytes": 391,
+      "content_type": "text/html; charset=GBK",
+      "duration_ms": 831,
+      "name": "tencent-us-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "0476301c00022325108d2125db2d5b7dbd742ec56a2ecaa1eb8ad7228c56ecf5",
+      "status": 200
+    },
+    {
+      "bytes": 439,
+      "content_type": "text/html; charset=GBK",
+      "duration_ms": 829,
+      "name": "tencent-hk-quote",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "e310d8ca72f7e1a292f2fbdfdb7af2ae2531f106184f5175448364adb9b0c1bf",
+      "status": 200
+    },
+    {
+      "bytes": 1925,
+      "content_type": "text/html",
+      "duration_ms": 519,
+      "name": "sec-company-tickers",
+      "schema": {
+        "kind": "non-json"
+      },
+      "sha256": "9c715d2d7508f0373345a88785b310729eb0bd988a35c54f49e8c8a9e1f0b6ff",
+      "status": 403
+    },
+    {
+      "bytes": 164394,
+      "content_type": "application/json",
+      "duration_ms": 916,
+      "name": "sec-submissions-aapl",
+      "schema": {
+        "kind": "object",
+        "top_level_keys": [
+          "addresses",
+          "category",
+          "cik",
+          "description",
+          "ein",
+          "entityType",
+          "exchanges",
+          "filings",
+          "fiscalYearEnd",
+          "flags",
+          "formerNames",
+          "insiderTransactionForIssuerExists",
+          "insiderTransactionForOwnerExists",
+          "investorWebsite",
+          "lei",
+          "name",
+          "ownerOrg",
+          "phone",
+          "sic",
+          "sicDescription",
+          "stateOfIncorporation",
+          "stateOfIncorporationDescription",
+          "tickers",
+          "website"
+        ]
+      },
+      "sha256": "ea2aa552e984a29e920cf80e0827cf32b632563935f029b6ec9de7f4fa3c026d",
+      "status": 200
+    },
+    {
+      "bytes": 3748682,
+      "content_type": "application/json",
+      "duration_ms": 1501,
+      "name": "sec-companyfacts-aapl",
+      "schema": {
+        "kind": "object",
+        "top_level_keys": [
+          "cik",
+          "entityName",
+          "facts"
+        ]
+      },
+      "sha256": "31f9ab4398402faabc733178497af89dbf94dd5038c6e36d4c894317de8a4647",
+      "status": 200
+    }
+  ],
+  "python": "3.11.15",
+  "raw_bodies_persisted": false,
+  "requests": "2.34.2",
+  "retrieved_at": "2026-07-24T11:11:36.401659+00:00",
+  "suite": "global-stock-data-live-connectivity",
+  "upstream_commit": "d52a8a0013363577bceb28ca876c88fe6c1a5aeb"
+}

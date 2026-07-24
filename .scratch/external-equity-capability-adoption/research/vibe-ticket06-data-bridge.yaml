@@ -1,0 +1,12 @@
+sources:
+  - symbol: "000001.SZ"
+    type: csv
+    path: "E:/workspace/tradingSystem-upstreams/Vibe-Trading/.venv/qualification-runtime/fixtures/prices.csv"
+    columns:
+      date: "date"
+      open: "open"
+      high: "high"
+      low: "low"
+      close: "close"
+      volume: "volume"
+    date_format: "%Y-%m-%d"

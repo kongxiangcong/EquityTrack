@@ -1,0 +1,354 @@
+{
+  "artifact_manifest_sha256": "c9867b798c56d3ebf786d6e543f1a7c96190195566b6b8509c99428cee2ccc39",
+  "deterministic_replays": [
+    {
+      "argv": [
+        "node",
+        "a-stock-data-fixture-replay.mjs"
+      ],
+      "assertion_count": 12,
+      "assertion_field": "cases",
+      "exit_code": 0,
+      "script_sha256": "6d160105788eb16473e2ccaa3153a37e33113cd2d2c41049909b29b579342022",
+      "status": "passed",
+      "stdout_sha256": "1105cf6fe55888ce4e0621002303281f34249fdd43f7f0156defadcba10cee01"
+    },
+    {
+      "argv": [
+        "node",
+        "a-stock-data-official-fixture-replay.mjs"
+      ],
+      "assertion_count": 5,
+      "assertion_field": "cases",
+      "exit_code": 0,
+      "script_sha256": "d8acc7333ae8fb7bb18d05db0f57d461a648fd93c17d44713876809209f889f1",
+      "status": "passed",
+      "stdout_sha256": "66c41fb147d14a42aab74c7d6924fa6a2bd2f9bb1bf46fe9b399041672b030ae"
+    },
+    {
+      "argv": [
+        "node",
+        "global-stock-data-fixture-replay.mjs"
+      ],
+      "assertion_count": 12,
+      "assertion_field": "passed",
+      "exit_code": 0,
+      "script_sha256": "a45a29b685165ce8d096dff1dc62095bea2672d6aa0852ea9d997ef34e7dde59",
+      "status": "passed",
+      "stdout_sha256": "ae763f8ef4124d85da96da134f9baa75fb3ed3d44dcfb6ccc5f1b3c603118da9"
+    }
+  ],
+  "input_evidence_sha256": {
+    "a-stock-data-live-probe-evidence.json": "70d6e7d4b8a2c5bd328d4eed4338446e3ad593e6a02eeb98a06dcc519ab45e32",
+    "a-stock-data-official-live-probe-evidence.json": "0a39d4c1f9a72b4ca4157729fba15fcf2a7bae37e55be53dd2f453edb887d1ec",
+    "global-stock-data-live-probe-evidence.json": "0b6ee4940eb023b1ff5aeeba3e6565e439f7770e5cbf3acb0b5578c564b95b1c",
+    "global-stock-data-official-cross-validation-evidence.json": "2831b2904d998da4a28ba44e825f865d984dce1d720699fd04ba7d8acb95165c",
+    "vibe-trading-runtime-evidence.json": "8b824b690b4914760e40f6eddb711b2d591cf32056581417d53c7f2684833c55"
+  },
+  "plan_sha256": "9c99f971dda19e5e5ae37773d340389225ef5893ecb18bbd6d87208279900ddc",
+  "raw_authority_admission_checks": [
+    {
+      "decision": "rejected_as_authoritative_result",
+      "kind": "raw_html",
+      "reason_code": "TYPED_OFFICIAL_FACT_REQUIRED",
+      "status": "passed"
+    },
+    {
+      "decision": "rejected_as_authoritative_result",
+      "kind": "raw_pdf",
+      "reason_code": "TYPED_OFFICIAL_FACT_REQUIRED",
+      "status": "passed"
+    },
+    {
+      "decision": "rejected_as_authoritative_result",
+      "kind": "free_text",
+      "reason_code": "TYPED_OFFICIAL_FACT_REQUIRED",
+      "status": "passed"
+    },
+    {
+      "decision": "rejected_as_authoritative_result",
+      "kind": "caller_authored_json",
+      "reason_code": "TYPED_OFFICIAL_FACT_REQUIRED",
+      "status": "passed"
+    }
+  ],
+  "schema_version": "ExternalEquityMarketValidationEvidence@1",
+  "slices": [
+    {
+      "as_of": "2026-07-24",
+      "frozen_evidence": {
+        "authoritative_financial_fact_count": 0,
+        "identity": "989146b79d6b8ca3722773ffd0e610c814b240a0e6962a96022ff9b4b76349bc",
+        "records": [
+          {
+            "authority": "CNINFO",
+            "available_at_state": "missing",
+            "normalization_status": "blocked",
+            "observation": "cninfo_announcements_exact",
+            "published_at_state": "present",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "b97bf3864fbcba85e864f2246d8f4e7b8ca8a2cfde6e3ef8aad4444738dec45e",
+            "retrieved_at": "2026-07-24T10:49:04.250Z"
+          },
+          {
+            "authority": "SZSE",
+            "available_at_state": "missing",
+            "normalization_status": "blocked",
+            "observation": "szse_announcements_verified_tls",
+            "published_at_state": "present",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "1b790c02a0f567a0bd2245d9ff5ecd5e82072102b624aa189351311d4515e4a0",
+            "retrieved_at": "2026-07-24T10:51:43.975Z"
+          }
+        ],
+        "schema_version": "FrozenExternalEvidence@1",
+        "status": "metadata_only"
+      },
+      "issuer_identity": "CN:ISSUER:UNRESOLVED-QUALIFICATION-SUBJECT",
+      "market": "a_share",
+      "production_replacement_gate": {
+        "reason_codes": [
+          "AVAILABLE_AT_UNPROVEN",
+          "A_SHARE_ADJUSTMENT_LINEAGE_MISSING",
+          "A_SHARE_CALENDAR_IDENTITY_MISSING",
+          "A_SHARE_CORPORATE_ACTION_LINEAGE_MISSING",
+          "A_SHARE_EXECUTION_RULES_UNQUALIFIED",
+          "A_SHARE_SECURITY_IDENTITY_NOT_PERSISTED",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "OFFICIAL_FACTS_NOT_NORMALIZED"
+        ],
+        "status": "failed"
+      },
+      "research_evaluation": {
+        "output_kind": "data_insufficient_memo",
+        "reason_codes": [
+          "OFFICIAL_FACTS_NOT_NORMALIZED",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "AVAILABLE_AT_UNPROVEN"
+        ],
+        "schema_version": "ResearchEvaluationCandidateResult@1",
+        "status": "blocked"
+      },
+      "security_identity": "CN:SZSE:UNRESOLVED-QUALIFICATION-SUBJECT",
+      "slice_id": "a-share-002897-sz",
+      "strategy_validation": {
+        "reason_codes": [
+          "STRATEGY_VALIDATION_CAPABILITY_UNAVAILABLE",
+          "A_SHARE_SECURITY_IDENTITY_NOT_PERSISTED",
+          "A_SHARE_CALENDAR_IDENTITY_MISSING",
+          "A_SHARE_ADJUSTMENT_LINEAGE_MISSING",
+          "A_SHARE_CORPORATE_ACTION_LINEAGE_MISSING",
+          "A_SHARE_EXECUTION_RULES_UNQUALIFIED"
+        ],
+        "result": null,
+        "schema_version": "StrategyValidationCandidateResult@1",
+        "status": "blocked"
+      },
+      "valuation": {
+        "formal_value": null,
+        "reason_codes": [
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "SELECTED_METHOD_INPUTS_MISSING"
+        ],
+        "schema_version": "ValuationCandidateResult@1",
+        "status": "not_comparable"
+      }
+    },
+    {
+      "as_of": "2026-07-24",
+      "frozen_evidence": {
+        "authoritative_financial_fact_count": 0,
+        "identity": "cb3ec8609f37a5a205ba419699098f6a9a7ea8cdf30251ff94ddc9b81358dc3b",
+        "records": [
+          {
+            "authority": "SEC",
+            "available_at_state": "embedded_unparsed",
+            "normalization_status": "blocked",
+            "observation": "sec-submissions-aapl",
+            "published_at_state": "embedded_unparsed",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "ea2aa552e984a29e920cf80e0827cf32b632563935f029b6ec9de7f4fa3c026d",
+            "retrieved_at": "2026-07-24T11:11:36.401659+00:00"
+          },
+          {
+            "authority": "SEC",
+            "available_at_state": "embedded_unparsed",
+            "normalization_status": "blocked",
+            "observation": "sec-companyfacts-aapl",
+            "published_at_state": "embedded_unparsed",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "31f9ab4398402faabc733178497af89dbf94dd5038c6e36d4c894317de8a4647",
+            "retrieved_at": "2026-07-24T11:11:36.401659+00:00"
+          }
+        ],
+        "schema_version": "FrozenExternalEvidence@1",
+        "status": "metadata_only"
+      },
+      "issuer_identity": "US:SEC:CIK0000320193",
+      "market": "us",
+      "production_replacement_gate": {
+        "reason_codes": [
+          "AVAILABLE_AT_UNPROVEN",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "OFFICIAL_FACTS_NOT_NORMALIZED",
+          "SEC_FILING_COVERAGE_NOT_FROZEN",
+          "SEC_TYPED_PARSER_NOT_IMPLEMENTED",
+          "US_CORPORATE_ACTION_LINEAGE_MISSING",
+          "US_EXECUTION_RULES_UNQUALIFIED",
+          "US_SECURITY_MASTER_HISTORY_MISSING"
+        ],
+        "status": "failed"
+      },
+      "research_evaluation": {
+        "output_kind": "data_insufficient_memo",
+        "reason_codes": [
+          "OFFICIAL_FACTS_NOT_NORMALIZED",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "AVAILABLE_AT_UNPROVEN"
+        ],
+        "schema_version": "ResearchEvaluationCandidateResult@1",
+        "status": "blocked"
+      },
+      "security_identity": "US:XNAS:AAPL",
+      "slice_id": "us-aapl",
+      "strategy_validation": {
+        "reason_codes": [
+          "STRATEGY_VALIDATION_CAPABILITY_UNAVAILABLE",
+          "SEC_TYPED_PARSER_NOT_IMPLEMENTED",
+          "SEC_FILING_COVERAGE_NOT_FROZEN",
+          "US_SECURITY_MASTER_HISTORY_MISSING",
+          "US_CORPORATE_ACTION_LINEAGE_MISSING",
+          "US_EXECUTION_RULES_UNQUALIFIED"
+        ],
+        "result": null,
+        "schema_version": "StrategyValidationCandidateResult@1",
+        "status": "blocked"
+      },
+      "valuation": {
+        "formal_value": null,
+        "reason_codes": [
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "SELECTED_METHOD_INPUTS_MISSING"
+        ],
+        "schema_version": "ValuationCandidateResult@1",
+        "status": "not_comparable"
+      }
+    },
+    {
+      "as_of": "2026-07-24",
+      "frozen_evidence": {
+        "authoritative_financial_fact_count": 0,
+        "identity": "9539399716c3c6551a8fdd9b1242ad1e62f1ee0871663b21348cbe3217966840",
+        "records": [
+          {
+            "authority": "HKEXnews",
+            "available_at_state": "release_time_only",
+            "normalization_status": "blocked",
+            "observation": "hkexnews-tencent-2025-annual-report",
+            "published_at_state": "present",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "2a7547168077c3d9994af673125e77612e8656bc0f17ad189371d7e4088f4e98",
+            "retrieved_at": "2026-07-24T10:58:00Z"
+          },
+          {
+            "authority": "Tencent investor relations",
+            "available_at_state": "unproven",
+            "normalization_status": "blocked",
+            "observation": "tencent-ir-2025-annual-report",
+            "published_at_state": "mirrored_filing",
+            "raw_payload_state": "not_retained",
+            "response_sha256": "2a7547168077c3d9994af673125e77612e8656bc0f17ad189371d7e4088f4e98",
+            "retrieved_at": "2026-07-24T10:58:00Z"
+          }
+        ],
+        "schema_version": "FrozenExternalEvidence@1",
+        "status": "metadata_only"
+      },
+      "issuer_identity": "HK:ISSUER:00700",
+      "market": "hk",
+      "production_replacement_gate": {
+        "reason_codes": [
+          "AVAILABLE_AT_UNPROVEN",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "HKEX_AUTOMATION_RIGHTS_NOT_QUALIFIED",
+          "HKEX_TYPED_ADAPTER_NOT_IMPLEMENTED",
+          "HK_CORPORATE_ACTION_LINEAGE_MISSING",
+          "HK_EXECUTION_RULES_UNQUALIFIED",
+          "HK_SECURITY_MASTER_HISTORY_MISSING",
+          "OFFICIAL_FACTS_NOT_NORMALIZED"
+        ],
+        "status": "failed"
+      },
+      "research_evaluation": {
+        "output_kind": "data_insufficient_memo",
+        "reason_codes": [
+          "OFFICIAL_FACTS_NOT_NORMALIZED",
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "AVAILABLE_AT_UNPROVEN"
+        ],
+        "schema_version": "ResearchEvaluationCandidateResult@1",
+        "status": "blocked"
+      },
+      "security_identity": "HK:XHKG:00700",
+      "slice_id": "hk-00700",
+      "strategy_validation": {
+        "reason_codes": [
+          "STRATEGY_VALIDATION_CAPABILITY_UNAVAILABLE",
+          "HKEX_AUTOMATION_RIGHTS_NOT_QUALIFIED",
+          "HKEX_TYPED_ADAPTER_NOT_IMPLEMENTED",
+          "HK_SECURITY_MASTER_HISTORY_MISSING",
+          "HK_CORPORATE_ACTION_LINEAGE_MISSING",
+          "HK_EXECUTION_RULES_UNQUALIFIED"
+        ],
+        "result": null,
+        "schema_version": "StrategyValidationCandidateResult@1",
+        "status": "blocked"
+      },
+      "valuation": {
+        "formal_value": null,
+        "reason_codes": [
+          "CRITICAL_FINANCIAL_FACTS_MISSING",
+          "SELECTED_METHOD_INPUTS_MISSING"
+        ],
+        "schema_version": "ValuationCandidateResult@1",
+        "status": "not_comparable"
+      }
+    }
+  ],
+  "strategy_runtime": {
+    "candidate_result_policy": "blocked_without_result",
+    "production_mcp_allowlist": [],
+    "upstream_decision": "reject"
+  },
+  "summary": {
+    "frozen_evidence_count": 3,
+    "production_gate_failed_count": 3,
+    "raw_authority_rejection_count": 4,
+    "research_blocked_count": 3,
+    "slice_count": 3,
+    "strategy_blocked_count": 3,
+    "valuation_not_comparable_count": 3,
+    "verification_status": "passed"
+  },
+  "upstreams": [
+    {
+      "candidate": "a-stock-data",
+      "commit": "06791b5a3159401524c10bd0e28aaebe415ce604",
+      "identity_status": "pinned",
+      "worktree_status": "clean"
+    },
+    {
+      "candidate": "global-stock-data",
+      "commit": "d52a8a0013363577bceb28ca876c88fe6c1a5aeb",
+      "identity_status": "pinned",
+      "worktree_status": "clean"
+    },
+    {
+      "candidate": "Vibe-Trading",
+      "commit": "0aa45a9ff3df58fab1c50f5400d9b112d19cacc6",
+      "identity_status": "pinned",
+      "worktree_status": "clean"
+    }
+  ],
+  "verifier_sha256": "caf3b4b3b67903c146d45fe6dbb74ee2230c8e56b97265b2233b08a06b2df48b"
+}

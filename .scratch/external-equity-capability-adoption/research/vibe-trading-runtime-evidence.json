@@ -1,0 +1,259 @@
+{
+  "suite": "vibe-trading-ticket06-runtime-qualification",
+  "captured_at": "2026-07-24T19:36:00+08:00",
+  "upstream": {
+    "repository": "https://github.com/HKUDS/Vibe-Trading",
+    "commit": "0aa45a9ff3df58fab1c50f5400d9b112d19cacc6",
+    "describe": "v0.1.12-78-g0aa45a9",
+    "package_version": "0.1.12",
+    "checkout_clean": true,
+    "pyproject_sha256": "af07cebb666de3bf53f604741047f261693c303fc531333ebfff7f2b2c2631a0",
+    "requirements_lock_sha256": "b5a1bb3e28bc78d519537a72b00014f5aaca9df55986a6de541e639e6b45d841"
+  },
+  "environment": {
+    "python": "3.11.15",
+    "uv": "0.11.17",
+    "venv": "E:/workspace/tradingSystem-upstreams/Vibe-Trading/.venv",
+    "runtime_root": "E:/workspace/tradingSystem-upstreams/Vibe-Trading/.venv/qualification-runtime",
+    "docker_daemon": "unavailable_not_blocking",
+    "lock_install": {
+      "status": "failed",
+      "reason": "aiofile==3.11.1 requires caio>=0.9.0,<0.10.dev0 while the lock also requires caio==0.10.2",
+      "dependency_identity_reproducible_from_lock": false
+    },
+    "editable_resolution": {
+      "status": "installed_with_unlocked_resolution",
+      "package_count_with_dev_tools": 197,
+      "freeze_sha256": "4ba4b3aa671e2bf451f48f1609d5cc358a830a545068bbe818617a5301e9e1e1",
+      "selected_versions": {
+        "aiofile": "3.11.1",
+        "caio": "0.9.25",
+        "fastmcp": "3.4.4",
+        "mcp": "1.28.1",
+        "numpy": "2.4.6",
+        "openai": "2.48.0",
+        "pandas": "2.3.3",
+        "pytest": "9.1.1",
+        "scipy": "1.17.1"
+      },
+      "pip_check": "197 packages compatible"
+    }
+  },
+  "mcp_discovery": {
+    "absolute_executable": "E:/workspace/tradingSystem-upstreams/Vibe-Trading/.venv/Scripts/vibe-trading-mcp.exe",
+    "transport": "stdio",
+    "shell_tools_enabled": false,
+    "cold_initialize_45_second_budget": "client_timeout",
+    "bounded_retry_120_second_budget": "passed",
+    "server_name": "Vibe-Trading",
+    "server_version": "0.1.12",
+    "protocol_version": "2025-11-25",
+    "fastmcp_version": "3.4.4",
+    "tools_count": 54,
+    "tools_schema_set_sha256": "bfe800f472882c6ce255132efc2c26cc62f93d6f49acb2fd7ce382dabb1af1a2",
+    "qualification_script_heuristic_forbidden_name_count": 16,
+    "tool_names": [
+      "list_skills",
+      "load_skill",
+      "start_research_goal",
+      "get_research_goal",
+      "add_goal_evidence",
+      "update_research_goal_status",
+      "backtest",
+      "factor_analysis",
+      "analyze_options",
+      "pattern_recognition",
+      "read_url",
+      "read_document",
+      "web_search",
+      "write_file",
+      "read_file",
+      "trading_connections",
+      "trading_select_connection",
+      "trading_check",
+      "trading_account",
+      "trading_positions",
+      "trading_orders",
+      "trading_quote",
+      "trading_history",
+      "list_swarm_presets",
+      "run_swarm",
+      "get_market_data",
+      "get_fund_flow",
+      "get_dragon_tiger",
+      "get_northbound_flow",
+      "get_margin_trading",
+      "get_block_trades",
+      "get_shareholder_count",
+      "get_lockup_expiry",
+      "get_sector_info",
+      "get_research_reports",
+      "get_stock_news",
+      "get_sec_filings",
+      "get_financial_statements",
+      "get_options_chain",
+      "get_stock_profile",
+      "screen_market",
+      "search_symbol",
+      "get_macro_series",
+      "iwencai_search",
+      "get_swarm_status",
+      "get_run_result",
+      "list_runs",
+      "reap_stale_runs",
+      "retry_run",
+      "analyze_trade_journal",
+      "extract_shadow_strategy",
+      "run_shadow_backtest",
+      "render_shadow_report",
+      "scan_shadow_signals"
+    ],
+    "candidate_schema_hashes": {
+      "backtest": "b0c40bff04d776453f149fc78581eda23ab42b7a60e1e7d61077f9d7dc138fc2",
+      "run_shadow_backtest": "9ae945de066f0f1203343ae8824c5822d1d1e11c264ac9e8da528f64a693bc61",
+      "render_shadow_report": "6be43203b9dfcf1b72805896e868c6ea11e80a26c632dc629782c6d47d9824e7"
+    },
+    "generic_tools_absent": [
+      "walk_forward",
+      "bootstrap",
+      "monte_carlo",
+      "run_card",
+      "render_backtest_report"
+    ]
+  },
+  "restricted_tool_calls": {
+    "qualification_only_allowlist": [
+      "analyze_options",
+      "backtest"
+    ],
+    "forbidden_tools_executed": [],
+    "network_provider_calls_executed": [],
+    "analyze_options": {
+      "same_input_same_text_hash": true,
+      "text_sha256": "225a27022c9f177ba2063f2f010764536e5acff9f4b5310e720c329c1e7d76da",
+      "mcp_is_error": false,
+      "json_valid": true
+    },
+    "backtest_missing_run": {
+      "mcp_is_error": false,
+      "application_status": "error",
+      "text_sha256": "560e46d613161a0dc8de4fdda1675d63fc2432768ca140f2e525bde757545d78",
+      "finding": "MCP success envelope carries an application failure"
+    },
+    "backtest_invalid_arguments": {
+      "mcp_is_error": true,
+      "json_valid": false,
+      "text_sha256": "3fe4daa8887cb7abbba40ee7f27d6c34e74f0ba8baf1c9fa9d65554536ecf597"
+    },
+    "absent_walk_forward_tool": {
+      "mcp_is_error": true,
+      "json_valid": false,
+      "text_sha256": "22b5bc06fd126c023a53315e084650cc7985b69ebca3192002c1aa4668eeb586"
+    }
+  },
+  "failure_smoke": {
+    "passed": 3,
+    "failed": 0,
+    "outcomes": [
+      {
+        "mode": "crash",
+        "classification": "server_crash",
+        "exit_code": 23
+      },
+      {
+        "mode": "timeout",
+        "classification": "client_timeout"
+      },
+      {
+        "mode": "malformed",
+        "classification": "malformed_json_rpc",
+        "bytes": 18
+      }
+    ]
+  },
+  "actual_local_backtest": {
+    "fixture": {
+      "source": "local",
+      "network_calls_expected": 0,
+      "price_fixture_sha256": "45150c7647450bbafd5bc01815f7f3e06aec05b8f8e5cec9d8803641cdc22d19",
+      "signal_engine_sha256": "5b665533fa7f1511a9948f1d4f4aadfc089f786d452d963fc0670b3ac3ee21bd",
+      "config_sha256": "fad2e026eaf390c04c1f62e6d0379b210d9d98c9854922967745e91fa6561744",
+      "data_bridge_sha256": "0d7f48b9a064a7d9451845c27fd70d04d4e381b1935dccedcd72990f8c14fd31"
+    },
+    "attempt_1": {
+      "runs": 2,
+      "same_result_hash": true,
+      "mcp_is_error": false,
+      "application_status": "error",
+      "exit_code": 1,
+      "failure": "subprocess ephemeral HOME changed the default allowed roots",
+      "text_sha256": "af0b6410193d5fbc2aff4390ef4a5438dc17238c4c822ce71e70ee530897c1de"
+    },
+    "attempt_2_with_exact_allowed_run_root": {
+      "runs": 2,
+      "same_result_hash": true,
+      "mcp_is_error": false,
+      "application_status": "error",
+      "exit_code": 1,
+      "failure": "Windows sandbox HOME could not re-expose local data-bridge; local loader was treated unavailable and _get_loader degraded to Tushare, which demanded a token",
+      "text_sha256": "68d7a9dcc90a456728c0e33e3e6fbbc01c7406c4546b09c39261a4b981f2f321"
+    },
+    "core_backtest_available_without_credentials_on_required_path": false,
+    "requested_user_credentials": false,
+    "production_decision": "reject"
+  },
+  "upstream_narrow_tests": {
+    "command_scope": [
+      "agent/tests/test_validation.py",
+      "agent/tests/test_china_a_engine.py",
+      "agent/tests/test_run_card.py",
+      "agent/tests/test_backtest_runner_security.py",
+      "agent/tests/test_local_source_routing.py",
+      "agent/tests/test_mcp_server_smoke.py"
+    ],
+    "passed": 141,
+    "failed": 0,
+    "warnings": 4,
+    "duration_seconds": 19.11
+  },
+  "algorithm_adversarial": {
+    "passed": 12,
+    "failed": 0,
+    "monte_carlo_method": "trade_pnl_order_permutation",
+    "bootstrap_method": "iid_single_bar_return_resampling",
+    "walk_forward_method": "post_hoc_non_overlapping_window_split",
+    "same_seed_reproducible": true,
+    "different_seed_varies": true,
+    "seed_algorithm_convergence_present_in_results": false,
+    "per_symbol_one_bar_lag_verified": true,
+    "a_share_t_plus_one_skeleton_verified": true,
+    "a_share_100_share_lot_verified": true,
+    "st_five_percent_regime_identifiable": false
+  },
+  "run_card_tamper": {
+    "passed": 5,
+    "failed": 0,
+    "schema_version": "0.1",
+    "recorded_hash_matches_before_tamper": true,
+    "recorded_hash_matches_after_tamper": false,
+    "tamper_detectable_by_external_rehash": true,
+    "upstream_verify_function_present": false,
+    "run_card_records_own_hash": false
+  },
+  "report_capability": {
+    "generic_html_pdf_backtest_report": "absent",
+    "shadow_account_html_pdf": "present_but_rejected_wrong_domain_and_persistence_path"
+  },
+  "decision": {
+    "entire_mcp_server": "reject",
+    "generic_backtest_tool": "reject",
+    "walk_forward": "reject",
+    "monte_carlo": "reject_as_monte_carlo",
+    "bootstrap": "reject",
+    "run_card": "adapt_code_hash_inventory_only",
+    "per_symbol_signal_lag_and_next_open": "adapt_code",
+    "pit_masking": "adapt_code",
+    "a_share_execution_skeleton": "adapt_code_after_dated_rules_and_typed_fill_failures",
+    "production_mcp_allowlist": []
+  }
+}

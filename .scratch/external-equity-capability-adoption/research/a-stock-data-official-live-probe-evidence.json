@@ -1,0 +1,70 @@
+{
+  "evidence_version": 1,
+  "observed_at_utc": "2026-07-24T10:51:43.975Z",
+  "upstream_commit": "06791b5a3159401524c10bd0e28aaebe415ce604",
+  "tls": "Node fetch used default certificate and hostname verification; no custom agent or insecure SSL context.",
+  "raw_payload_policy": "No provider response bodies or financial values are stored. Only protocol metadata, schema keys, row counts, timings, and payload hashes are retained.",
+  "results": [
+    {
+      "id": "szse_dragon_tiger_verified_tls",
+      "status": 200,
+      "duration_ms": 265,
+      "bytes": 6335,
+      "content_type": "application/json",
+      "container_count": 1,
+      "row_count": 10,
+      "row_keys": ["bz", "cjje", "cjsl", "dqrq", "plyy", "zqdm", "zqjc"],
+      "has_security_identity": true,
+      "has_amount": true,
+      "has_reason": true,
+      "has_published_at": false,
+      "has_available_at": false,
+      "sha256": "68d14388ef68b3aee7866a2cf2e8d417cc257f87f2e9dc4e9b9f3df83689084e"
+    },
+    {
+      "id": "sse_trade_public_verified_tls",
+      "status": 200,
+      "duration_ms": 1048,
+      "bytes": 49618,
+      "content_type": "application/json;charset=UTF-8",
+      "record_count": 510,
+      "record_shape": "string",
+      "has_typed_security_identity": false,
+      "has_typed_units": false,
+      "has_published_at": false,
+      "has_available_at": false,
+      "sha256": "09f2e7d45e1a469451fb7742d416b0600e3509b46238e991cd57dd88394e2145"
+    },
+    {
+      "id": "szse_announcements_verified_tls",
+      "status": 200,
+      "duration_ms": 1080,
+      "bytes": 1637,
+      "content_type": "application/json;charset=UTF-8",
+      "row_count": 3,
+      "row_keys": [
+        "_index",
+        "annId",
+        "attachFormat",
+        "attachPath",
+        "attachSize",
+        "bigCategoryId",
+        "bigIndustryCode",
+        "bondType",
+        "channelCode",
+        "content",
+        "id",
+        "publishTime",
+        "secCode",
+        "secName",
+        "smallCategoryId",
+        "title"
+      ],
+      "identity_match_count": 3,
+      "has_publish_time": true,
+      "has_pdf_path": true,
+      "has_available_at": false,
+      "sha256": "1b790c02a0f567a0bd2245d9ff5ecd5e82072102b624aa189351311d4515e4a0"
+    }
+  ]
+}

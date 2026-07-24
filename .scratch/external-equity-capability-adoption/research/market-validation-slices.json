@@ -1,0 +1,89 @@
+{
+  "schema_version": "ExternalEquityMarketValidationPlan@1",
+  "evidence_files": [
+    {
+      "path": "a-stock-data-live-probe-evidence.json",
+      "sha256": "70d6e7d4b8a2c5bd328d4eed4338446e3ad593e6a02eeb98a06dcc519ab45e32"
+    },
+    {
+      "path": "a-stock-data-official-live-probe-evidence.json",
+      "sha256": "0a39d4c1f9a72b4ca4157729fba15fcf2a7bae37e55be53dd2f453edb887d1ec"
+    },
+    {
+      "path": "global-stock-data-live-probe-evidence.json",
+      "sha256": "0b6ee4940eb023b1ff5aeeba3e6565e439f7770e5cbf3acb0b5578c564b95b1c"
+    },
+    {
+      "path": "global-stock-data-official-cross-validation-evidence.json",
+      "sha256": "2831b2904d998da4a28ba44e825f865d984dce1d720699fd04ba7d8acb95165c"
+    },
+    {
+      "path": "vibe-trading-runtime-evidence.json",
+      "sha256": "8b824b690b4914760e40f6eddb711b2d591cf32056581417d53c7f2684833c55"
+    }
+  ],
+  "upstreams": [
+    {
+      "candidate": "a-stock-data",
+      "checkout": "E:\\workspace\\tradingSystem-upstreams\\a-stock-data",
+      "commit": "06791b5a3159401524c10bd0e28aaebe415ce604"
+    },
+    {
+      "candidate": "global-stock-data",
+      "checkout": "E:\\workspace\\tradingSystem-upstreams\\global-stock-data",
+      "commit": "d52a8a0013363577bceb28ca876c88fe6c1a5aeb"
+    },
+    {
+      "candidate": "Vibe-Trading",
+      "checkout": "E:\\workspace\\tradingSystem-upstreams\\Vibe-Trading",
+      "commit": "0aa45a9ff3df58fab1c50f5400d9b112d19cacc6"
+    }
+  ],
+  "slices": [
+    {
+      "slice_id": "a-share-002897-sz",
+      "market": "a_share",
+      "security_identity": "CN:SZSE:UNRESOLVED-QUALIFICATION-SUBJECT",
+      "issuer_identity": "CN:ISSUER:UNRESOLVED-QUALIFICATION-SUBJECT",
+      "as_of": "2026-07-24",
+      "source_authorities": [
+        "CNINFO",
+        "SZSE"
+      ],
+      "qualified_observations": [
+        "cninfo_security_map_https",
+        "cninfo_announcements_exact",
+        "szse_announcements_verified_tls"
+      ]
+    },
+    {
+      "slice_id": "us-aapl",
+      "market": "us",
+      "security_identity": "US:XNAS:AAPL",
+      "issuer_identity": "US:SEC:CIK0000320193",
+      "as_of": "2026-07-24",
+      "source_authorities": [
+        "SEC"
+      ],
+      "qualified_observations": [
+        "sec-submissions-aapl",
+        "sec-companyfacts-aapl"
+      ]
+    },
+    {
+      "slice_id": "hk-00700",
+      "market": "hk",
+      "security_identity": "HK:XHKG:00700",
+      "issuer_identity": "HK:ISSUER:00700",
+      "as_of": "2026-07-24",
+      "source_authorities": [
+        "HKEXnews",
+        "Tencent investor relations"
+      ],
+      "qualified_observations": [
+        "hkexnews-tencent-2025-annual-report",
+        "tencent-ir-2025-annual-report"
+      ]
+    }
+  ]
+}

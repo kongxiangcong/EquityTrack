@@ -1,0 +1,36 @@
+{
+  "suite": "global-stock-data-official-cross-validation",
+  "retrieved_at": "2026-07-24T10:58:00Z",
+  "raw_bodies_persisted": false,
+  "checks": [
+    {
+      "name": "hkexnews-tencent-2025-annual-report",
+      "authority": "HKEXnews",
+      "security_codes": [
+        "00700",
+        "80700"
+      ],
+      "release_time_local": "2026-04-09 17:21",
+      "category": "Financial Statements/ESG Information - [Annual Report]",
+      "document_path": "/listedco/listconews/sehk/2026/0409/2026040901231.pdf",
+      "http_status": 200,
+      "content_type": "application/pdf",
+      "bytes": 3999857,
+      "sha256": "2a7547168077c3d9994af673125e77612e8656bc0f17ad189371d7e4088f4e98"
+    },
+    {
+      "name": "tencent-ir-2025-annual-report",
+      "authority": "Tencent investor relations",
+      "document_url": "https://static.www.tencent.com/uploads/2026/04/09/62d786fcf3d3c8cb7e54791ee95439ac.pdf",
+      "http_status": 200,
+      "content_type": "application/pdf",
+      "bytes": 3999857,
+      "sha256": "2a7547168077c3d9994af673125e77612e8656bc0f17ad189371d7e4088f4e98"
+    }
+  ],
+  "cross_validation": {
+    "byte_identical": true,
+    "interpretation": "The issuer-IR document is a byte-identical first-party mirror of the HKEXnews regulatory filing.",
+    "rights_boundary": "Manual qualification proves document identity only. It does not authorize an HKEXnews website scraper or systematic extraction."
+  }
+}

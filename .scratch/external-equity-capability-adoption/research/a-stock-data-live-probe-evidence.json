@@ -1,0 +1,144 @@
+{
+  "evidence_version": 1,
+  "observed_at_utc": "2026-07-24T10:49:04.250Z",
+  "upstream_commit": "06791b5a3159401524c10bd0e28aaebe415ce604",
+  "probe_runtime": {
+    "node": "v25.8.1",
+    "python": "3.11.15",
+    "isolated_environment": "E:\\workspace\\tradingSystem-upstreams\\a-stock-data\\.venv-qualification",
+    "packages": {
+      "mootdx": "0.11.7",
+      "requests": "2.34.2",
+      "pandas": "3.0.5",
+      "stockstats": "0.6.8",
+      "httpx": "0.25.2"
+    }
+  },
+  "http": [
+    {
+      "id": "tencent_quote",
+      "status": 200,
+      "duration_ms": 202,
+      "bytes": 494,
+      "content_type": "text/html; charset=GBK",
+      "parse": "non_json",
+      "sha256": "3ceec400b35d6fcd3003b5a93be158371fcf99d05db09157783d23ea90c92478"
+    },
+    {
+      "id": "baidu_kline_exact",
+      "status": 200,
+      "duration_ms": 438,
+      "bytes": 266246,
+      "business_code": "0",
+      "top_keys": ["QueryID", "Result", "ResultCode"],
+      "keys_count": 18,
+      "row_count": 2001,
+      "has_security_identity": false,
+      "has_published_at": false,
+      "has_available_at": false,
+      "has_retrieved_at": false,
+      "sha256": "1fa663157157d886b83c359881f4ce46e0362a7ac8f2fe136be955166fe61637"
+    },
+    {
+      "id": "eastmoney_quote_first",
+      "status": 200,
+      "duration_ms": 144,
+      "bytes": 213,
+      "top_keys": ["data", "dlmkts", "dsc", "full", "lt", "rc", "rt", "svr"],
+      "sha256": "e7c7c15f55bf60a84006c5b810983db17c24e1706a9759385fbcd1b2eee24058"
+    },
+    {
+      "id": "eastmoney_quote_repeat",
+      "duration_ms": 91,
+      "error": "TypeError: fetch failed",
+      "qualification_effect": "A repeat request in the same run failed at transport while peer endpoints remained reachable; no response or typed retry evidence existed."
+    },
+    {
+      "id": "eastmoney_reports",
+      "status": 200,
+      "duration_ms": 142,
+      "bytes": 1451,
+      "top_keys": ["TotalPage", "currentYear", "data", "hits", "pageNo", "size"],
+      "sha256": "7508b65e3526e843e2be65201e1dad89bb3ed81de5da14678616d9b27bcc1f3c"
+    },
+    {
+      "id": "cninfo_security_map_https",
+      "status": 200,
+      "duration_ms": 262,
+      "bytes": 588850,
+      "top_keys": ["stockList"],
+      "stock_count": 6221,
+      "requested_identity_found": true,
+      "org_id_present": true,
+      "sha256": "59650c9478d812e53edd985b879062134b83ec260b5b45f32d7106836187aed7"
+    },
+    {
+      "id": "cninfo_announcements_exact",
+      "status": 200,
+      "duration_ms": 105,
+      "bytes": 2367,
+      "row_count": 3,
+      "total_record_num": 1166,
+      "identity_match_count": 3,
+      "row_keys": [
+        "adjunctSize",
+        "adjunctType",
+        "adjunctUrl",
+        "announcementContent",
+        "announcementId",
+        "announcementTime",
+        "announcementTitle",
+        "announcementType",
+        "announcementTypeName",
+        "associateAnnouncement",
+        "batchNum",
+        "columnId",
+        "id",
+        "important",
+        "orgId",
+        "orgName",
+        "pageColumn",
+        "secCode",
+        "secName",
+        "secNameList",
+        "shortTitle",
+        "storageTime",
+        "tileSecName"
+      ],
+      "has_published_time": true,
+      "has_available_at": false,
+      "has_retrieved_at": false,
+      "sha256": "b97bf3864fbcba85e864f2246d8f4e7b8ca8a2cfde6e3ef8aad4444738dec45e"
+    },
+    {
+      "id": "ths_limit_pool_exact",
+      "status": 200,
+      "duration_ms": 159,
+      "bytes": 3929,
+      "business_code": 0,
+      "business_message": "success",
+      "row_count": 3,
+      "has_published_at": false,
+      "has_available_at": false,
+      "has_retrieved_at": false,
+      "sha256": "6a8fd38427a9cd4e57fe2972620381653de1cdebf2e4ab0afedcbb46891bcfc3"
+    },
+    {
+      "id": "sina_finance",
+      "status": 200,
+      "duration_ms": 342,
+      "bytes": 19676,
+      "top_keys": ["result"],
+      "sha256": "cd4ad5a075f2e825986ce678732ee9082b75c2cbb9845454800244d87a8830e4"
+    }
+  ],
+  "tcp": {
+    "note": "TCP handshake only. No TDX market payload was requested because importing/constructing mootdx creates or reads user-home configuration, the endpoint data rights were not qualified, and a handshake is not proof of usable data.",
+    "port": 7709,
+    "servers_tested": 10,
+    "tcp_connected": 10,
+    "duration_ms_min": 12,
+    "duration_ms_max": 39
+  },
+  "raw_payload_policy": "No provider response bodies or financial values are stored. Only protocol metadata, schema keys, row counts, timings, and payload hashes are retained."
+}
