@@ -105,31 +105,20 @@ class PlatformOperations:
             lock_state = {name: (self.data_root / name).exists() for name in (".writer.lock", ".server.presence", ".workflow.presence")}
             provider_readiness: Any = {"status": "not_configured"}
             if job_file is not None:
-                try:
-                    job = json.loads(job_file.read_text(encoding="utf-8"))
-                    if not isinstance(job, dict) or not isinstance(job.get("provider"), dict):
-                        raise TypeError("provider job must contain a provider object")
-                    provider = job["provider"]
-                    endpoint = provider["endpoint"]
-                    provider_type = provider.get("provider_type", "http_json")
-                    credential_env = provider["credential_env"]
-                    provider_id = provider["provider_id"]
-                    if not all(
-                        isinstance(item, str) and item
-                        for item in (endpoint, provider_type, credential_env, provider_id)
-                    ):
-                        raise TypeError("provider job identity fields must be strings")
-                except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-                    raise OperationError(
-                        "PROVIDER_JOB_INVALID",
-                        "Provider job decoding failed.",
-                        substep="provider_job.decode",
-                        cause_type=type(error).__name__,
-                    ) from None
-                if not endpoint.startswith(("https://", "http://127.0.0.1:", "http://localhost:")): raise OperationError("PROVIDER_DESTINATION_INVALID", "Provider endpoint must be HTTPS or loopback.")
-                if provider_type not in {"http_json", "tushare_compatible"}: raise OperationError("PROVIDER_TYPE_UNSUPPORTED", "Configured provider type is unsupported.")
-                credential_configured = bool(self.credential_adapter.get(credential_env))
-                provider_readiness = {"status": "configured" if credential_configured else "missing_credential", "provider_type": provider_type, "provider_scope": hashlib.sha256(provider_id.encode()).hexdigest(), "destination_scope": hashlib.sha256(endpoint.encode()).hexdigest()}
+                from trading_platform.provider_config import decode_sync_job
+
+                decoded = decode_sync_job(job_file)
+                credential_configured = bool(
+                    self.credential_adapter.get(decoded.credential_variable)
+                )
+                provider_readiness = {
+                    "status": "configured" if credential_configured else "missing_credential",
+                    "job_schema_version": decoded.job.schema_version,
+                    "adapter_version": decoded.source_policy.adapter_version,
+                    "source_policy_identity": decoded.source_policy.identity,
+                    "provider_scope": hashlib.sha256(decoded.provider_id.encode()).hexdigest(),
+                    "credential_scope": hashlib.sha256(decoded.credential_variable.encode()).hexdigest(),
+                }
             privacy_errors = self._privacy_source_errors(self.repo_root)
             errors = tuple(report.errors) + privacy_errors
             return {"status": "failed" if errors else report.status, "checks": report.checks + ("personal_source_privacy",), "errors": errors, "warnings": warnings, "lock_state": lock_state, "provider_readiness": provider_readiness, "python_version": sys.version.split()[0], "sqlite_version": sqlite3.sqlite_version, "build_identity": build_identity, "credentials": scopes}

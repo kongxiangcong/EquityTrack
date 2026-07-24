@@ -8,11 +8,15 @@ import sqlite3
 import stat
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+from trading_platform.provider_qualification import decode_provider_qualification_receipt
+from trading_platform.data.providers import tushare_compatible_code_identity
 
+from trading_platform.provider_config import production_transport_identity
 from trading_platform.identity.canonical import CANONICALIZATION_VERSION, canonical_hash
 from trading_platform.identity.code import build_code_identity
 from trading_platform.verification import VerificationOutputRedactor
@@ -131,7 +135,7 @@ class AcceptanceEvidenceService:
         17: "test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity",
         18: "test_offline_valid_stale_missing_and_coverage_missing_fail_closed",
         19: "test_fixture_manifest_separates_real_derived_facts_from_synthetic_sentinels",
-        20: "test_empty_rate_limit_and_schema_drift_do_not_advance_cursor",
+        20: "test_same_authority_source_conflict_blocks_new_revision_and_cursor",
         21: "test_revision_creates_parallel_version_and_new_snapshot",
         22: "test_revision_v2_switch_discard_and_ended_terminal",
         23: "test_revision_v2_switch_discard_and_ended_terminal",
@@ -208,19 +212,28 @@ class AcceptanceEvidenceService:
         ),
     }
 
-    def __init__(self, data_root: Path, repo_root: Path) -> None:
+    def __init__(self, data_root: Path, repo_root: Path, receipt_loader: Callable[[str], bytes] | None = None) -> None:
         self.data_root = data_root.resolve()
         self.repo_root = repo_root.resolve()
+        self._receipt_loader = receipt_loader
 
     def run(
         self,
         fixture_manifest_path: Path,
-        live_qualification: Mapping[str, Any] | None = None,
+        live_qualification_artifact_id: str | None = None,
     ) -> AcceptanceEvidenceResult:
         trusted_root = (self.repo_root / "tests/fixtures/platform_data").resolve()
         fixture_path = fixture_manifest_path.resolve()
         if fixture_path.parent != trusted_root or fixture_path.name != "manifest.json":
             raise ValueError("FIXTURE_MANIFEST_OUTSIDE_TRUSTED_ROOT")
+        live_qualification = None
+        if live_qualification_artifact_id is not None:
+            if self._receipt_loader is None:
+                raise ValueError("QUALIFICATION_RECEIPT_STORE_UNAVAILABLE")
+            live_qualification = decode_provider_qualification_receipt(
+                self._receipt_loader(live_qualification_artifact_id),
+                live_qualification_artifact_id,
+            ).to_dict()
         evidence_root = self.data_root / ".acceptance-run"
         evidence_root.mkdir(parents=True, exist_ok=True)
         browser_evidence_path = evidence_root / "browser-cdp.json"
@@ -961,6 +974,20 @@ class AcceptanceEvidenceService:
             "source_authority",
             "terms_profile",
             "attempts",
+            "invocation_id",
+            "provider_id",
+            "adapter_version",
+            "adapter_code_identity",
+            "credential_scope_id",
+            "query_policy_identity",
+            "source_policy_identity",
+            "request_fingerprint",
+            "data_snapshot_id",
+            "transport_identity",
+            "qualification_profile",
+            "as_of_at",
+            "qualified_at",
+            "source_policy",
         )
         if any(field not in live for field in required):
             failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INCOMPLETE")
@@ -968,28 +995,60 @@ class AcceptanceEvidenceService:
         elif live["status"] == "qualified":
             attempts = live.get("attempts")
             valid_attempts = isinstance(attempts, list) and bool(attempts)
+            completed: set[str] = set()
             if valid_attempts:
                 for attempt in attempts:
                     if not isinstance(attempt, Mapping):
                         valid_attempts = False
                         break
                     raw_sha256 = attempt.get("raw_sha256")
+                    status = attempt.get("status")
                     if (
                         not attempt.get("attempt_id")
                         or not attempt.get("dataset")
-                        or attempt.get("status") != "complete"
-                        or not isinstance(raw_sha256, str)
+                        or not attempt.get("retrieved_at")
+                        or status not in {"complete", "partial", "missing", "failed", "rate_limited"}
+                    ):
+                        valid_attempts = False
+                        break
+                    if raw_sha256 is not None and (
+                        not isinstance(raw_sha256, str)
                         or len(raw_sha256) != 64
                         or any(
                             character not in "0123456789abcdef"
                             for character in raw_sha256.lower()
                         )
-                        or not attempt.get("retrieved_at")
-                        or attempt.get("error_code")
                     ):
                         valid_attempts = False
                         break
-            if not valid_attempts or live.get("blockers"):
+                    if status == "complete":
+                        if raw_sha256 is None or attempt.get("error_code"):
+                            valid_attempts = False
+                            break
+                        completed.add(str(attempt["dataset"]))
+            policy = live.get("source_policy")
+            routes = policy.get("routes") if isinstance(policy, Mapping) else None
+            required_datasets = {
+                str(route.get("dataset"))
+                for route in routes or ()
+                if isinstance(route, Mapping) and route.get("completeness") == "required"
+            }
+            try:
+                qualified_at = datetime.fromisoformat(str(live["qualified_at"]))
+                qualification_age = datetime.now(timezone.utc) - qualified_at.astimezone(timezone.utc)
+                qualification_fresh = -timedelta(minutes=5) <= qualification_age <= timedelta(hours=24)
+            except (KeyError, TypeError, ValueError):
+                qualification_fresh = False
+            if (
+                not valid_attempts
+                or not required_datasets
+                or not required_datasets.issubset(completed)
+                or live.get("blockers")
+                or live.get("adapter_code_identity") != tushare_compatible_code_identity()
+                or live.get("transport_identity") != production_transport_identity()
+                or live.get("qualification_profile") != "production"
+                or not qualification_fresh
+            ):
                 failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INVALID")
                 live["status"] = "failed"
         elif live["status"] == "external_blocked" and not live.get("blockers"):

@@ -23,9 +23,16 @@ from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.data.providers import FixtureProvider
 from trading_platform.domain.data import (
     FetchBatch,
+    CompletenessRequirement,
+    FallbackMode,
+    QueryPolicy,
+    SourceFailureDisposition,
     FixtureRights,
     SnapshotPurpose,
     SourceAuthority,
+    SourcePolicy,
+    SourceRights,
+    SourceRoute,
     SyncRequest,
     SyncStatus,
 )
@@ -257,16 +264,29 @@ def persist_review_snapshot(
         )
         for dataset in payloads
     }
+    query_policy = QueryPolicy("QueryPolicy@1", 7, "L", "none")
+    source_policy = SourcePolicy(
+        "SourcePolicy@1",
+        provider.provider_id,
+        provider.adapter_version,
+        actual.source_id,
+        SourceAuthority.OFFICIAL,
+        "forecast-review-fixture-terms@1",
+        SourceRights(True, True, False),
+        tuple(SourceRoute(dataset, 1, CompletenessRequirement.REQUIRED, 1, FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK) for dataset in payloads),
+    )
     data_tasks = PlatformTaskFixture(
         root.data_root,
-        providers=(provider,),
+        provider=provider,
+        query_policy=query_policy,
+        source_policy=source_policy,
         fixture_rights=rights,
     )
     sync = data_tasks.data.sync(
         SyncRequest(
             "forecast-review-evidence",
             "security_yihua",
-            "002897.SZ",
+            "002897",
             "2027-03-21",
             datetime.fromisoformat("2027-03-21T00:00:00+08:00"),
             "Asia/Shanghai",

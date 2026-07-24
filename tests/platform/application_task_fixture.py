@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -18,7 +18,7 @@ from trading_platform.application.workflow_ledger import WorkflowLedgerPort
 from trading_platform.chart import ChartService
 from trading_platform.data.repository import DataRepository
 from trading_platform.data.service import DataSyncService
-from trading_platform.domain.data import DataProvider, FixtureRights
+from trading_platform.domain.data import DataProvider, FixtureRights, QueryPolicy, SourcePolicy
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.market import SQLiteMarketRepository
@@ -121,7 +121,11 @@ class PlatformTaskFixture:
         self,
         data_root: Path,
         migrations_root: Path | None = None,
-        providers: Sequence[DataProvider] = (),
+        provider: DataProvider | None = None,
+        query_policy: QueryPolicy | None = None,
+        source_policy: SourcePolicy | None = None,
+        qualified_equivalents=(),
+        qualified_equivalent_authority=None,
         fixture_rights: Mapping[tuple[str, str], FixtureRights] | None = None,
         research_engine: ResearchEngine | None = None,
         workflow_fault_injector=None,
@@ -138,12 +142,14 @@ class PlatformTaskFixture:
         ledger = cast(WorkflowLedgerPort, store.workflow_ledger)
         self._store = store
         self.faults = StorageFaultFixture(store)
-        self.health = Health(persistence=True, sync=bool(providers))
+        self.health = Health(persistence=True, sync=provider is not None)
         self.watchlist = store.watchlist
         self.data = None
-        if providers:
+        if provider is not None:
+            if query_policy is None or source_policy is None:
+                raise ValueError("TEST_PROVIDER_POLICY_REQUIRED")
             repository = self.faults.attach_data_repository(workflow_fault_injector)
-            self.data = DataSyncService(repository, providers, fixture_rights)
+            self.data = DataSyncService(repository, provider, query_policy, source_policy, fixture_rights, tuple(qualified_equivalents), qualified_equivalent_authority)
         self.research = ResearchWorkflow(
             ledger,
             research_engine or ResearchEngine(),

@@ -25,7 +25,7 @@ from trading_platform.application.contracts import (
 )
 from trading_platform.data.service import DataSyncService
 from trading_platform.data.providers import FixtureProvider
-from trading_platform.domain.data import FixtureRights, SnapshotPurpose, SyncRequest
+from trading_platform.domain.data import CompletenessRequirement, FallbackMode, FixtureRights, QueryPolicy, SnapshotPurpose, SourceAuthority, SourceFailureDisposition, SourcePolicy, SourceRights, SourceRoute, SyncRequest
 from trading_platform.domain.plans import (
     CreatePlanDraftCommand,
     PlanCondition,
@@ -87,7 +87,7 @@ class BrowserAcceptanceFixture:
             SyncRequest(
                 "browser-acceptance:sync",
                 security_id,
-                "002897.SZ",
+                "002897",
                 "2026-07-11",
                 datetime(2026, 7, 11, tzinfo=timezone.utc),
                 "Asia/Shanghai",
@@ -279,7 +279,7 @@ class BrowserAcceptanceFixture:
 
 def load_browser_fixture(
     manifest_path: Path,
-) -> tuple[FixtureProvider, dict[tuple[str, str], FixtureRights]]:
+) -> tuple[FixtureProvider, QueryPolicy, SourcePolicy, dict[tuple[str, str], FixtureRights]]:
     root = manifest_path.resolve().parent
     manifest = BrowserAcceptanceFixture._load(manifest_path.resolve())
     members = manifest.get("members")
@@ -331,7 +331,18 @@ def load_browser_fixture(
         source_identity,
         "derived-fact-fixture-terms@1",
     )
-    return provider, rights
+    query_policy = QueryPolicy("QueryPolicy@1", 7, "L", "none")
+    source_policy = SourcePolicy(
+        "SourcePolicy@1",
+        provider.provider_id,
+        provider.adapter_version,
+        source_identity,
+        SourceAuthority.FIXTURE,
+        "derived-fact-fixture-terms@1",
+        SourceRights(True, True, False),
+        tuple(SourceRoute(dataset, 1, CompletenessRequirement.REQUIRED, 1, FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK) for dataset in payloads),
+    )
+    return provider, query_policy, source_policy, rights
 
 
 __all__ = [

@@ -14,7 +14,6 @@ from trading_platform.application import (
     SecurityIdentity,
     decode_market_snapshot_command,
     decode_plan_evaluation_command,
-    decode_qualification_artifact,
     decode_watchlist_identity,
     open_account,
     open_account_acceptance,
@@ -172,11 +171,6 @@ def test_application_tasks_depend_inward_and_composition_has_no_locator() -> Non
             "PLAN_EVALUATION_COMMAND_INVALID",
             "plan_evaluation_command.decode",
         ),
-        (
-            decode_qualification_artifact,
-            "QUALIFICATION_ARTIFACT_INVALID",
-            "acceptance.qualification.decode",
-        ),
     ),
 )
 def test_json_command_codecs_fail_with_stable_redacted_diagnostics(
@@ -249,7 +243,7 @@ def test_sync_job_failure_is_typed_actionable_and_redacted(tmp_path: Path) -> No
     assert completed.returncode == 2
     assert envelope["error"]["code"] == "PROVIDER_JOB_INVALID"
     assert envelope["error"]["diagnostic"] == {
-        "cause_type": "KeyError",
+        "cause_type": "TypeError",
         "substep": "provider_job.decode",
     }
     assert secret not in completed.stdout + completed.stderr

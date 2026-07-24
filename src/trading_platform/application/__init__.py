@@ -37,7 +37,6 @@ if TYPE_CHECKING:
         CommandCodecError,
         decode_market_snapshot_command,
         decode_plan_evaluation_command,
-        decode_qualification_artifact,
         decode_watchlist_identity,
     )
     from .contracts import (
@@ -77,7 +76,6 @@ _EXPORT_MODULES = {
     "WorkspaceUpdateCommand": ".web_tasks",
     "decode_market_snapshot_command": ".command_codecs",
     "decode_plan_evaluation_command": ".command_codecs",
-    "decode_qualification_artifact": ".command_codecs",
     "decode_research_workflow_request": ".research_request_codec",
     "decode_watchlist_identity": ".command_codecs",
     "open_acceptance_evidence": ".bootstrap",

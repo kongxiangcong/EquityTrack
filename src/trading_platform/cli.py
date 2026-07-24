@@ -40,7 +40,6 @@ from trading_platform.application import (
     StartResearchWorkflow,
     decode_market_snapshot_command,
     decode_plan_evaluation_command,
-    decode_qualification_artifact,
     decode_watchlist_identity,
     decode_research_workflow_request,
 )
@@ -121,11 +120,10 @@ def _parser() -> argparse.ArgumentParser:
     acceptance.add_argument("--data-root", type=Path, required=True)
     acceptance.add_argument("--fixture-manifest", type=Path, required=True)
     acceptance.add_argument("--repo-root", type=Path, default=Path.cwd())
-    acceptance.add_argument("--live-qualification-file", type=Path)
+    acceptance.add_argument("--live-qualification-artifact-id")
     qualify = sub.add_parser("provider-qualify")
     qualify.add_argument("--data-root", type=Path, required=True)
     qualify.add_argument("--job-file", type=Path, required=True)
-    qualify.add_argument("--output", type=Path, required=True)
     preview = sub.add_parser("import-preview")
     preview.add_argument("--source", type=Path, action="append", required=True)
     preview.add_argument("--account-alias", required=True)
@@ -291,7 +289,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.data_root, args.job_file
             ) as qualification_task:
                 qualification = qualification_task.run()
-                qualification_task.write_artifact(qualification, args.output)
             result = qualification.to_dict()
             if qualification.status != "qualified":
                 raise OperationError(
@@ -299,13 +296,8 @@ def main(argv: list[str] | None = None) -> int:
                     "Provider qualification did not pass.",
                 )
         elif operation == "acceptance":
-            live_qualification = (
-                decode_qualification_artifact(args.live_qualification_file.read_bytes())
-                if args.live_qualification_file
-                else None
-            )
             evidence = open_acceptance_evidence(args.data_root, args.repo_root).run(
-                args.fixture_manifest, live_qualification
+                args.fixture_manifest, args.live_qualification_artifact_id
             )
             result = {
                 "slice_acceptance": evidence.slice_acceptance,

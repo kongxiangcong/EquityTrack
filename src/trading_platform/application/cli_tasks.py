@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import SyncRequest, SyncResult
@@ -12,14 +11,9 @@ from trading_platform.market import MarketEvaluationService
 from trading_platform.workflows.research import ResearchWorkflow
 
 from .contracts import DoctorReport, StartResearchWorkflow
-from .research_request_codec import decode_research_workflow_request
 from .watchlist import Watchlist
-from .command_codecs import (
-    CommandCodecError,
-    decode_market_snapshot_command_value,
-    decode_plan_evaluation_command_value,
-    decode_provider_security_identity_value,
-)
+from .market_contracts import EvaluatePlanCommand
+from .provider_job import ProviderJob
 
 
 class DoctorTask(Protocol):
@@ -32,31 +26,11 @@ class DailyResearchContractError(RuntimeError):
     cause_type = "ResearchWorkflowResult"
 
 
-def _register_job_security(
-    watchlist: Watchlist, job: Mapping[str, object]
-) -> None:
-    value = job.get("security_identity")
-    if value is None:
+def _register_job_security(watchlist: Watchlist, job: ProviderJob) -> None:
+    identity = job.security_identity
+    if identity is None:
         return
-    if not isinstance(value, Mapping):
-        raise CommandCodecError(
-            "WATCHLIST_IDENTITY_INVALID",
-            "watchlist_identity.decode",
-            "TypeError",
-        )
-    identity_payload = dict(value)
-    invocation_id = identity_payload.pop("invocation_id", None)
-    if invocation_id is not None and not isinstance(invocation_id, str):
-        raise CommandCodecError(
-            "WATCHLIST_IDENTITY_INVALID",
-            "watchlist_identity.decode",
-            "TypeError",
-        )
-    identity = decode_provider_security_identity_value(identity_payload)
-    watchlist.add(
-        invocation_id or f"provider-security:{identity.security_id}",
-        identity,
-    )
+    watchlist.add(job.security_invocation_id or f"provider-security:{identity.security_id}", identity)
 
 
 class DataSynchronization:
@@ -64,7 +38,7 @@ class DataSynchronization:
 
     def __init__(
         self,
-        job: Mapping[str, object],
+        job: ProviderJob,
         request: SyncRequest,
         watchlist: Watchlist,
         data: DataSyncService,
@@ -103,7 +77,7 @@ class DailyResearchCycle:
 
     def __init__(
         self,
-        job: Mapping[str, object],
+        job: ProviderJob,
         request: SyncRequest,
         watchlist: Watchlist,
         data: DataSyncService,
@@ -125,37 +99,25 @@ class DailyResearchCycle:
         research = None
         market = None
         evaluation = None
-        research_input = self._job.get("research_request")
-        if research_input is not None:
-            research_request = decode_research_workflow_request(
-                json.dumps(research_input).encode()
-            )
+        if self._job.research_request is not None:
+            research_request = self._job.research_request
             outcome = self._research.handle(StartResearchWorkflow(research_request))
             if not isinstance(outcome, ResearchWorkflowResult):
                 raise DailyResearchContractError(
                     "Research workflow returned the wrong typed result."
                 )
             research = outcome
-        market_input = self._job.get("market")
-        if market_input is not None:
-            market = self._market.build_market_snapshot(
-                decode_market_snapshot_command_value(market_input)
-            )
-            evaluation_input = self._job.get("evaluation")
-            if evaluation_input is not None:
-                if not isinstance(evaluation_input, Mapping):
-                    raise CommandCodecError(
-                        "PLAN_EVALUATION_COMMAND_INVALID",
-                        "plan_evaluation_command.decode",
-                        "TypeError",
-                    )
-                evaluation_data = {
-                    **dict(evaluation_input),
-                    "market_snapshot_id": market.market_snapshot_id,
-                }
-                evaluation = self._market.evaluate_plan(
-                    decode_plan_evaluation_command_value(evaluation_data)
-                )
+        if self._job.market_command is not None:
+            market = self._market.build_market_snapshot(self._job.market_command)
+            if self._job.evaluation_template is not None:
+                template = self._job.evaluation_template
+                evaluation = self._market.evaluate_plan(EvaluatePlanCommand(
+                    template.invocation_id,
+                    template.plan_version_id,
+                    market.market_snapshot_id,
+                    template.evaluator_version,
+                    template.evaluation_policy_version,
+                ))
         return DailyResearchResult(
             sync=sync,
             research=research,

@@ -24,7 +24,7 @@ from trading_platform.persistence.workspace import WorkspaceService
 from trading_platform.plans import PlanService
 from trading_platform.operations import PlatformOperations
 from trading_platform.operations import OperationError
-from trading_platform.provider_config import load_sync_job
+from trading_platform.provider_config import ProviderRuntimeAdapter, load_sync_job
 from trading_platform.provider_qualification import ProviderQualificationService
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.research import SnapshotToResearchRequestAssembler
@@ -38,7 +38,7 @@ from .cli_tasks import DailyResearchCycle, DataSynchronization
 from .health import Health
 from .watchlist import Watchlist
 from .research_tasks import ResearchArchive, WorkflowInspection
-from .workflow_ledger import ResearchViewCutoverCompleteQuery, WorkflowLedgerPort
+from .workflow_ledger import QualificationReceiptQuery, ResearchViewCutoverCompleteQuery, WorkflowLedgerPort
 from .web_tasks import (
     ChartAnnotations,
     ChartWorkspace,
@@ -125,8 +125,9 @@ def open_data_synchronization(
     *,
     credential_adapter: CredentialAdapter | None = None,
     migrations_root: Path | None = None,
+    provider_runtime: ProviderRuntimeAdapter | None = None,
 ) -> Iterator[DataSynchronization]:
-    job, provider, request = load_sync_job(job_file, credential_adapter)
+    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
     with _store(data_root, migrations_root) as store:
         repository = DataRepository(
             store.connection,
@@ -135,10 +136,10 @@ def open_data_synchronization(
             store.writer_lock,
         )
         yield DataSynchronization(
-            job,
-            request,
+            loaded.job,
+            loaded.request,
             store.watchlist,
-            DataSyncService(repository, (provider,)),
+            DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy),
         )
 
 
@@ -149,8 +150,9 @@ def open_provider_qualification(
     *,
     credential_adapter: CredentialAdapter | None = None,
     migrations_root: Path | None = None,
+    provider_runtime: ProviderRuntimeAdapter | None = None,
 ) -> Iterator[ProviderQualificationService]:
-    job, provider, request = load_sync_job(job_file, credential_adapter)
+    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
     with _store(data_root, migrations_root) as store:
         repository = DataRepository(
             store.connection,
@@ -158,10 +160,10 @@ def open_provider_qualification(
             store.data_root,
             store.writer_lock,
         )
-        data = DataSyncService(repository, (provider,))
-        synchronization = DataSynchronization(job, request, store.watchlist, data)
+        data = DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy)
+        synchronization = DataSynchronization(loaded.job, loaded.request, store.watchlist, data)
         yield ProviderQualificationService(
-            dict(job["provider"]), request, synchronization, data
+            loaded, synchronization, data, _ledger(store)
         )
 
 
@@ -172,8 +174,9 @@ def open_daily_research_cycle(
     *,
     credential_adapter: CredentialAdapter | None = None,
     migrations_root: Path | None = None,
+    provider_runtime: ProviderRuntimeAdapter | None = None,
 ) -> Iterator[DailyResearchCycle]:
-    job, provider, request = load_sync_job(job_file, credential_adapter)
+    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
     with _store(data_root, migrations_root) as store:
         repository = DataRepository(
             store.connection,
@@ -192,10 +195,10 @@ def open_daily_research_cycle(
             SQLiteMarketRepository(store.connection, store.writer_lock), plans
         )
         yield DailyResearchCycle(
-            job,
-            request,
+            loaded.job,
+            loaded.request,
             store.watchlist,
-            DataSyncService(repository, (provider,)),
+            DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy),
             research,
             market,
             store,
@@ -284,7 +287,7 @@ def open_browser_acceptance_fixture(
     repo_root: Path,
     migrations_root: Path | None = None,
 ) -> Iterator[BrowserAcceptanceFixture]:
-    provider, rights = load_browser_fixture(fixture_manifest)
+    provider, query_policy, source_policy, rights = load_browser_fixture(fixture_manifest)
     with _store(data_root, migrations_root) as store:
         ledger = _ledger(store)
         repository = DataRepository(
@@ -295,7 +298,7 @@ def open_browser_acceptance_fixture(
         )
         yield BrowserAcceptanceFixture(
             store.watchlist,
-            DataSyncService(repository, (provider,), rights),
+            DataSyncService(repository, provider, query_policy, source_policy, rights),
             ResearchWorkflow(
                 ledger,
                 ResearchEngine(),
@@ -343,7 +346,11 @@ def open_project_verification(npm_executable: str) -> ProjectVerification:
 def open_acceptance_evidence(
     data_root: Path, repo_root: Path
 ) -> AcceptanceEvidenceService:
-    return AcceptanceEvidenceService(data_root, repo_root)
+    def load_receipt(artifact_id: str) -> bytes:
+        with _store(data_root) as store:
+            return _ledger(store).load(QualificationReceiptQuery(artifact_id))
+
+    return AcceptanceEvidenceService(data_root, repo_root, load_receipt)
 
 
 def open_import_preview(repo_root: Path) -> TonghuashunImportPreviewer:

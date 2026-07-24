@@ -123,19 +123,6 @@ def decode_plan_evaluation_command(payload: bytes) -> EvaluatePlanCommand:
     return decode_plan_evaluation_command_value(value)
 
 
-def decode_qualification_artifact(payload: bytes) -> dict[str, Any]:
-    try:
-        value = json.loads(payload)
-        if not isinstance(value, dict) or not isinstance(value.get("status"), str):
-            raise TypeError("qualification artifact must contain a status string")
-        return value
-    except (json.JSONDecodeError, TypeError, ValueError) as error:
-        raise CommandCodecError(
-            "QUALIFICATION_ARTIFACT_INVALID",
-            "acceptance.qualification.decode",
-            type(error).__name__,
-        ) from None
-
 
 __all__ = [
     "CommandCodecError",
@@ -144,7 +131,6 @@ __all__ = [
     "decode_plan_evaluation_command",
     "decode_plan_evaluation_command_value",
     "decode_provider_security_identity_value",
-    "decode_qualification_artifact",
     "decode_watchlist_identity",
     "decode_watchlist_identity_value",
 ]

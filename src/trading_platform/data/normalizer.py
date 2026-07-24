@@ -64,8 +64,10 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
                 elif dataset == "market_universe":
                     listed_from = _iso_date(source.get("list_date"))
                     rows.append({"market_scope_id": market, "security_id": security_id, "listed_from": listed_from, "source_ref": f"{source_ref}:stock_basic:{source.get('ts_code')}", "published_at": listed_from, "published_precision": "date", "available_at": conservative_available_at, "availability_basis": "retrieved_only"})
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("EMPTY_PAYLOAD")
+    if not isinstance(rows, list):
+        raise ValueError("SCHEMA_DRIFT")
+    if not rows:
+        raise ValueError("EMPTY_CONFIRMED")
     items: list[NormalizedItem] = []
     for row in rows:
         if not isinstance(row, dict):

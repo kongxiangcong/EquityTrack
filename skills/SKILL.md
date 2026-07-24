@@ -17,7 +17,8 @@ python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
-python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json> --output <qualification.json>
+python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
+python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest <manifest.json> --live-qualification-artifact-id <artifact_id>
 python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --security-id <id> --snapshot-id <id>
 python -m trading_platform.cli test --repo-root <repo>
 python -m trading_platform.cli inventory --repo-root <repo>
@@ -29,7 +30,7 @@ python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
 ```
 
-Use `provider_type = tushare_compatible` for the preconfigured Tushare-compatible HTTP surface. Keep only `credential_env = TUSHARE_TOKEN` in the job; the token value must remain in the process environment or an approved credential adapter. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync` and writes redacted attempt evidence that can be supplied to `acceptance --live-qualification-file`.
+Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. Keep only `credential_env = TUSHARE_TOKEN` in the job; the token value must remain in the process environment or an approved credential adapter. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.
 

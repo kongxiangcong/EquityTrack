@@ -465,6 +465,30 @@ class GenericObjectCommit:
 
 
 @dataclass(frozen=True)
+class QualificationReceiptCommit:
+    invocation_id: str
+    request_hash: str
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class QualificationReceiptQuery:
+    artifact_id: str
+
+
+@dataclass(frozen=True)
+class QualificationReceiptReplayQuery:
+    invocation_id: str
+    request_hash: str
+
+
+@dataclass(frozen=True)
+class QualificationReceiptReplay:
+    artifact_id: str
+    payload: bytes
+
+
+@dataclass(frozen=True)
 class ObjectCommitResult:
     sha256: str
     disposition: ReferenceDisposition
@@ -507,6 +531,7 @@ LedgerLoadResult: TypeAlias = (
     | PreparedProjection
     | DecisionViewPayload
     | tuple[CheckpointMember, ...]
+    | QualificationReceiptReplay
     | bytes
     | str
     | bool
@@ -539,6 +564,8 @@ LedgerQuery: TypeAlias = (
     | PersistenceCountsQuery
     | ArtifactBundlePreviewQuery
     | ProjectionPreviewQuery
+    | QualificationReceiptQuery
+    | QualificationReceiptReplayQuery
 )
 
 
@@ -546,7 +573,7 @@ TransitionCommand: TypeAlias = (
     AcquireLease | Heartbeat | RequestCancellation | StopIfCancelled
     | BeginNode | MarkRetryable | FailExecution
 )
-ArtifactCommit: TypeAlias = ForecastReviewCommit | GenericObjectCommit
+ArtifactCommit: TypeAlias = ForecastReviewCommit | GenericObjectCommit | QualificationReceiptCommit
 CheckpointCommit: TypeAlias = (
     CommitResearchNode | ProjectionCheckpointCommit
 )
@@ -573,6 +600,8 @@ class WorkflowLedgerPort(Protocol):
     def commit_artifacts(self, command: GenericObjectCommit) -> ObjectCommitResult: ...
     @overload
     def commit_artifacts(self, command: ForecastReviewCommit) -> str: ...
+    @overload
+    def commit_artifacts(self, command: QualificationReceiptCommit) -> str: ...
     def commit_artifacts(self, command: ArtifactCommit) -> ObjectCommitResult | str: ...
     def complete(self, command: FinalizeResearchSuccess) -> str: ...
     @overload
@@ -627,5 +656,9 @@ class WorkflowLedgerPort(Protocol):
     def load(self, query: ArtifactBundlePreviewQuery) -> PreparedArtifactBundle: ...
     @overload
     def load(self, query: ProjectionPreviewQuery) -> PreparedProjection: ...
+    @overload
+    def load(self, query: QualificationReceiptQuery) -> bytes: ...
+    @overload
+    def load(self, query: QualificationReceiptReplayQuery) -> QualificationReceiptReplay | None: ...
     def load(self, query: LedgerQuery) -> LedgerLoadResult: ...
     def audit_integrity(self, scope: IntegrityScope) -> IntegrityReport: ...

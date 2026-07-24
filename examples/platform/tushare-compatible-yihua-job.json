@@ -1,17 +1,59 @@
 {
+  "schema_version": "ProviderJob@2",
   "provider": {
-    "provider_type": "tushare_compatible",
-    "provider_id": "tushare-compatible-gateway",
-    "adapter_version": "tushare-http@1",
-    "endpoint": "https://replace-with-preconfigured-gateway.invalid/",
-    "credential_env": "TUSHARE_TOKEN",
+    "provider_id": "tushare-compatible",
+    "adapter_version": "tushare-http@2",
+    "credential_env": "TUSHARE_TOKEN"
+  },
+  "query_policy": {
+    "schema_version": "QueryPolicy@1",
+    "lookback_days": 7,
+    "market_universe_list_status": "L",
+    "adjustment_mode": "none"
+  },
+  "source_policy": {
+    "schema_version": "SourcePolicy@1",
+    "provider_id": "tushare-compatible",
+    "adapter_version": "tushare-http@2",
     "source_identity": "preconfigured_tushare_compatible_non_official",
-    "terms_profile": "gateway-terms-unknown@1"
+    "source_authority": "structured_aggregator",
+    "terms_profile": "gateway-terms-pending@1",
+    "rights": {
+      "local_storage_allowed": true,
+      "deterministic_replay_allowed": true,
+      "redistribution_allowed": false
+    },
+    "routes": [
+      {
+        "dataset": "trade_cal",
+        "freshness_max_stale_days": 1,
+        "completeness": "required",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "block"
+      },
+      {
+        "dataset": "market_universe",
+        "freshness_max_stale_days": 1,
+        "completeness": "required",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "block"
+      },
+      {
+        "dataset": "daily",
+        "freshness_max_stale_days": 1,
+        "completeness": "required",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "block"
+      }
+    ]
   },
   "request": {
     "invocation_id": "replace-for-each-run",
     "security_id": "security_yihua",
-    "provider_security_code": "002897.SZ",
+    "security_code": "002897",
     "requested_date": "2026-07-13",
     "as_of_at": "2026-07-14T23:59:59+08:00",
     "market_timezone": "Asia/Shanghai",

@@ -512,18 +512,23 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
     job.write_text(
         json.dumps(
             {
+                "schema_version": "ProviderJob@2",
                 "provider": {
-                    "provider_id": "configured",
-                    "adapter_version": "1",
-                    "endpoint": "https://provider.invalid",
-                    "credential_env": "ISSUE10_MISSING_CREDENTIAL",
-                    "source_identity": "configured-provider",
-                    "terms_profile": "configured",
+                    "provider_id": "tushare-compatible",
+                    "adapter_version": "tushare-http@2",
+                    "credential_env": "TUSHARE_TOKEN",
+                },
+                "query_policy": {"schema_version": "QueryPolicy@1", "lookback_days": 7, "market_universe_list_status": "L", "adjustment_mode": "none"},
+                "source_policy": {
+                    "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
+                    "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
+                    "rights": {"local_storage_allowed": True, "deterministic_replay_allowed": True, "redistribution_allowed": False},
+                    "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
                 },
                 "request": {
                     "invocation_id": "missing-credential",
                     "security_id": "security-test",
-                    "provider_security_code": "000001.SZ",
+                    "security_code": "000001",
                     "requested_date": "2026-01-01",
                     "as_of_at": "2026-01-01T00:00:00+00:00",
                     "market_timezone": "Asia/Shanghai",
@@ -550,6 +555,7 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
         ],
         cwd=Path(__file__).resolve().parents[2],
         capture_output=True,
+        env={key: value for key, value in os.environ.items() if key != "TUSHARE_TOKEN"},
         text=True,
         check=False,
     )
@@ -715,10 +721,10 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
 
     class FakeCredentialAdapter:
         def get(self, scope: str) -> str | None:
-            return "secret" if scope == "configured" else None
+            return "secret" if scope == "TUSHARE_TOKEN" else None
 
     adapter: CredentialAdapter = FakeCredentialAdapter()
-    assert adapter.get("configured") == "secret" and adapter.get("missing") is None
+    assert adapter.get("TUSHARE_TOKEN") == "secret" and adapter.get("missing") is None
     from tempfile import TemporaryDirectory
 
     with TemporaryDirectory() as directory:
@@ -726,19 +732,23 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
         job_path.write_text(
             json.dumps(
                 {
+                    "schema_version": "ProviderJob@2",
                     "provider": {
-                        "provider_type": "tushare_compatible",
-                        "provider_id": "p",
-                        "adapter_version": "1",
-                        "endpoint": "https://provider.invalid",
-                        "credential_env": "configured",
-                        "source_identity": "scope",
-                        "terms_profile": "terms",
+                        "provider_id": "tushare-compatible",
+                        "adapter_version": "tushare-http@2",
+                        "credential_env": "TUSHARE_TOKEN",
+                    },
+                    "query_policy": {"schema_version": "QueryPolicy@1", "lookback_days": 7, "market_universe_list_status": "L", "adjustment_mode": "none"},
+                    "source_policy": {
+                        "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
+                        "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
+                        "rights": {"local_storage_allowed": True, "deterministic_replay_allowed": True, "redistribution_allowed": False},
+                        "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
                     },
                     "request": {
                         "invocation_id": "i",
                         "security_id": "s",
-                        "provider_security_code": "s",
+                        "security_code": "s",
                         "requested_date": "2026-01-01",
                         "as_of_at": "2026-01-01T00:00:00+00:00",
                         "market_timezone": "Asia/Shanghai",
@@ -752,18 +762,19 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
             ),
             encoding="utf-8",
         )
-        _, provider, _ = load_sync_job(job_path, adapter)
+        loaded = load_sync_job(job_path, adapter)
         from trading_platform.data.providers import TushareCompatibleProvider
 
-        assert isinstance(provider, TushareCompatibleProvider)
-        assert provider._credential == "secret"
+        assert isinstance(loaded.provider, TushareCompatibleProvider)
+        assert loaded.provider._credential == "secret"
         doctor_root = Path(directory) / "doctor-root"
         PlatformOperations(doctor_root).bootstrap()
         readiness = PlatformOperations(doctor_root, credential_adapter=adapter).doctor(
             job_path
         )["provider_readiness"]
         assert readiness["status"] == "configured"
-        assert readiness["provider_type"] == "tushare_compatible"
+        assert readiness["job_schema_version"] == "ProviderJob@2"
+        assert readiness["adapter_version"] == "tushare-http@2"
     assert (
         inventory["status"] == "passed"
         and inventory["python_lock_basis"]

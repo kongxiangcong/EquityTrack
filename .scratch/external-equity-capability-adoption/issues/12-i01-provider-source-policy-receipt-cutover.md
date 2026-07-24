@@ -4,34 +4,44 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Target interface and vertical slice
 
-- [ ] 先在最高 public seam 写失败测试：sync、daily、provider-qualify 与 acceptance 只接受 ProviderJob@2；old job、caller live file、undeclared fallback 和 runtime provider class lookup 被拒绝。
-- [ ] `DataProvider.fetch(TypedDatasetQuery)` 保持唯一 provider seam；Tushare-compatible 是 production adapter，FixtureProvider 是 deterministic test adapter。
-- [ ] QueryPolicy@1 与 SourcePolicy@1 是 immutable typed values，拥有 canonical identity、source routes、authority、rights、freshness、completeness、retry/fallback mode 和 typed disposition；caller不能提交 endpoint、class、module或wire mapping。
-- [ ] SourcePolicy 仅允许 `no_fallback` 或经过独立资格化的 `qualified_equivalent`；critical official role不得降级到 aggregator/secondary，未声明或退休实现永不参与 fallback。
-- [ ] provider-qualify 通过现有 command receipt、artifact/object 与 Workflow/Data persistence owner 持久化 `ProviderQualificationReceipt@1`，绑定 request/query/source-policy、provider/adapter/code、attempt/raw/snapshot hashes与时间边界。
-- [ ] acceptance 只接收 receipt artifact identity并从data root回查全部权威对象；伪造字段、孤立hash、JSON/boolean或非production command identity必须失败。
-- [ ] 本票 database schema 明确不变；不得为policy routing或qualification另建registry/table/persistence path。
+- [x] 先在最高 public seam 写失败测试：sync、daily、provider-qualify 与 acceptance 只接受 ProviderJob@2；old job、caller live file、undeclared fallback 和 runtime provider class lookup 被拒绝。
+- [x] `DataProvider.fetch(TypedDatasetQuery)` 保持唯一 provider seam；Tushare-compatible 是 production adapter，FixtureProvider 是 deterministic test adapter。
+- [x] QueryPolicy@1 与 SourcePolicy@1 是 immutable typed values，拥有 canonical identity、source routes、authority、rights、freshness、completeness、retry/fallback mode 和 typed disposition；caller不能提交 endpoint、class、module或wire mapping。
+- [x] SourcePolicy 仅允许 `no_fallback` 或经过独立资格化的 `qualified_equivalent`；critical official role不得降级到 aggregator/secondary，未声明或退休实现永不参与 fallback。
+- [x] provider-qualify 通过现有 command receipt、artifact/object 与 Workflow/Data persistence owner 持久化 `ProviderQualificationReceipt@1`，绑定 request/query/source-policy、provider/adapter/code、attempt/raw/snapshot hashes与时间边界。
+- [x] acceptance 只接收 receipt artifact identity并从data root回查全部权威对象；伪造字段、孤立hash、JSON/boolean或非production command identity必须失败。
+- [x] 本票 database schema 明确不变；不得为policy routing或qualification另建registry/table/persistence path。
 
 ## Caller migration and deletion
 
-- [ ] CLI、operations readiness、sync/daily tasks、provider qualification、acceptance、Skill instructions、examples与tests全部迁入ProviderJob@2和receipt artifact contract。
-- [ ] 删除 `provider_type`、class lookup、generic `HttpJsonProvider`、orchestration-owned Tushare wire params、implicit tuple-order fallback、old codecs/defaults/aliases以及 `--live-qualification-file`。
-- [ ] 删除只保护退休private seams的tests、fixtures、docs和exports；搜索证明active runtime/current docs无旧symbol或旧命令命中。
-- [ ] 不修改个人data root、`docs/data/**`、外部upstream checkout或startup dirty assets。
+- [x] CLI、operations readiness、sync/daily tasks、provider qualification、acceptance、Skill instructions、examples与tests全部迁入ProviderJob@2和receipt artifact contract。
+- [x] 删除 `provider_type`、class lookup、generic `HttpJsonProvider`、orchestration-owned Tushare wire params、implicit tuple-order fallback、old codecs/defaults/aliases以及 `--live-qualification-file`。
+- [x] 删除只保护退休private seams的tests、fixtures、docs和exports；搜索证明active runtime/current docs无旧symbol或旧命令命中。
+- [x] 不修改个人data root、`docs/data/**`、外部upstream checkout或startup dirty assets。
 
 ## Acceptance and verification
 
-- [ ] deterministic cases覆盖normal、legal empty、partial、stale、rate limit、401/403、timeout、schema drift、wrong Security identity、published/available/retrieved、calendar/adjustment/corporate-action/suspension-limit的supported或typed-unavailable disposition。
-- [ ] sync/daily/provider-qualify幂等；每个fallback attempt持久化且substitution不冒充primary complete。
-- [ ] narrow command通过：`python -m pytest -q tests/platform/test_data_sync_pit.py tests/platform/test_provider_qualification.py tests/platform/test_cli_application_tasks.py tests/platform/test_acceptance_evidence.py`。
-- [ ] full phase gate通过：`python -m trading_platform.cli test --repo-root .`；报告每个named suite、duration、passed/failed/skipped/deselected/timeout和artifact。
-- [ ] `git diff --check`、forbidden-symbol search、完整status/diff/staged diff均通过；有效code-review findings在关闭前修复。
+- [x] deterministic cases覆盖normal、legal empty、partial、stale、rate limit、401/403、timeout、schema drift、wrong Security identity、published/available/retrieved、calendar/adjustment/corporate-action/suspension-limit的supported或typed-unavailable disposition。
+- [x] sync/daily/provider-qualify幂等；每个fallback attempt持久化且substitution不冒充primary complete。
+- [x] narrow command通过：`python -m pytest -q tests/platform/test_data_sync_pit.py tests/platform/test_provider_qualification.py tests/platform/test_cli_application_tasks.py tests/platform/test_acceptance_evidence.py`。
+- [x] full phase gate通过：`python -m trading_platform.cli test --repo-root .`；报告每个named suite、duration、passed/failed/skipped/deselected/timeout和artifact。
+- [x] `git diff --check`、forbidden-symbol search、完整status/diff/staged diff均通过；有效code-review findings在关闭前修复。
 
 ## Commit scope
 
-- [ ] 一个local commit同时包含ProviderJob@2/SourcePolicy/receipt实现、production/test caller迁移、tests、Skill/operations docs、旧路径删除与本票状态/evidence。
-- [ ] 只精确stage本票owning paths；禁止`git add .`、`git add -A`，禁止夹带其他`.scratch`、用户dirty、secrets、gateway参数或provider data；不push/PR。
+- [x] 一个local commit同时包含ProviderJob@2/SourcePolicy/receipt实现、production/test caller迁移、tests、Skill/operations docs、旧路径删除与本票状态/evidence。
+- [x] 只精确stage本票owning paths；禁止`git add .`、`git add -A`，禁止夹带其他`.scratch`、用户dirty、secrets、gateway参数或provider data；不push/PR。
+
+## Closure evidence
+
+- Real production qualification: canonical `provider-qualify` returned `qualified`, persisted receipt artifact `artifact_6eccb514252993afec5cc7ed`, used the production profile, and recorded 3 dataset attempts. The isolated external data root was removed after verification. No credential was written to output or repository files.
+- Narrow regression: `36 passed, 1 deselected in 48.07s`.
+- Release acceptance: `1 passed, 5 deselected in 470.49s`.
+- Canonical verifier: `passed` in 241.956 seconds. Named suites: core `189 passed`; platform-1 `36 passed`; platform-2 `65 passed`; platform-3 `93 passed`; platform-4 `69 passed, 3 skipped, 1 deselected`; web `18 passed`. No failures or timeouts.
+- Static verification: `python -m compileall -q src/trading_platform tests/platform`, `git diff --check`, and the retired-symbol search all passed.
+- Independent code review: final Standards and Spec reviews reported no blocking findings; the final protocol-order, production-profile/freshness, and per-candidate fallback-allowlist findings were fixed and reverified.
+- Scope control: startup dirty assets, `docs/data/**`, the user-owned goal prompt and root provider usage note, personal data roots, and unrelated scratch artifacts were not staged or modified by this issue.

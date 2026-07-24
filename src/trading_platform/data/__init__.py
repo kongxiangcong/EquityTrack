@@ -1,4 +1,4 @@
-from .providers import FixtureProvider, HttpJsonProvider, TushareCompatibleProvider
+from .providers import FixtureProvider, TushareCompatibleProvider
 from .service import DataSyncService
 
-__all__ = ["DataSyncService", "FixtureProvider", "HttpJsonProvider", "TushareCompatibleProvider"]
+__all__ = ["DataSyncService", "FixtureProvider", "TushareCompatibleProvider"]

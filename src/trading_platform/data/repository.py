@@ -191,7 +191,12 @@ class DataRepository:
             session_id = f"session_{canonical_hash({'market': row['market'], 'date': row['session_date'], 'version': row['calendar_version']})[:24]}"
             self.connection.execute("INSERT OR IGNORE INTO market_session_version VALUES(?,?,?,?,?,?,?)", (session_id, row["market"], row["session_date"], int(bool(row["is_open"])), row["calendar_version"], item.available_at, attempt_id))
 
-    def build_snapshot(self, request: SyncRequest, admitted: Iterable[tuple[str, str]], disposition: SyncDisposition) -> SyncResult:
+    def build_snapshot(
+        self, request: SyncRequest, admitted: Iterable[tuple[str, str]],
+        disposition: SyncDisposition, query_policy_identity: str,
+        source_policy_identity: str, admission_complete: bool,
+        freshness_max_stale_days: int,
+    ) -> SyncResult:
         members = sorted(set(admitted))
         sessions = self.connection.execute("SELECT session_date,calendar_version FROM market_session_version WHERE market=? AND is_open=1 AND session_date<=? AND available_at<=? ORDER BY session_date DESC", (request.market, request.requested_date, request.as_of_at.isoformat())).fetchall()
         if not sessions:
@@ -214,14 +219,19 @@ class DataRepository:
         eligible_members = [(version_id, role) for version_id, role in members if self.connection.execute("SELECT quality_status FROM normalized_version WHERE normalized_version_id=?", (version_id,)).fetchone()[0] in {"pass", "warning"}]
         membership_hash = canonical_hash([{"id": item[0], "role": item[1]} for item in eligible_members])
         stale_by_days = max(0, (date.fromisoformat(request.requested_date) - date.fromisoformat(effective_session)).days - 1)
-        freshness = FreshnessStatus.VALID if stale_by_days == 0 else FreshnessStatus.STALE
-        snapshot_id = f"snapshot_{canonical_hash({'purpose': request.snapshot_purpose, 'scope': request.security_id, 'cutoff': request.as_of_at, 'members': membership_hash, 'query': 'query@1', 'source': 'source@1', 'freshness': 'freshness@1'})[:24]}"
+        freshness = (
+            FreshnessStatus.VALID if stale_by_days <= freshness_max_stale_days else FreshnessStatus.STALE
+        )
+        snapshot_id = f"snapshot_{canonical_hash({'purpose': request.snapshot_purpose, 'scope': request.security_id, 'cutoff': request.as_of_at, 'members': membership_hash, 'query': query_policy_identity, 'source': source_policy_identity, 'freshness': 'freshness@1'})[:24]}"
+        if not admission_complete or freshness is FreshnessStatus.STALE:
+            return SyncResult(SyncStatus.BLOCKED, None, request.requested_date, effective_session, freshness, QualityStatus.BLOCKING, (), coverage, NextStep.RESOLVE_MISSING_CROSS_SECTION, stale_by_days, "effective_complete_session", None, self.distribution_qualification(), disposition)
+
         last_success_at = datetime.now(timezone.utc).isoformat()
         snapshot_exists = self.connection.execute("SELECT 1 FROM data_snapshot WHERE data_snapshot_id=?", (snapshot_id,)).fetchone() is not None
         disposition = SyncDisposition(disposition.raw_created, disposition.raw_reused, disposition.normalized_created, disposition.normalized_reused, not snapshot_exists, snapshot_exists)
         with self.writer_lock.acquire(f"snapshot:{snapshot_id}"):
             with self.connection:
-                self.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (snapshot_id, request.security_id, request.snapshot_purpose.value, request.requested_date, effective_session, request.as_of_at.isoformat(), request.market_timezone, calendar_version, "query@1", "source@1", "freshness@1", membership_hash, freshness.value, "blocking" if quality is QualityStatus.BLOCKING else "pass", expected, len(eligible_ids), excluded, missing, stale_by_days, "effective_complete_session", last_success_at))
+                self.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (snapshot_id, request.security_id, request.snapshot_purpose.value, request.requested_date, effective_session, request.as_of_at.isoformat(), request.market_timezone, calendar_version, query_policy_identity, source_policy_identity, "freshness@1", membership_hash, freshness.value, "blocking" if quality is QualityStatus.BLOCKING else "pass", expected, len(eligible_ids), excluded, missing, stale_by_days, "effective_complete_session", last_success_at))
                 if universe is not None:
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], request.market))
                 for ordinal, (version_id, role) in enumerate(eligible_members):

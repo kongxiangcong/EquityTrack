@@ -128,7 +128,11 @@ from trading_platform.application.workflow_ledger import (
     ForecastReviewCommit,
     FreezeProjection,
     GenericObjectCommit,
+    QualificationReceiptCommit,
+    QualificationReceiptQuery,
     Heartbeat,
+    QualificationReceiptReplay,
+    QualificationReceiptReplayQuery,
     IntegrityReport,
     IntegrityScope,
     LedgerLoadResult,
@@ -177,6 +181,7 @@ from trading_platform.application.workflow_ledger import (
     WorkspaceWorkflowEvidence,
     WorkspaceWorkflowQuery,
 )
+from trading_platform.persistence.qualification_receipts import QualificationReceiptStore
 
 
 class WorkflowLedger:
@@ -186,6 +191,7 @@ class WorkflowLedger:
         self.__object_root = self.__data_root / "objects" / "sha256"
         self.__object_root.mkdir(parents=True, exist_ok=True)
         self.__writer_lock = writer_lock
+        self.__qualification_receipts = QualificationReceiptStore(connection, self.__data_root, writer_lock, self._publish_durable)
         self.fault_injector = None
         self._research_artifact_lock = threading.RLock()
 
@@ -263,10 +269,14 @@ class WorkflowLedger:
         | ObjectInventoryQuery
         | WorkflowDiagnosticQuery
         | PersistenceCountsQuery
-        | ArtifactBundlePreviewQuery,
+        | ArtifactBundlePreviewQuery | QualificationReceiptQuery | QualificationReceiptReplayQuery,
     ) -> LedgerLoadResult:
         if isinstance(query, ProjectionPreviewQuery):
             return self._projection_plan(query.freeze)[0]
+        if isinstance(query, QualificationReceiptQuery):
+            return self.__qualification_receipts.load(query)
+        if isinstance(query, QualificationReceiptReplayQuery):
+            return self.__qualification_receipts.replay(query)
         if isinstance(query, ArtifactBundlePreviewQuery):
             return self._preview_artifact_bundle(query.bundle)
         if isinstance(query, NonterminalWorkflowQuery):
@@ -607,8 +617,10 @@ class WorkflowLedger:
         raise TypeError("WORKFLOW_TRANSITION_TYPE_INVALID")
 
     def commit_artifacts(
-        self, command: ForecastReviewCommit | GenericObjectCommit
+        self, command: ForecastReviewCommit | GenericObjectCommit | QualificationReceiptCommit
     ) -> ObjectCommitResult | str:
+        if isinstance(command, QualificationReceiptCommit):
+            return self.__qualification_receipts.commit(command)
         if isinstance(command, GenericObjectCommit):
             digest = hashlib.sha256(command.payload).hexdigest()
             with self.__writer_lock.acquire(f"object:{digest}"):
