@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
+import json
 from pathlib import Path
 from typing import cast
 
@@ -18,7 +20,18 @@ from trading_platform.application.workflow_ledger import WorkflowLedgerPort
 from trading_platform.chart import ChartService
 from trading_platform.data.repository import DataRepository
 from trading_platform.data.service import DataSyncService
-from trading_platform.domain.data import DataProvider, FixtureRights, QueryPolicy, SourcePolicy
+from trading_platform.domain.data import (
+    CompletenessRequirement,
+    DataProvider,
+    FallbackMode,
+    FixtureRights,
+    QueryPolicy,
+    SourceAuthority,
+    SourceFailureDisposition,
+    SourcePolicy,
+    SourceRights,
+    SourceRoute,
+)
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.market import SQLiteMarketRepository
@@ -30,6 +43,30 @@ from trading_platform.research import SnapshotToResearchRequestAssembler
 from trading_platform.workflows.research import (
     ResearchWorkflow,
     research_engine_identity,
+)
+
+TEST_QUERY_POLICY = QueryPolicy("QueryPolicy@1", 7, "L", "none")
+TEST_CHART_QUERY_POLICY = QueryPolicy("QueryPolicy@1", 30, "L", "none")
+TEST_MARKET_QUERY_POLICY = QueryPolicy("QueryPolicy@1", 365, "L", "none")
+TEST_SOURCE_POLICY = SourcePolicy(
+    "SourcePolicy@1",
+    "test-fixture",
+    "fixture@1",
+    "test-fixture-source",
+    SourceAuthority.FIXTURE,
+    "test-terms@1",
+    SourceRights(True, True, True, False, False, "2026-07-10"),
+    tuple(
+        SourceRoute(
+            dataset,
+            1,
+            CompletenessRequirement.REQUIRED,
+            1,
+            FallbackMode.NO_FALLBACK,
+            SourceFailureDisposition.BLOCK,
+        )
+        for dataset in ("daily", "financial_statement")
+    ),
 )
 
 
@@ -92,14 +129,15 @@ class StorageFaultFixture:
                 (
                     "snapshot_market_20260710", "security_yihua", "workflow",
                     "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00",
-                    "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1",
+                    "Asia/Shanghai", "cn-calendar@2026",
+                    TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity,
                     "freshness@1", "market-members", "valid", "pass", 0, 0, 0,
                     0, 0, "test workflow snapshot", "2026-07-11T00:00:00+00:00",
                 ),
             )
             self._store.connection.execute(
-                "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                ("attempt_market", "market-refresh", "fixture", "fixture@1", "daily", "derived-fixture", "fixture", "urn:test:daily", "{}", "{}", "date", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"),
+                "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("attempt_market", "market-refresh", "fixture", "fixture@1", "daily", "derived-fixture", "fixture", "urn:test:daily", "{}", "{}", "date", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "rights_test_fixture"),
             )
             self._store.connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_market", "daily", "security_yihua:2026-07-10"))
             self._store.connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("daily:2026-07-10", "record_market", 1, "market-content", "attempt_market", "2026-07-10", "2026-07-10", "date", "2026-07-10T09:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
@@ -108,10 +146,10 @@ class StorageFaultFixture:
     def record_official_filing_workflow_snapshot(self) -> None:
         """Create a research-relevant filing candidate for PIT policy tests."""
         with self._store.connection:
-            self._store.connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_filing", "filing-refresh", "official", "official@1", "financial_statement", "CNINFO", "official", "urn:test:filing", "{}", "{}", "timestamp", "official-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"))
+            self._store.connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_filing", "filing-refresh", "official", "official@1", "financial_statement", "CNINFO", "official", "urn:test:filing", "{}", "{}", "timestamp", "official-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "rights_test_fixture"))
             self._store.connection.execute("INSERT INTO normalized_record VALUES(?,?,?)", ("record_filing", "financial_statement", "security_yihua:2026Q2"))
             self._store.connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
-            self._store.connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "query@1", "source@1", "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
+            self._store.connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
             self._store.connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_filing", "filing:2026Q2", "financial_statement", 0))
 
 class PlatformTaskFixture:
@@ -138,6 +176,59 @@ class PlatformTaskFixture:
             if result["status"] != "passed":
                 raise RuntimeError("Test platform bootstrap failed")
         store = PlatformStore(data_root, migration_path)
+        with store.connection:
+            for policy in (
+                TEST_QUERY_POLICY,
+                TEST_CHART_QUERY_POLICY,
+                TEST_MARKET_QUERY_POLICY,
+            ):
+                canonical_json = json.dumps(
+                    policy.canonical_content,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                store.connection.execute(
+                    "INSERT OR IGNORE INTO query_policy_record VALUES(?,?,?,?,?)",
+                    (
+                        policy.identity,
+                        policy.schema_version,
+                        hashlib.sha256(canonical_json.encode()).hexdigest(),
+                        canonical_json,
+                        "2026-07-10T00:00:00+00:00",
+                    ),
+                )
+            source_json = json.dumps(
+                TEST_SOURCE_POLICY.canonical_content,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            store.connection.execute(
+                "INSERT OR IGNORE INTO source_policy_record VALUES(?,?,?,?,?)",
+                (
+                    TEST_SOURCE_POLICY.identity,
+                    TEST_SOURCE_POLICY.schema_version,
+                    hashlib.sha256(source_json.encode()).hexdigest(),
+                    source_json,
+                    "2026-07-10T00:00:00+00:00",
+                ),
+            )
+            store.connection.execute(
+                "INSERT OR IGNORE INTO source_rights_profile VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "rights_test_fixture",
+                    "source",
+                    "test-fixture",
+                    "test-fixture-source",
+                    "test-terms@1",
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    "2026-07-10",
+                    None,
+                ),
+            )
         store.workflow_ledger.fault_injector = workflow_fault_injector
         ledger = cast(WorkflowLedgerPort, store.workflow_ledger)
         self._store = store
@@ -149,7 +240,15 @@ class PlatformTaskFixture:
             if query_policy is None or source_policy is None:
                 raise ValueError("TEST_PROVIDER_POLICY_REQUIRED")
             repository = self.faults.attach_data_repository(workflow_fault_injector)
-            self.data = DataSyncService(repository, provider, query_policy, source_policy, fixture_rights, tuple(qualified_equivalents), qualified_equivalent_authority)
+            self.data = DataSyncService(
+                repository,
+                provider,
+                query_policy,
+                source_policy,
+                fixture_rights,
+                tuple(qualified_equivalents),
+                qualified_equivalent_authority,
+            )
         self.research = ResearchWorkflow(
             ledger,
             research_engine or ResearchEngine(),

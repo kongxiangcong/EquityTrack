@@ -71,6 +71,15 @@ class DataSyncService:
     def sync(self, request: SyncRequest) -> SyncResult:
         if request.offline:
             return self.repository.offline_result(request)
+        if "official_filing" in request.datasets and request.datasets != (
+            "official_filing",
+        ):
+            raise PersistenceError(
+                "OFFICIAL_FILING_MIXED_DATASET_FORBIDDEN",
+                "Official filings must use the dedicated atomic sync task.",
+            )
+        if request.datasets == ("official_filing",):
+            return self._sync_official_filing(request)
         admitted: list[tuple[str, str]] = []
         attempt_ids: list[str] = []
         raw_created = raw_reused = normalized_created = normalized_reused = 0
@@ -88,6 +97,16 @@ class DataSyncService:
             if not all(policy.rights.local_storage_allowed for _, policy, _ in candidates):
                 raise PersistenceError("SOURCE_RIGHTS_STORAGE_BLOCKED", "Source policy forbids local storage.")
             for candidate_index, (provider, active_policy, receipt_id) in enumerate(candidates):
+              rights = (
+                  self.fixture_rights.get((provider.provider_id, dataset))
+                  if provider.fixture
+                  else None
+              )
+              rights_profile_id = self.repository.register_policy_context(
+                  self.query_policy,
+                  active_policy,
+                  rights,
+              )
               candidate_error_codes: set[str] = set()
               hard_failure = False
               for _attempt in range(route.retry_max_attempts):
@@ -95,7 +114,6 @@ class DataSyncService:
                 fetch = self.query_policy.build(dataset, request, cursor_value)
                 batch = provider.fetch(fetch)
                 for envelope in batch.envelopes:
-                    rights = self.fixture_rights.get((provider.provider_id, dataset)) if provider.fixture else None
                     if (
                         envelope.source_identity != active_policy.source_identity
                         or envelope.source_authority is not active_policy.source_authority
@@ -105,13 +123,16 @@ class DataSyncService:
                         attempt_id, _, _ = self.repository.record_attempt(
                             request.invocation_id, provider.provider_id, provider.adapter_version,
                             dataset, blocked, "not_stored", cursor_value,
+                            self.query_policy.identity, active_policy.identity,
+                            rights_profile_id,
+                            None, False,
                         )
                         attempt_ids.append(attempt_id)
                         hard_failure = True
                         break
                     if provider.fixture and (rights is None or rights.source_identity != envelope.source_identity or not rights.local_storage_allowed or not rights.deterministic_replay_allowed):
                         blocked = replace(envelope, status=FetchStatus.FAILED, payload=None, raw_sha256=None, cursor_value=None, error_code="FIXTURE_RIGHTS_BLOCKING")
-                        attempt_id, _, _ = self.repository.record_attempt(request.invocation_id, provider.provider_id, provider.adapter_version, dataset, blocked, "not_stored", cursor_value)
+                        attempt_id, _, _ = self.repository.record_attempt(request.invocation_id, provider.provider_id, provider.adapter_version, dataset, blocked, "not_stored", cursor_value, self.query_policy.identity, active_policy.identity, rights_profile_id, None, False)
                         attempt_ids.append(attempt_id)
                         hard_failure = True
                         break
@@ -120,11 +141,31 @@ class DataSyncService:
                             self.repository.validate_fixture_location(rights)
                         except PersistenceError as error:
                             blocked = replace(envelope, status=FetchStatus.FAILED, payload=None, raw_sha256=None, cursor_value=None, error_code=error.code)
-                            attempt_id, _, _ = self.repository.record_attempt(request.invocation_id, provider.provider_id, provider.adapter_version, dataset, blocked, "not_stored", cursor_value)
+                            attempt_id, _, _ = self.repository.record_attempt(request.invocation_id, provider.provider_id, provider.adapter_version, dataset, blocked, "not_stored", cursor_value, self.query_policy.identity, active_policy.identity, rights_profile_id, None, False)
                             attempt_ids.append(attempt_id)
                             hard_failure = True
                             break
-                    attempt_id, raw_hash, was_raw_created = self.repository.record_attempt(request.invocation_id, provider.provider_id, provider.adapter_version, dataset, envelope, "fetched", cursor_value)
+                    raw_hash, was_raw_created = (
+                        self.repository.publish_raw(envelope)
+                    )
+                    attempt_id, raw_hash, was_raw_created = self.repository.record_attempt(
+                        request.invocation_id,
+                        provider.provider_id,
+                        provider.adapter_version,
+                        dataset,
+                        envelope,
+                        (
+                            "fetched"
+                            if was_raw_created or raw_hash is None
+                            else "reused"
+                        ),
+                        cursor_value,
+                        self.query_policy.identity,
+                        active_policy.identity,
+                        rights_profile_id,
+                        raw_hash,
+                        was_raw_created,
+                    )
                     if raw_hash is not None:
                         raw_created += int(was_raw_created)
                         raw_reused += int(not was_raw_created)
@@ -146,9 +187,12 @@ class DataSyncService:
                     blocking = any(item.quality in {QualityStatus.BLOCKING, QualityStatus.QUARANTINE} for item in items)
                     cursor = None if blocking or not envelope.cursor_value else CursorCheckpoint(provider.provider_id, provider.adapter_version, dataset, request.security_id, envelope.cursor_value)
                     try:
-                        dataset_members, persistence_blocked, created_count, reused_count = self.repository.persist_items(attempt_id, items, request.as_of_at, cursor)
+                        prepared_items = self.repository.prepare_items(items)
+                        dataset_members, persistence_blocked, created_count, reused_count = self.repository.persist_items(attempt_id, prepared_items, request.as_of_at, cursor)
                     except (sqlite3.IntegrityError, PersistenceError, ValueError):
-                        self.repository.record_blocking_issue(attempt_id, "IDENTITY_OR_PERSISTENCE_CONFLICT")
+                        self.repository.record_blocking_issue(
+                            attempt_id, "IDENTITY_OR_PERSISTENCE_CONFLICT"
+                        )
                         hard_failure = True
                         break
                     admitted.extend(dataset_members)
@@ -196,6 +240,196 @@ class DataSyncService:
             substitution_receipt_ids=tuple(sorted(substitution_receipt_ids)),
         )
         return SyncResult(status, result.snapshot_id, result.requested_date, result.effective_session_date, result.freshness, result.quality, tuple(attempt_ids), result.coverage, result.next_step, result.stale_by_days, result.freshness_basis, result.last_success_at, result.distribution_qualification, final_disposition)
+
+    def _sync_official_filing(self, request: SyncRequest) -> SyncResult:
+        dataset = "official_filing"
+        route = self.source_policy.route_for(dataset)
+        if (
+            route.fallback is not FallbackMode.NO_FALLBACK
+            or route.qualified_equivalent_receipt_ids
+        ):
+            raise PersistenceError(
+                "OFFICIAL_FILING_FALLBACK_FORBIDDEN",
+                "Critical official filing evidence has no fallback route.",
+            )
+        if not self.source_policy.rights.local_storage_allowed:
+            raise PersistenceError(
+                "SOURCE_RIGHTS_STORAGE_BLOCKED",
+                "Source policy forbids local storage.",
+            )
+        provider = self.provider
+        rights = (
+            self.fixture_rights.get((provider.provider_id, dataset))
+            if provider.fixture
+            else None
+        )
+        if provider.fixture and (
+            rights is None
+            or rights.source_identity != self.source_policy.source_identity
+            or not rights.local_storage_allowed
+            or not rights.deterministic_replay_allowed
+        ):
+            raise PersistenceError(
+                "FIXTURE_RIGHTS_BLOCKING",
+                "Official filing fixture rights are incomplete.",
+            )
+        if rights is not None:
+            self.repository.validate_fixture_location(rights)
+
+        cursor_value = self.repository.current_cursor(
+            provider.provider_id,
+            provider.adapter_version,
+            dataset,
+            request.security_id,
+        )
+        query = self.query_policy.build(dataset, request, cursor_value)
+        batch = provider.fetch(query)
+        if len(batch.envelopes) != 1:
+            raise PersistenceError(
+                "OFFICIAL_FILING_BATCH_INVALID",
+                "Official filing providers return one bounded evidence envelope.",
+            )
+        envelope = batch.envelopes[0]
+        if (
+            envelope.source_identity != self.source_policy.source_identity
+            or envelope.source_authority
+            is not self.source_policy.source_authority
+            or envelope.terms_profile != self.source_policy.terms_profile
+        ):
+            envelope = replace(
+                envelope,
+                status=FetchStatus.FAILED,
+                payload=None,
+                raw_sha256=None,
+                cursor_value=None,
+                error_code="SOURCE_POLICY_EVIDENCE_MISMATCH",
+            )
+
+        raw_hash, raw_was_created = self.repository.publish_raw(envelope)
+        prepared_items = ()
+        blocking_code = None
+        cursor = None
+        if (
+            envelope.status is FetchStatus.COMPLETE
+            and envelope.payload is not None
+        ):
+            try:
+                items = normalize(
+                    dataset,
+                    envelope.payload,
+                    request.security_id,
+                    request.market,
+                    envelope.source_identity,
+                    envelope.retrieved_at,
+                )
+                prepared_items = self.repository.prepare_items(items)
+                if any(
+                    item.quality
+                    in {QualityStatus.BLOCKING, QualityStatus.QUARANTINE}
+                    for item in prepared_items
+                ):
+                    blocking_code = "OFFICIAL_FILING_QUALITY_BLOCKED"
+                elif envelope.cursor_value:
+                    cursor = CursorCheckpoint(
+                        provider.provider_id,
+                        provider.adapter_version,
+                        dataset,
+                        request.security_id,
+                        envelope.cursor_value,
+                    )
+            except ValueError as error:
+                blocking_code = str(error)
+
+        attempt_ids: tuple[str, ...]
+        with self.repository.atomic_write(
+            f"official-filing-sync:{request.invocation_id}"
+        ):
+            rights_profile_id = self.repository.register_policy_context(
+                self.query_policy,
+                self.source_policy,
+                rights,
+            )
+            attempt_id, _, _ = self.repository.record_attempt(
+                request.invocation_id,
+                provider.provider_id,
+                provider.adapter_version,
+                dataset,
+                envelope,
+                (
+                    "fetched"
+                    if raw_was_created or raw_hash is None
+                    else "reused"
+                ),
+                cursor_value,
+                self.query_policy.identity,
+                self.source_policy.identity,
+                rights_profile_id,
+                raw_hash,
+                raw_was_created,
+            )
+            attempt_ids = (attempt_id,)
+            if provider.fixture:
+                assert rights is not None
+                self.repository.register_rights(rights, raw_hash)
+            admitted: tuple[tuple[str, str], ...] = ()
+            normalized_created = normalized_reused = 0
+            persistence_blocked = False
+            if prepared_items:
+                (
+                    admitted,
+                    persistence_blocked,
+                    normalized_created,
+                    normalized_reused,
+                ) = self.repository.persist_items(
+                    attempt_id,
+                    prepared_items,
+                    request.as_of_at,
+                    cursor,
+                )
+            if blocking_code is not None:
+                self.repository.record_blocking_issue(
+                    attempt_id, blocking_code
+                )
+            admission_complete = (
+                envelope.status is FetchStatus.COMPLETE
+                and envelope.payload is not None
+                and bool(prepared_items)
+                and blocking_code is None
+                and not persistence_blocked
+            )
+            disposition = SyncDisposition(
+                int(raw_hash is not None and raw_was_created),
+                int(raw_hash is not None and not raw_was_created),
+                normalized_created,
+                normalized_reused,
+                False,
+                False,
+            )
+            result = self.repository.build_snapshot(
+                request,
+                admitted,
+                disposition,
+                self.query_policy.identity,
+                self.source_policy.identity,
+                admission_complete,
+                route.freshness_max_stale_days,
+            )
+        return SyncResult(
+            result.status,
+            result.snapshot_id,
+            result.requested_date,
+            result.effective_session_date,
+            result.freshness,
+            result.quality,
+            attempt_ids,
+            result.coverage,
+            result.next_step,
+            result.stale_by_days,
+            result.freshness_basis,
+            result.last_success_at,
+            result.distribution_qualification,
+            result.disposition,
+        )
 
     def snapshot_members(self, snapshot_id: str) -> tuple[SnapshotMemberView, ...]:
         return tuple(SnapshotMemberView(version_id, dataset) for version_id, dataset in self.repository.snapshot_members(snapshot_id))

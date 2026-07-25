@@ -74,9 +74,13 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
                 "source_authority": "structured_aggregator",
                 "terms_profile": "gateway-terms-pending@1",
                 "rights": {
+                    "automation_allowed": True,
                     "local_storage_allowed": True,
                     "deterministic_replay_allowed": True,
+                    "derived_use_allowed": True,
                     "redistribution_allowed": False,
+                    "reviewed_on": "2026-07-24",
+                    "evidence_sha256": None,
                 },
                 "routes": [
                     {

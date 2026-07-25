@@ -16,6 +16,12 @@ class MigrationRunner:
         self.data_root = data_root
         self.migrations_root = migrations_root
         self.writer_lock = writer_lock
+        self.connection.create_function(
+            "canonical_sha256",
+            1,
+            lambda value: hashlib.sha256(str(value).encode("utf-8")).hexdigest(),
+            deterministic=True,
+        )
         self.connection.execute("CREATE TABLE IF NOT EXISTS schema_migration(version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, applied_at TEXT NOT NULL, app_version TEXT NOT NULL)")
         self.connection.commit()
 
@@ -49,13 +55,30 @@ class MigrationRunner:
             self._backup_and_verify(max(applied))
         for index, path in pending:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            rebuilds_parent_tables = (
+                path.name == "0013_source_policy_official_evidence.sql"
+            )
             try:
+                if rebuilds_parent_tables:
+                    self.connection.execute("PRAGMA foreign_keys=OFF")
+                    self.connection.execute("PRAGMA legacy_alter_table=ON")
                 self.connection.execute("BEGIN IMMEDIATE")
+                if rebuilds_parent_tables:
+                    self._preflight_source_policy_0013()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
                     if fail_after_statement == statement_number:
                         raise PersistenceError("MIGRATION_INJECTED_FAILURE", "Injected inside migration transaction.")
+                if rebuilds_parent_tables:
+                    violations = self.connection.execute(
+                        "PRAGMA foreign_key_check"
+                    ).fetchall()
+                    if violations:
+                        raise PersistenceError(
+                            "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                            "Migration 0013 produced invalid foreign-key lineage.",
+                        )
                 self.connection.execute(
                     "INSERT INTO schema_migration VALUES(?,?,?,?,?)",
                     (index, path.name, digest, datetime.now(timezone.utc).isoformat(), "platform-skeleton@1"),
@@ -64,6 +87,114 @@ class MigrationRunner:
             except Exception:
                 self.connection.rollback()
                 raise
+            finally:
+                if rebuilds_parent_tables:
+                    self.connection.execute("PRAGMA legacy_alter_table=OFF")
+                    self.connection.execute("PRAGMA foreign_keys=ON")
+
+    def _preflight_source_policy_0013(self) -> None:
+        placeholder_policy = self.connection.execute(
+            """
+            SELECT data_snapshot_id
+            FROM data_snapshot
+            WHERE query_policy_version NOT LIKE 'query_policy_%'
+               OR source_policy_version NOT LIKE 'source_policy_%'
+            LIMIT 1
+            """
+        ).fetchone()
+        if placeholder_policy is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy snapshot contains a placeholder policy identity.",
+            )
+
+        empty_snapshot = self.connection.execute(
+            """
+            SELECT s.data_snapshot_id
+            FROM data_snapshot s
+            LEFT JOIN data_snapshot_member m
+              ON m.data_snapshot_id=s.data_snapshot_id
+            GROUP BY s.data_snapshot_id
+            HAVING count(m.normalized_version_id)=0
+            LIMIT 1
+            """
+        ).fetchone()
+        if empty_snapshot is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy data snapshot has no member attempts from which to prove policy identity.",
+            )
+
+        ambiguous = self.connection.execute(
+            """
+            SELECT v.source_attempt_id
+            FROM normalized_version v
+            JOIN data_snapshot_member m
+              ON m.normalized_version_id=v.normalized_version_id
+            JOIN data_snapshot s ON s.data_snapshot_id=m.data_snapshot_id
+            GROUP BY v.source_attempt_id
+            HAVING count(
+              DISTINCT s.query_policy_version || char(0)
+                || s.source_policy_version
+            ) > 1
+            LIMIT 1
+            """
+        ).fetchone()
+        if ambiguous is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy provider attempt belongs to snapshots with conflicting policy identities.",
+            )
+
+        orphan_attempt = self.connection.execute(
+            """
+            SELECT p.attempt_id
+            FROM provider_attempt p
+            LEFT JOIN normalized_version v
+              ON v.source_attempt_id=p.attempt_id
+            LEFT JOIN data_snapshot_member m
+              ON m.normalized_version_id=v.normalized_version_id
+            WHERE m.data_snapshot_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphan_attempt is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy provider attempt has no snapshot policy identity.",
+            )
+
+        missing_rights = self.connection.execute(
+            """
+            SELECT p.attempt_id
+            FROM provider_attempt p
+            LEFT JOIN fixture_rights_profile f
+              ON f.fixture_member_id=p.provider_id || ':' || p.dataset
+             AND f.source_identity=p.source_identity
+            WHERE p.source_authority='fixture'
+              AND f.fixture_member_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_rights is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy fixture provider attempt has no provable rights profile.",
+            )
+
+        unproved_source_rights = self.connection.execute(
+            """
+            SELECT attempt_id
+            FROM provider_attempt
+            WHERE source_authority<>'fixture'
+            LIMIT 1
+            """
+        ).fetchone()
+        if unproved_source_rights is not None:
+            raise PersistenceError(
+                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                "A legacy non-fixture provider attempt has no persisted rights evidence.",
+            )
 
     @staticmethod
     def _statements(script: str) -> tuple[str, ...]:

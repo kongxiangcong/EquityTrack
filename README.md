@@ -31,6 +31,14 @@ Every command emits one JSON envelope. Failures retain a typed code and only
 redacted diagnostics. Credentials remain in the configured environment scope;
 they are never written to jobs, artifacts, backups, or Git.
 
+`ProviderJob@2` has three statically composed production roles. The
+Tushare-compatible role supplies non-official structured market data and reads
+only `TUSHARE_TOKEN`. The CNINFO and SZSE roles supply A-share statutory filing
+documents and use `credential_env = not_applicable`; they never read a token.
+See the versioned examples under `examples/platform/`. Official filing sync
+persists the verified PDF and immutable filing/PIT identity, but does not infer
+financial facts from PDF names or free text.
+
 ## Research path
 
 New research always follows the platform workflow:
@@ -53,6 +61,8 @@ valuation semantics.
 ## Data and financial boundaries
 
 - Official disclosures are authoritative for critical financial facts.
+- CNINFO/SZSE filing documents enter only through the canonical
+  `sync`/`provider-qualify` path; no aggregator fallback is configured.
 - Tushare-compatible structured data is an aggregator, not official disclosure.
 - Every critical number resolves to source identity or is explicitly missing.
 - Missing gates produce a typed data-insufficient result, never fabricated data.

@@ -19,9 +19,13 @@
     "source_authority": "structured_aggregator",
     "terms_profile": "gateway-terms-pending@1",
     "rights": {
+      "automation_allowed": true,
       "local_storage_allowed": true,
       "deterministic_replay_allowed": true,
-      "redistribution_allowed": false
+      "derived_use_allowed": true,
+      "redistribution_allowed": false,
+      "reviewed_on": "2026-07-24",
+      "evidence_sha256": null
     },
     "routes": [
       {

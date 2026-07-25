@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -108,6 +110,78 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
             if not required.issubset(row): raise ValueError("SCHEMA_DRIFT")
             natural_key = f"{row['market_scope_id']}:{row['security_id']}:{row['listed_from']}"
             event_at = str(row["listed_from"])
+        elif dataset == "official_filing":
+            required = {
+                "security_id",
+                "issuer_identity",
+                "authority",
+                "document_identity",
+                "accession_or_document_id",
+                "filing_type",
+                "document_sha256",
+                "document_base64",
+                "content_type",
+                "byte_size",
+                "correction_status",
+                "published_at",
+                "available_at",
+            }
+            if not required.issubset(row):
+                raise ValueError("SCHEMA_DRIFT")
+            if row["security_id"] != security_id:
+                raise ValueError("OFFICIAL_FILING_SECURITY_IDENTITY_MISMATCH")
+            if row["content_type"] != "application/pdf":
+                quality = QualityStatus.QUARANTINE
+                issues.append(("quarantine", "OFFICIAL_FILING_MIME_INVALID"))
+            if (
+                not isinstance(row["byte_size"], int)
+                or row["byte_size"] < 0
+                or len(str(row["document_sha256"])) != 64
+            ):
+                quality = QualityStatus.QUARANTINE
+                issues.append(("quarantine", "OFFICIAL_FILING_DOCUMENT_INVALID"))
+            try:
+                document = base64.b64decode(
+                    str(row["document_base64"]), validate=True
+                )
+            except ValueError as error:
+                raise ValueError("OFFICIAL_FILING_DOCUMENT_INVALID") from error
+            if (
+                len(document) != row["byte_size"]
+                or hashlib.sha256(document).hexdigest()
+                != row["document_sha256"]
+                or not document.startswith(b"%PDF-")
+            ):
+                quality = QualityStatus.QUARANTINE
+                issues.append(
+                    ("quarantine", "OFFICIAL_FILING_DOCUMENT_INVALID")
+                )
+            if row["correction_status"] not in {
+                "original",
+                "amended",
+                "corrected",
+                "superseded",
+            }:
+                raise ValueError("OFFICIAL_FILING_CORRECTION_INVALID")
+            try:
+                published_instant = parse_instant(str(row["published_at"]))
+                available_instant = parse_instant(str(row["available_at"]))
+            except ValueError as error:
+                raise ValueError("OFFICIAL_FILING_PIT_TIME_INVALID") from error
+            if not (
+                published_instant
+                <= available_instant
+                <= retrieved_at
+            ):
+                quality = QualityStatus.QUARANTINE
+                issues.append(
+                    ("quarantine", "OFFICIAL_FILING_PIT_ORDER_INVALID")
+                )
+            natural_key = (
+                f"{row['authority']}:{row['issuer_identity']}:"
+                f"{row['document_identity']}"
+            )
+            event_at = str(row["published_at"])
         elif dataset == "forecast_actual":
             required = {
                 "security_id",

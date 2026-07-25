@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OWNING_SQLITE_TESTS = {
     "test_chart_annotations.py",
     "test_data_sync_pit.py",
+    "test_external_official_disclosure.py",
     "test_workflow_ledger_forecast_review.py",
     "test_market_evaluation.py",
     "test_market_path_simulation_artifact.py",

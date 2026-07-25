@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import base64
+from dataclasses import replace
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Iterable
+from typing import Iterable, Iterator
 
-from trading_platform.domain.data import Coverage, CursorCheckpoint, DistributionQualification, FixtureRights, FreshnessStatus, NextStep, ProviderAttemptEvidence, QualityStatus, RawEnvelope, SyncDisposition, SyncRequest, SyncResult, SyncStatus
+from trading_platform.domain.data import Coverage, CursorCheckpoint, DistributionQualification, FixtureRights, FreshnessStatus, NextStep, ProviderAttemptEvidence, QualityStatus, QueryPolicy, RawEnvelope, SourcePolicy, SyncDisposition, SyncRequest, SyncResult, SyncStatus
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock, PersistenceError
 from trading_platform.application.workflow_ledger import GenericObjectCommit, WorkflowLedgerPort
@@ -23,12 +26,168 @@ class DataRepository:
         self.data_root = data_root
         self.writer_lock = writer_lock
         self.fault_injector = None
+        self._atomic_write_active = False
 
     def _fault(self, boundary: str) -> None:
         if self.fault_injector is not None:
             self.fault_injector(boundary)
 
-    def record_attempt(self, invocation_id: str, provider_id: str, adapter_version: str, dataset: str, envelope: RawEnvelope, cache_disposition: str, cursor_before: str | None) -> tuple[str, str | None, bool]:
+    @contextmanager
+    def atomic_write(self, owner: str) -> Iterator[None]:
+        if self._atomic_write_active:
+            raise PersistenceError(
+                "DATA_TRANSACTION_NESTED",
+                "Data repository atomic writes cannot be nested.",
+            )
+        with self.writer_lock.acquire(owner):
+            self.connection.execute("BEGIN IMMEDIATE")
+            self._atomic_write_active = True
+            try:
+                yield
+                self._fault("data.before_atomic_commit")
+                self.connection.commit()
+            except BaseException:
+                self.connection.rollback()
+                raise
+            finally:
+                self._atomic_write_active = False
+            self._fault("data.after_atomic_commit")
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[None]:
+        if self._atomic_write_active:
+            yield
+            return
+        with self.connection:
+            yield
+
+    @contextmanager
+    def _writer_scope(self, owner: str) -> Iterator[None]:
+        if self._atomic_write_active:
+            yield
+            return
+        with self.writer_lock.acquire(owner):
+            yield
+
+    def register_policy_context(
+        self,
+        query_policy: QueryPolicy,
+        source_policy: SourcePolicy,
+        fixture_rights: FixtureRights | None,
+    ) -> str:
+        query_json = json.dumps(
+            query_policy.canonical_content,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        source_json = json.dumps(
+            source_policy.canonical_content,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if fixture_rights is None:
+            subject_type = "source"
+            subject_id = (
+                f"{source_policy.provider_id}:{source_policy.adapter_version}"
+            )
+            terms_version = source_policy.terms_profile
+            automation_allowed = source_policy.rights.automation_allowed
+            local_storage_allowed = source_policy.rights.local_storage_allowed
+            derived_use_allowed = source_policy.rights.derived_use_allowed
+            repository_redistribution_allowed = (
+                source_policy.rights.redistribution_allowed
+            )
+            packaged_distribution_allowed = (
+                source_policy.rights.redistribution_allowed
+            )
+            reviewed_on = source_policy.rights.reviewed_on
+            evidence_sha256 = source_policy.rights.evidence_sha256
+        else:
+            subject_type = "fixture_member"
+            subject_id = fixture_rights.member_id
+            terms_version = fixture_rights.terms_version
+            automation_allowed = (
+                fixture_rights.deterministic_replay_allowed
+            )
+            local_storage_allowed = fixture_rights.local_storage_allowed
+            derived_use_allowed = False
+            repository_redistribution_allowed = (
+                fixture_rights.repository_redistribution_allowed
+            )
+            packaged_distribution_allowed = (
+                fixture_rights.packaged_distribution_allowed
+            )
+            reviewed_on = fixture_rights.reviewed_on
+            evidence_sha256 = None
+        rights_content = {
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "source_identity": source_policy.source_identity,
+            "terms_version": terms_version,
+            "automation_allowed": automation_allowed,
+            "local_storage_allowed": local_storage_allowed,
+            "derived_use_allowed": derived_use_allowed,
+            "repository_redistribution_allowed": (
+                repository_redistribution_allowed
+            ),
+            "packaged_distribution_allowed": (
+                packaged_distribution_allowed
+            ),
+            "reviewed_on": reviewed_on,
+            "evidence_sha256": evidence_sha256,
+            "declared_fixture_raw_sha256": (
+                fixture_rights.raw_sha256
+                if fixture_rights is not None
+                else None
+            ),
+        }
+        rights_profile_id = (
+            "rights_" + canonical_hash(rights_content)[:24]
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        with self._write_transaction():
+            self.connection.execute(
+                "INSERT OR IGNORE INTO query_policy_record VALUES(?,?,?,?,?)",
+                (
+                    query_policy.identity,
+                    query_policy.schema_version,
+                    hashlib.sha256(query_json.encode()).hexdigest(),
+                    query_json,
+                    now,
+                ),
+            )
+            self.connection.execute(
+                "INSERT OR IGNORE INTO source_policy_record VALUES(?,?,?,?,?)",
+                (
+                    source_policy.identity,
+                    source_policy.schema_version,
+                    hashlib.sha256(source_json.encode()).hexdigest(),
+                    source_json,
+                    now,
+                ),
+            )
+            self.connection.execute(
+                "INSERT OR IGNORE INTO source_rights_profile VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    rights_profile_id,
+                    subject_type,
+                    subject_id,
+                    source_policy.source_identity,
+                    terms_version,
+                    int(automation_allowed),
+                    int(local_storage_allowed),
+                    int(derived_use_allowed),
+                    int(repository_redistribution_allowed),
+                    int(packaged_distribution_allowed),
+                    reviewed_on,
+                    evidence_sha256,
+                ),
+            )
+        return rights_profile_id
+
+    def publish_raw(
+        self, envelope: RawEnvelope
+    ) -> tuple[str | None, bool]:
         expected_hash = hashlib.sha256(envelope.payload).hexdigest() if envelope.payload is not None else None
         if expected_hash != envelope.raw_sha256:
             raise PersistenceError("RAW_HASH_MISMATCH", "Provider raw hash does not match payload.")
@@ -42,24 +201,36 @@ class DataRepository:
             object_commit is not None
             and object_commit.disposition.value == "reused"
         )
+        return raw_hash, not already_cached and raw_hash is not None
+
+    def record_attempt(
+        self,
+        invocation_id: str,
+        provider_id: str,
+        adapter_version: str,
+        dataset: str,
+        envelope: RawEnvelope,
+        cache_disposition: str,
+        cursor_before: str | None,
+        query_policy_identity: str,
+        source_policy_identity: str,
+        rights_profile_id: str,
+        raw_hash: str | None,
+        raw_created: bool,
+    ) -> tuple[str, str | None, bool]:
         attempt_id = f"attempt_{canonical_hash({'invocation': invocation_id, 'provider': provider_id, 'adapter': adapter_version, 'dataset': dataset, 'retrieved': envelope.retrieved_at, 'source': envelope.source_identity})[:24]}"
-        with self.connection:
+        with self._write_transaction():
             self.connection.execute(
-                "INSERT OR IGNORE INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (attempt_id, invocation_id, provider_id, adapter_version, dataset, envelope.source_identity, envelope.source_authority.value, envelope.real_source_url, json.dumps(dict(envelope.redacted_params), sort_keys=True), json.dumps(dict(envelope.response_headers), sort_keys=True), envelope.source_time_precision, envelope.terms_profile, envelope.status.value, "reused" if already_cached else cache_disposition, raw_hash, envelope.retrieved_at.isoformat(), envelope.error_code, cursor_before, envelope.cursor_value, "not_advanced"),
+                "INSERT OR IGNORE INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (attempt_id, invocation_id, provider_id, adapter_version, dataset, envelope.source_identity, envelope.source_authority.value, envelope.real_source_url, json.dumps(dict(envelope.redacted_params), sort_keys=True), json.dumps(dict(envelope.response_headers), sort_keys=True), envelope.source_time_precision, envelope.terms_profile, envelope.status.value, cache_disposition, raw_hash, envelope.retrieved_at.isoformat(), envelope.error_code, cursor_before, envelope.cursor_value, "not_advanced", query_policy_identity, source_policy_identity, rights_profile_id),
             )
-        return attempt_id, raw_hash, not already_cached and raw_hash is not None
+        return attempt_id, raw_hash, raw_created
 
     def register_rights(self, rights: FixtureRights, raw_hash: str | None) -> None:
         if not rights.local_storage_allowed or not rights.deterministic_replay_allowed:
             raise PersistenceError("FIXTURE_RIGHTS_BLOCKING", "Fixture is not authorized for local deterministic replay.")
         if rights.raw_sha256 is not None and rights.raw_sha256 != raw_hash:
             raise PersistenceError("FIXTURE_RIGHTS_HASH_MISMATCH", "Fixture rights hash does not match raw content.")
-        with self.connection:
-            self.connection.execute(
-                "INSERT OR REPLACE INTO fixture_rights_profile VALUES(?,?,?,?,?,?,?,?,?)",
-                (rights.member_id, rights.source_identity, int(rights.local_storage_allowed), int(rights.deterministic_replay_allowed), int(rights.repository_redistribution_allowed), int(rights.packaged_distribution_allowed), rights.terms_version, rights.reviewed_on, raw_hash or rights.raw_sha256),
-            )
 
     def current_cursor(self, provider_id: str, adapter_version: str, dataset: str, scope_id: str) -> str | None:
         row = self.connection.execute("SELECT cursor_value FROM sync_cursor WHERE provider_id=? AND adapter_version=? AND dataset=? AND scope_id=? AND cursor_schema_version='cursor@1'", (provider_id, adapter_version, dataset, scope_id)).fetchone()
@@ -94,7 +265,7 @@ class DataRepository:
         )
 
     def distribution_qualification(self) -> DistributionQualification:
-        blocked = self.connection.execute("SELECT 1 FROM fixture_rights_profile WHERE repository_redistribution_allowed=0 OR packaged_distribution_allowed=0 LIMIT 1").fetchone()
+        blocked = self.connection.execute("SELECT 1 FROM source_rights_profile WHERE repository_redistribution_allowed=0 OR packaged_distribution_allowed=0 LIMIT 1").fetchone()
         if blocked is None:
             blocked = self.connection.execute("SELECT 1 FROM provider_attempt WHERE error_code IN ('FIXTURE_RIGHTS_BLOCKING','PRIVATE_FIXTURE_IN_GIT_WORKTREE') LIMIT 1").fetchone()
         return DistributionQualification.EXTERNAL_BLOCKED if blocked else DistributionQualification.QUALIFIED
@@ -108,6 +279,40 @@ class DataRepository:
         if any((parent / ".git").exists() for parent in (self.data_root, *self.data_root.parents)):
             raise PersistenceError("PRIVATE_FIXTURE_IN_GIT_WORKTREE", "Private fixture raw must use a data root outside the Git worktree.")
 
+    def prepare_items(
+        self, items: Iterable[NormalizedItem]
+    ) -> tuple[NormalizedItem, ...]:
+        prepared: list[NormalizedItem] = []
+        for item in items:
+            if item.dataset != "official_filing":
+                prepared.append(item)
+                continue
+            payload = dict(item.payload)
+            encoded = payload.pop("document_base64", None)
+            if not isinstance(encoded, str):
+                raise PersistenceError(
+                    "OFFICIAL_FILING_DOCUMENT_MISSING",
+                    "Official filing document bytes are required.",
+                )
+            try:
+                document = base64.b64decode(encoded, validate=True)
+            except ValueError as error:
+                raise PersistenceError(
+                    "OFFICIAL_FILING_DOCUMENT_INVALID",
+                    "Official filing document encoding is invalid.",
+                ) from error
+            published = self.workflow_ledger.commit_artifacts(
+                GenericObjectCommit(document)
+            )
+            if published.sha256 != payload.get("document_sha256"):
+                raise PersistenceError(
+                    "OFFICIAL_FILING_DOCUMENT_HASH_MISMATCH",
+                    "Official filing document hash does not match metadata.",
+                )
+            payload["document_object_sha256"] = published.sha256
+            prepared.append(replace(item, payload=payload))
+        return tuple(prepared)
+
     def persist_items(self, attempt_id: str, items: Iterable[NormalizedItem], cutoff: datetime, cursor: CursorCheckpoint | None = None) -> tuple[tuple[tuple[str, str], ...], bool, int, int]:
         items = tuple(items)
         admitted: list[tuple[str, str]] = []
@@ -115,8 +320,8 @@ class DataRepository:
         batch_blocked = False
         created_count = 0
         reused_count = 0
-        with self.writer_lock.acquire(f"normalize:{attempt_id}"):
-            with self.connection:
+        with self._writer_scope(f"normalize:{attempt_id}"):
+            with self._write_transaction():
                 for item in items:
                     record_id = f"record_{canonical_hash({'dataset': item.dataset, 'key': item.natural_key})[:24]}"
                     content = json.dumps(item.payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -161,7 +366,27 @@ class DataRepository:
                     identity = [{"security_id": item.payload["security_id"], "listed_from": item.payload["listed_from"], "delisted_after": item.payload.get("delisted_after"), "st_from": item.payload.get("st_from"), "st_to": item.payload.get("st_to"), "source_ref": item.payload["source_ref"]} for item in sorted(universe_items, key=lambda value: value.payload["security_id"])]
                     membership_hash = canonical_hash(identity)
                     universe_id = f"universe_{membership_hash[:24]}"
-                    self.connection.execute("INSERT OR IGNORE INTO market_universe_version VALUES(?,?,?,?,?)", (universe_id, universe_items[0].payload["market_scope_id"], cutoff.isoformat(), "universe-source@1", membership_hash))
+                    policy_row = self.connection.execute(
+                        "SELECT source_policy_identity FROM provider_attempt "
+                        "WHERE attempt_id=?",
+                        (attempt_id,),
+                    ).fetchone()
+                    if policy_row is None:
+                        raise PersistenceError(
+                            "SOURCE_POLICY_IDENTITY_MISSING",
+                            "Market-universe persistence requires its attempt source-policy identity.",
+                        )
+                    self.connection.execute(
+                        "INSERT OR IGNORE INTO market_universe_version "
+                        "VALUES(?,?,?,?,?)",
+                        (
+                            universe_id,
+                            universe_items[0].payload["market_scope_id"],
+                            cutoff.isoformat(),
+                            policy_row["source_policy_identity"],
+                            membership_hash,
+                        ),
+                    )
                     for item in universe_items:
                         row = item.payload
                         self.connection.execute("INSERT OR IGNORE INTO market_universe_member VALUES(?,?,?,?,?,?,?)", (universe_id, row["security_id"], row["listed_from"], row.get("delisted_after"), row.get("st_from"), row.get("st_to"), row["source_ref"]))
@@ -178,7 +403,7 @@ class DataRepository:
 
     def record_blocking_issue(self, attempt_id: str, code: str) -> None:
         issue_id = f"quality_{canonical_hash({'attempt': attempt_id, 'code': code})[:24]}"
-        with self.connection:
+        with self._write_transaction():
             self.connection.execute("INSERT OR IGNORE INTO data_quality_issue VALUES(?,?,?,?,?,?)", (issue_id, attempt_id, None, "blocking", code, code))
 
     def _persist_typed_payload(self, version_id: str, attempt_id: str, item: NormalizedItem) -> None:
@@ -190,6 +415,39 @@ class DataRepository:
         elif item.dataset == "trade_cal":
             session_id = f"session_{canonical_hash({'market': row['market'], 'date': row['session_date'], 'version': row['calendar_version']})[:24]}"
             self.connection.execute("INSERT OR IGNORE INTO market_session_version VALUES(?,?,?,?,?,?,?)", (session_id, row["market"], row["session_date"], int(bool(row["is_open"])), row["calendar_version"], item.available_at, attempt_id))
+        elif item.dataset == "official_filing":
+            document_sha256 = row.get("document_object_sha256")
+            if not isinstance(document_sha256, str):
+                raise PersistenceError(
+                    "OFFICIAL_FILING_RAW_OBJECT_MISSING",
+                    "Official filing metadata must bind a durable raw object.",
+                )
+            filing_identity_hash = canonical_hash(
+                {
+                    "security_id": row["security_id"],
+                    "authority": row["authority"],
+                    "document_identity": row["document_identity"],
+                    "raw_sha256": document_sha256,
+                }
+            )
+            self.connection.execute(
+                "INSERT INTO official_filing_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    version_id,
+                    row["security_id"],
+                    row["issuer_identity"],
+                    row["authority"],
+                    row["document_identity"],
+                    row["accession_or_document_id"],
+                    row["filing_type"],
+                    row.get("report_period_end"),
+                    document_sha256,
+                    row["content_type"],
+                    row["byte_size"],
+                    row["correction_status"],
+                    filing_identity_hash,
+                ),
+            )
 
     def build_snapshot(
         self, request: SyncRequest, admitted: Iterable[tuple[str, str]],
@@ -198,6 +456,38 @@ class DataRepository:
         freshness_max_stale_days: int,
     ) -> SyncResult:
         members = sorted(set(admitted))
+        if members:
+            placeholders = ",".join("?" for _ in members)
+            member_policy_rows = self.connection.execute(
+                "SELECT DISTINCT a.query_policy_identity,"
+                "a.source_policy_identity "
+                "FROM normalized_version v "
+                "JOIN provider_attempt a "
+                "ON a.attempt_id=v.source_attempt_id "
+                f"WHERE v.normalized_version_id IN ({placeholders})",
+                tuple(version_id for version_id, _ in members),
+            ).fetchall()
+            if len(member_policy_rows) != 1:
+                raise PersistenceError(
+                    "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
+                    "Snapshot members do not resolve to one policy identity pair.",
+                )
+            query_policy_identity = str(
+                member_policy_rows[0]["query_policy_identity"]
+            )
+            source_policy_identity = str(
+                member_policy_rows[0]["source_policy_identity"]
+            )
+        if set(request.datasets) == {"official_filing"}:
+            return self._build_filing_snapshot(
+                request,
+                members,
+                disposition,
+                query_policy_identity,
+                source_policy_identity,
+                admission_complete,
+                freshness_max_stale_days,
+            )
         sessions = self.connection.execute("SELECT session_date,calendar_version FROM market_session_version WHERE market=? AND is_open=1 AND session_date<=? AND available_at<=? ORDER BY session_date DESC", (request.market, request.requested_date, request.as_of_at.isoformat())).fetchall()
         if not sessions:
             return SyncResult(SyncStatus.MISSING, None, request.requested_date, None, FreshnessStatus.MISSING, QualityStatus.BLOCKING, (), Coverage(0, 0, 0, 0), NextStep.SYNC_TRADE_CALENDAR, 0, "no_cutoff_legal_calendar", None, self.distribution_qualification(), disposition)
@@ -229,8 +519,8 @@ class DataRepository:
         last_success_at = datetime.now(timezone.utc).isoformat()
         snapshot_exists = self.connection.execute("SELECT 1 FROM data_snapshot WHERE data_snapshot_id=?", (snapshot_id,)).fetchone() is not None
         disposition = SyncDisposition(disposition.raw_created, disposition.raw_reused, disposition.normalized_created, disposition.normalized_reused, not snapshot_exists, snapshot_exists)
-        with self.writer_lock.acquire(f"snapshot:{snapshot_id}"):
-            with self.connection:
+        with self._writer_scope(f"snapshot:{snapshot_id}"):
+            with self._write_transaction():
                 self.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (snapshot_id, request.security_id, request.snapshot_purpose.value, request.requested_date, effective_session, request.as_of_at.isoformat(), request.market_timezone, calendar_version, query_policy_identity, source_policy_identity, "freshness@1", membership_hash, freshness.value, "blocking" if quality is QualityStatus.BLOCKING else "pass", expected, len(eligible_ids), excluded, missing, stale_by_days, "effective_complete_session", last_success_at))
                 if universe is not None:
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], request.market))
@@ -238,6 +528,176 @@ class DataRepository:
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", (snapshot_id, version_id, role, ordinal))
         status = SyncStatus.BLOCKED if quality is QualityStatus.BLOCKING else SyncStatus.COMPLETE
         return SyncResult(status, snapshot_id, request.requested_date, effective_session, freshness, quality, (), coverage, NextStep.RESOLVE_MISSING_CROSS_SECTION if missing else None, stale_by_days, "effective_complete_session", last_success_at, self.distribution_qualification(), disposition)
+
+    def _build_filing_snapshot(
+        self,
+        request: SyncRequest,
+        members: list[tuple[str, str]],
+        disposition: SyncDisposition,
+        query_policy_identity: str,
+        source_policy_identity: str,
+        admission_complete: bool,
+        freshness_max_stale_days: int,
+    ) -> SyncResult:
+        eligible_members = [
+            (version_id, role)
+            for version_id, role in members
+            if role == "official_filing"
+            and self.connection.execute(
+                "SELECT quality_status FROM normalized_version "
+                "WHERE normalized_version_id=?",
+                (version_id,),
+            ).fetchone()[0]
+            in {"pass", "warning"}
+        ]
+        coverage = Coverage(
+            len(members),
+            len(eligible_members),
+            0,
+            len(members) - len(eligible_members),
+        )
+        if not admission_complete or not eligible_members:
+            return SyncResult(
+                SyncStatus.BLOCKED,
+                None,
+                request.requested_date,
+                request.requested_date,
+                FreshnessStatus.MISSING,
+                QualityStatus.BLOCKING,
+                (),
+                coverage,
+                NextStep.RESOLVE_MISSING_CROSS_SECTION,
+                0,
+                "official_filing_pit_membership",
+                None,
+                self.distribution_qualification(),
+                disposition,
+            )
+        placeholders = ",".join("?" for _ in eligible_members)
+        retrieved_row = self.connection.execute(
+            "SELECT max(retrieved_at) FROM normalized_version "
+            f"WHERE normalized_version_id IN ({placeholders})",
+            tuple(version_id for version_id, _ in eligible_members),
+        ).fetchone()
+        latest_retrieved_at = (
+            None if retrieved_row is None else retrieved_row[0]
+        )
+        if not isinstance(latest_retrieved_at, str):
+            raise PersistenceError(
+                "OFFICIAL_FILING_RETRIEVED_AT_MISSING",
+                "Filing snapshot members require retrieval evidence.",
+            )
+        stale_by_days = max(
+            0,
+            (
+                request.as_of_at.date()
+                - parse_instant(latest_retrieved_at).date()
+            ).days,
+        )
+        freshness = (
+            FreshnessStatus.VALID
+            if stale_by_days <= freshness_max_stale_days
+            else FreshnessStatus.STALE
+        )
+        if freshness is FreshnessStatus.STALE:
+            return SyncResult(
+                SyncStatus.BLOCKED,
+                None,
+                request.requested_date,
+                request.requested_date,
+                freshness,
+                QualityStatus.BLOCKING,
+                (),
+                coverage,
+                NextStep.AUTHORIZE_REFRESH,
+                stale_by_days,
+                "official_filing_retrieved_at",
+                latest_retrieved_at,
+                self.distribution_qualification(),
+                disposition,
+            )
+        membership_hash = canonical_hash(
+            [
+                {"id": version_id, "role": role}
+                for version_id, role in eligible_members
+            ]
+        )
+        snapshot_id = (
+            "snapshot_"
+            + canonical_hash(
+                {
+                    "purpose": request.snapshot_purpose,
+                    "scope": request.security_id,
+                    "cutoff": request.as_of_at,
+                    "members": membership_hash,
+                    "query": query_policy_identity,
+                    "source": source_policy_identity,
+                    "freshness": "official-filing-freshness@1",
+                }
+            )[:24]
+        )
+        existing = self.connection.execute(
+            "SELECT 1 FROM data_snapshot WHERE data_snapshot_id=?",
+            (snapshot_id,),
+        ).fetchone()
+        disposition = replace(
+            disposition,
+            snapshot_created=existing is None,
+            snapshot_reused=existing is not None,
+        )
+        last_success_at = latest_retrieved_at
+        with self._writer_scope(f"snapshot:{snapshot_id}"):
+            with self._write_transaction():
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        snapshot_id,
+                        request.security_id,
+                        request.snapshot_purpose.value,
+                        request.requested_date,
+                        request.requested_date,
+                        request.as_of_at.isoformat(),
+                        request.market_timezone,
+                        "not_applicable:filing_dataset",
+                        query_policy_identity,
+                        source_policy_identity,
+                        "official-filing-freshness@1",
+                        membership_hash,
+                        freshness.value,
+                        QualityStatus.PASS.value,
+                        len(eligible_members),
+                        len(eligible_members),
+                        0,
+                        0,
+                        stale_by_days,
+                        "official_filing_retrieved_at",
+                        last_success_at,
+                    ),
+                )
+                for ordinal, (version_id, role) in enumerate(
+                    eligible_members
+                ):
+                    self.connection.execute(
+                        "INSERT OR IGNORE INTO data_snapshot_member "
+                        "VALUES(?,?,?,?)",
+                        (snapshot_id, version_id, role, ordinal),
+                    )
+        return SyncResult(
+            SyncStatus.COMPLETE,
+            snapshot_id,
+            request.requested_date,
+            request.requested_date,
+            freshness,
+            QualityStatus.PASS,
+            (),
+            coverage,
+            None,
+            stale_by_days,
+            "official_filing_retrieved_at",
+            last_success_at,
+            self.distribution_qualification(),
+            disposition,
+        )
 
     def offline_result(self, request: SyncRequest) -> SyncResult:
         row = self.connection.execute("SELECT * FROM data_snapshot WHERE scope_id=? AND snapshot_purpose=? AND as_of_at<=? ORDER BY as_of_at DESC LIMIT 1", (request.security_id, request.snapshot_purpose.value, request.as_of_at.isoformat())).fetchone()

@@ -60,7 +60,7 @@ def _composition(provider, source_identity: str = FIXTURE_SOURCE, source_authori
         source_identity,
         source_authority,
         terms_profile,
-        SourceRights(True, True, False),
+        SourceRights(True, True, True, True, False, "2026-07-10"),
         tuple(
             SourceRoute(dataset, 1, CompletenessRequirement.REQUIRED, 1, FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK)
             for dataset in ("trade_cal", "market_universe", "daily")
@@ -105,7 +105,7 @@ def test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity(tmp_path
     assert connection.execute("SELECT count(*) FROM provider_attempt WHERE cursor_disposition='unchanged'").fetchone()[0] == 3
     assert connection.execute("SELECT count(*) FROM data_quality_issue WHERE code='PIT_FUTURE_EXCLUDED'").fetchone()[0] >= 1
     assert connection.execute("SELECT count(*) FROM data_snapshot_member d JOIN normalized_version n USING(normalized_version_id) WHERE d.data_snapshot_id=? AND n.available_at>?", (result.snapshot_id, "2026-07-11T00:00:00+00:00")).fetchone()[0] == 0
-    rights = connection.execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM fixture_rights_profile").fetchall()
+    rights = connection.execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM source_rights_profile WHERE subject_type='fixture_member'").fetchall()
     assert rights and all(tuple(row) == (1, 1) for row in rights)
     root.close()
 
@@ -344,7 +344,7 @@ def test_private_fixture_rights_are_preserved_without_upgrading_redistribution(t
     private_result = root.data.sync(_request())
     assert private_result.status is SyncStatus.COMPLETE
     assert private_result.distribution_qualification is DistributionQualification.EXTERNAL_BLOCKED
-    recorded = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM fixture_rights_profile").fetchall()
+    recorded = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT repository_redistribution_allowed,packaged_distribution_allowed FROM source_rights_profile WHERE subject_type='fixture_member'").fetchall()
     assert recorded and all(tuple(row) == (0, 0) for row in recorded)
     root.close()
 

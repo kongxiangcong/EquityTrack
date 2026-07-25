@@ -94,7 +94,7 @@ class WorkspaceService:
             "history": {
                 "workflows": workflows,
                 "data_snapshots": self._all(
-                    "SELECT data_snapshot_id,snapshot_purpose,requested_date,effective_session_date,as_of_at,freshness_status,quality_status,query_policy_version,source_policy_version FROM data_snapshot WHERE scope_id=? ORDER BY as_of_at",
+                    "SELECT data_snapshot_id,snapshot_purpose,requested_date,effective_session_date,as_of_at,freshness_status,quality_status,query_policy_identity,source_policy_identity FROM data_snapshot WHERE scope_id=? ORDER BY as_of_at",
                     (security_id,),
                 ),
                 "research_runs": list(workflow_evidence.research_runs),

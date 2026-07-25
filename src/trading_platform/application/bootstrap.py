@@ -139,7 +139,12 @@ def open_data_synchronization(
             loaded.job,
             loaded.request,
             store.watchlist,
-            DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy),
+            DataSyncService(
+                repository,
+                loaded.provider,
+                loaded.query_policy,
+                loaded.source_policy,
+            ),
         )
 
 
@@ -160,7 +165,12 @@ def open_provider_qualification(
             store.data_root,
             store.writer_lock,
         )
-        data = DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy)
+        data = DataSyncService(
+            repository,
+            loaded.provider,
+            loaded.query_policy,
+            loaded.source_policy,
+        )
         synchronization = DataSynchronization(loaded.job, loaded.request, store.watchlist, data)
         yield ProviderQualificationService(
             loaded, synchronization, data, _ledger(store)
@@ -198,7 +208,12 @@ def open_daily_research_cycle(
             loaded.job,
             loaded.request,
             store.watchlist,
-            DataSyncService(repository, loaded.provider, loaded.query_policy, loaded.source_policy),
+            DataSyncService(
+                repository,
+                loaded.provider,
+                loaded.query_policy,
+                loaded.source_policy,
+            ),
             research,
             market,
             store,

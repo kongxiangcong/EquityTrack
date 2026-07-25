@@ -2141,8 +2141,76 @@ class WorkflowLedger:
                 "commit_checkpoint",
                 projection_plan.research_projection_id,
             )
+        query_policy_json = json.dumps(
+            {
+                "schema_version": "QueryPolicy@1",
+                "dataset": "research_input",
+                "as_of_date": projection.as_of_date,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        query_policy_identity = (
+            "query_policy_"
+            + hashlib.sha256(query_policy_json.encode()).hexdigest()[:24]
+        )
+        source_policy_json = json.dumps(
+            {
+                "schema_version": "SourcePolicy@1",
+                "source_identity": source_identity,
+                "authority": "imported",
+                "rights": "local_only",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        source_policy_identity = (
+            "source_policy_"
+            + hashlib.sha256(source_policy_json.encode()).hexdigest()[:24]
+        )
+        rights_profile_id = (
+            "rights_"
+            + hashlib.sha256(source_identity.encode()).hexdigest()[:24]
+        )
         self.__connection.execute(
-            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO query_policy_record VALUES(?,?,?,?,?)",
+            (
+                query_policy_identity,
+                "QueryPolicy@1",
+                hashlib.sha256(query_policy_json.encode()).hexdigest(),
+                query_policy_json,
+                retrieved,
+            ),
+        )
+        self.__connection.execute(
+            "INSERT OR IGNORE INTO source_policy_record VALUES(?,?,?,?,?)",
+            (
+                source_policy_identity,
+                "SourcePolicy@1",
+                hashlib.sha256(source_policy_json.encode()).hexdigest(),
+                source_policy_json,
+                retrieved,
+            ),
+        )
+        self.__connection.execute(
+            "INSERT OR IGNORE INTO source_rights_profile VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rights_profile_id,
+                "source",
+                "frozen_projection:projection@1",
+                source_identity,
+                "local-research-input@1",
+                1,
+                1,
+                1,
+                0,
+                0,
+                retrieved[:10],
+                published.sha256,
+            ),
+        )
+        self.__connection.execute(
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 attempt_id,
                 projection_plan.research_projection_id,
@@ -2164,6 +2232,9 @@ class WorkflowLedger:
                 None,
                 None,
                 "not_applicable",
+                query_policy_identity,
+                source_policy_identity,
+                rights_profile_id,
             ),
         )
         self.__connection.execute(
@@ -2205,8 +2276,8 @@ class WorkflowLedger:
                 f"{projection.as_of_date}T23:59:59+00:00",
                 "Asia/Shanghai",
                 "not_applicable",
-                "research-query@1",
-                "research-source@1",
+                query_policy_identity,
+                source_policy_identity,
                 "research-freshness@1",
                 canonical_hash([version_id]),
                 "valid",

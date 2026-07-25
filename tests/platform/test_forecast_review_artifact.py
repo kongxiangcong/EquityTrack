@@ -272,7 +272,7 @@ def persist_review_snapshot(
         actual.source_id,
         SourceAuthority.OFFICIAL,
         "forecast-review-fixture-terms@1",
-        SourceRights(True, True, False),
+        SourceRights(True, True, True, True, False, "2026-07-10"),
         tuple(SourceRoute(dataset, 1, CompletenessRequirement.REQUIRED, 1, FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK) for dataset in payloads),
     )
     data_tasks = PlatformTaskFixture(

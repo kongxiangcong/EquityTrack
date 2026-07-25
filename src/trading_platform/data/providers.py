@@ -20,6 +20,7 @@ from trading_platform.domain.data import (
     FetchBatch,
     ForecastActualQuery,
     FetchStatus,
+    OfficialFilingQuery,
     RawEnvelope,
     SecurityMasterQuery,
     SourceAuthority,
@@ -111,13 +112,25 @@ def _query_identity(query: TypedDatasetQuery) -> dict[str, str]:
         return {"ts_code": _tushare_code(query.security_code, query.venue), "start_date": _wire_date(query.start_date), "end_date": _wire_date(query.end_date), "adjustment_mode": query.adjustment_mode}
     if isinstance(query, SecurityMasterQuery):
         return {"ts_code": _tushare_code(query.security_code, query.venue), "list_status": query.list_status}
+    if isinstance(query, OfficialFilingQuery):
+        return {
+            "security_id": query.security_id,
+            "security_code": query.security_code,
+            "venue": query.venue,
+            "start_date": _wire_date(query.start_date),
+            "end_date": _wire_date(query.end_date),
+        }
     if isinstance(query, ForecastActualQuery):
         return {"security_id": query.security_id, "as_of_date": query.as_of_date}
     raise TypeError("TYPED_DATASET_QUERY_INVALID")
 
 
 def _cursor_value(query: TypedDatasetQuery) -> str | None:
-    return query.as_of_date if isinstance(query, (SecurityMasterQuery, ForecastActualQuery)) else query.end_date
+    return (
+        query.as_of_date
+        if isinstance(query, (SecurityMasterQuery, ForecastActualQuery))
+        else query.end_date
+    )
 
 class FixtureProvider:
     fixture = True

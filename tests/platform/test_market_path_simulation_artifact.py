@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+from tests.platform.application_task_fixture import (
+    TEST_QUERY_POLICY,
+    TEST_SOURCE_POLICY,
+)
 
 from trading_platform.application.contracts import StartResearchWorkflow
 
@@ -108,7 +112,7 @@ def _install_market_snapshot(
     connection = SQLiteOwningAdapterFixture(root.data_root)
     with connection.transaction():
         connection.execute(
-            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "attempt_market_path_calendar",
                 "market-path-calendar",
@@ -130,10 +134,13 @@ def _install_market_snapshot(
                 None,
                 None,
                 "not_applicable",
+                TEST_QUERY_POLICY.identity,
+                TEST_SOURCE_POLICY.identity,
+                "rights_test_fixture",
             ),
         )
         connection.execute(
-            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "attempt_market_path_daily",
                 "market-path-daily",
@@ -155,6 +162,9 @@ def _install_market_snapshot(
                 None,
                 None,
                 "not_applicable",
+                TEST_QUERY_POLICY.identity,
+                TEST_SOURCE_POLICY.identity,
+                "rights_test_fixture",
             ),
         )
         connection.execute(

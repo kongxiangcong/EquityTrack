@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+from tests.platform.application_task_fixture import (
+    TEST_MARKET_QUERY_POLICY,
+    TEST_QUERY_POLICY,
+    TEST_SOURCE_POLICY,
+)
 
 from trading_platform.application.contracts import StartResearchWorkflow
 
@@ -40,7 +45,7 @@ def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid",
         connection.execute("INSERT INTO market_universe_version VALUES(?,?,?,?,?)", ("universe_market", "CN_A_SHARE", "2026-07-11T00:00:00+00:00", "universe-source@1", canonical_hash(universe_members)))
         for item in universe_members:
             connection.execute("INSERT INTO market_universe_member VALUES(?,?,?,?,?,?,?)", ("universe_market", item["security_id"], item["listed_from"], item["delisted_after"], item["st_from"], item["st_to"], item["source_ref"]))
-        connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_market", "market-fixture", "fixture", "fixture@1", "daily", "synthetic-contract-fixture", "fixture", "urn:test:market", "{}", "{}", "timestamp", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable"))
+        connection.execute("INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_market", "market-fixture", "fixture", "fixture@1", "daily", "synthetic-contract-fixture", "fixture", "urn:test:market", "{}", "{}", "timestamp", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "rights_test_fixture"))
         members = []
         start = date(2025, 6, 1)
         for offset in range(280):
@@ -54,7 +59,7 @@ def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid",
                 connection.execute("INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (version_id, f"market_r_{offset}_{position}", 1, f"hash_{offset}_{position}", "attempt_market", session, session, "date", f"{session}T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
                 connection.execute("INSERT INTO ohlcv_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (version_id, security_id, session, "Asia/Shanghai", "none", str(close - 1), str(close + 1), str(close - 2), str(close), "1000", "hand", amount, "CNY", "CNY"))
                 members.append(version_id)
-        connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_market", "security_yihua", "market", "2026-07-11", (start + timedelta(days=279)).isoformat(), "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", "market-query@1", "source@1", "freshness@1", "market-members", freshness, "pass", 3, 3, 0, 0, 0 if freshness == "valid" else 1, "effective_complete_session", "2026-07-10T09:00:00+00:00"))
+        connection.execute("INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_market", "security_yihua", "market", "2026-07-11", (start + timedelta(days=279)).isoformat(), "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", TEST_MARKET_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "freshness@1", "market-members", freshness, "pass", 3, 3, 0, 0, 0 if freshness == "valid" else 1, "effective_complete_session", "2026-07-10T09:00:00+00:00"))
         for index, version_id in enumerate(members):
             connection.execute("INSERT INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_market", version_id, "daily", index))
         connection.execute("INSERT INTO data_snapshot_universe_ref VALUES(?,?,?)", ("snapshot_market", "universe_market", "CN_A_SHARE"))
@@ -122,7 +127,7 @@ def test_transparent_market_snapshot_and_read_only_plan_evaluation(tmp_path: Pat
     assert v2_evaluation.plan_version_id == v2.plan_version_id and root.market.get_plan_evaluation(evaluation.plan_evaluation_id).plan_version_id == plan.plan_version_id
     adapter = SQLiteOwningAdapterFixture(root.data_root)
     with adapter.transaction():
-        adapter.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_version,source_policy_version,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
+        adapter.execute("INSERT INTO data_snapshot SELECT 'snapshot_market_revision',scope_id,snapshot_purpose,requested_date,effective_session_date,'2026-07-11T01:00:00+00:00',market_timezone,calendar_version,query_policy_identity,source_policy_identity,freshness_policy_version,'market-members-revision',freshness_status,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing,stale_by_days,freshness_basis,last_success_at FROM data_snapshot WHERE data_snapshot_id='snapshot_market'")
         adapter.execute("INSERT INTO data_snapshot_member SELECT 'snapshot_market_revision',normalized_version_id,member_role,member_order FROM data_snapshot_member WHERE data_snapshot_id='snapshot_market'")
         adapter.execute("INSERT INTO data_snapshot_universe_ref VALUES('snapshot_market_revision','universe_market','CN_A_SHARE')")
     adapter.close()

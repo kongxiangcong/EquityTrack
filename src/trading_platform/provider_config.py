@@ -9,8 +9,13 @@ from typing import Protocol
 
 from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
 from trading_platform.data.providers import TushareCompatibleProvider
+from trading_platform.data.official_disclosures import (
+    CninfoOfficialDisclosureProvider,
+    SzseOfficialDisclosureProvider,
+)
 from trading_platform.domain.data import (
     CompletenessRequirement,
+    DataProvider,
     FallbackMode,
     QueryPolicy,
     SnapshotPurpose,
@@ -44,7 +49,7 @@ class DecodedProviderJob:
 @dataclass(frozen=True)
 class LoadedProviderJob:
     job: ProviderJob
-    provider: TushareCompatibleProvider
+    provider: DataProvider
     request: SyncRequest
     transport_identity: str
     query_policy: QueryPolicy
@@ -55,7 +60,7 @@ class LoadedProviderJob:
 
 @dataclass(frozen=True)
 class ProviderRuntimeBinding:
-    provider: TushareCompatibleProvider
+    provider: DataProvider
     credential_scope_id: str
     credential_variable: str
     transport_identity: str
@@ -79,7 +84,7 @@ def canonical_preconfigured_source_policy() -> SourcePolicy:
         _TUSHARE_SOURCE_IDENTITY,
         SourceAuthority.STRUCTURED_AGGREGATOR,
         _TUSHARE_TERMS_PROFILE,
-        SourceRights(True, True, False),
+        SourceRights(True, True, True, True, False, "2026-07-24"),
         tuple(
             SourceRoute(
                 dataset, 1, CompletenessRequirement.REQUIRED, 1,
@@ -143,6 +148,81 @@ class PreconfiguredTushareRuntime:
         )
 
 
+def canonical_official_source_policy(provider_id: str) -> SourcePolicy:
+    if provider_id == "szse-official-disclosure":
+        adapter_version = "szse-announcement@1"
+        source_identity = "szse-statutory-disclosure"
+        terms_profile = "szse-local-noncommercial@2026-07-24"
+    elif provider_id == "cninfo-official-disclosure":
+        adapter_version = "cninfo-announcement@1"
+        source_identity = "cninfo-statutory-disclosure"
+        terms_profile = "cninfo-local-noncommercial@2026-07-24"
+    else:
+        raise OperationError(
+            "PROVIDER_SOURCE_POLICY_UNTRUSTED",
+            "Official provider identity is not statically composed.",
+        )
+    return SourcePolicy(
+        "SourcePolicy@1",
+        provider_id,
+        adapter_version,
+        source_identity,
+        SourceAuthority.OFFICIAL,
+        terms_profile,
+        SourceRights(True, True, True, True, False, "2026-07-24"),
+        (
+            SourceRoute(
+                "official_filing",
+                30,
+                CompletenessRequirement.REQUIRED,
+                1,
+                FallbackMode.NO_FALLBACK,
+                SourceFailureDisposition.BLOCK,
+            ),
+        ),
+    )
+
+
+class PreconfiguredProviderRuntime:
+    """Statically compose the one approved adapter for each provider identity."""
+
+    def __init__(
+        self, credential_adapter: CredentialAdapter | None = None
+    ) -> None:
+        self._tushare = PreconfiguredTushareRuntime(credential_adapter)
+
+    def bind(self, decoded: DecodedProviderJob) -> ProviderRuntimeBinding:
+        if decoded.provider_id == _TUSHARE_PROVIDER_ID:
+            return self._tushare.bind(decoded)
+        policy = canonical_official_source_policy(decoded.provider_id)
+        if (
+            decoded.credential_variable != "not_applicable"
+            or decoded.source_policy != policy
+            or decoded.adapter_version != policy.adapter_version
+        ):
+            raise OperationError(
+                "PROVIDER_SOURCE_POLICY_UNTRUSTED",
+                "ProviderJob@2 does not match the statically composed official source policy.",
+            )
+        provider: DataProvider
+        if decoded.provider_id == "szse-official-disclosure":
+            provider = SzseOfficialDisclosureProvider()
+        elif decoded.provider_id == "cninfo-official-disclosure":
+            provider = CninfoOfficialDisclosureProvider()
+        else:
+            raise OperationError(
+                "PROVIDER_SOURCE_POLICY_UNTRUSTED",
+                "Official provider identity is not statically composed.",
+            )
+        return ProviderRuntimeBinding(
+            provider,
+            hashlib.sha256(b"not_applicable").hexdigest(),
+            "not_applicable",
+            provider.transport_identity,
+            "production",
+        )
+
+
 
 class ProviderJobCodecError(ValueError):
     def __init__(self, cause_type: str) -> None:
@@ -180,9 +260,39 @@ def decode_sync_job(job_file: Path) -> DecodedProviderJob:
         query_data = strict_object(raw, "query_policy", {"schema_version", "lookback_days", "market_universe_list_status", "adjustment_mode"})
         source_data = strict_object(raw, "source_policy", {"schema_version", "provider_id", "adapter_version", "source_identity", "source_authority", "terms_profile", "rights", "routes"})
         request_data = strict_object(raw, "request", {"invocation_id", "security_id", "security_code", "requested_date", "as_of_at", "market_timezone", "market", "snapshot_purpose", "datasets", "network_authorized", "offline"})
-        rights_data = strict_object(source_data, "rights", {"local_storage_allowed", "deterministic_replay_allowed", "redistribution_allowed"})
-        if any(type(rights_data[name]) is not bool for name in rights_data):
+        rights_data = strict_object(
+            source_data,
+            "rights",
+            {
+                "automation_allowed",
+                "local_storage_allowed",
+                "deterministic_replay_allowed",
+                "derived_use_allowed",
+                "redistribution_allowed",
+                "reviewed_on",
+                "evidence_sha256",
+            },
+        )
+        if any(
+            type(rights_data[name]) is not bool
+            for name in (
+                "automation_allowed",
+                "local_storage_allowed",
+                "deterministic_replay_allowed",
+                "derived_use_allowed",
+                "redistribution_allowed",
+            )
+        ):
             raise TypeError("source rights must be booleans")
+        required_text(rights_data, "reviewed_on")
+        if (
+            rights_data["evidence_sha256"] is not None
+            and (
+                not isinstance(rights_data["evidence_sha256"], str)
+                or len(rights_data["evidence_sha256"]) != 64
+            )
+        ):
+            raise TypeError("source rights evidence must be a sha256 or null")
 
         routes_data = source_data["routes"]
         if not isinstance(routes_data, list) or not routes_data:
@@ -292,7 +402,9 @@ def decode_sync_job(job_file: Path) -> DecodedProviderJob:
 
 def load_sync_job(job_file: Path, credential_adapter: CredentialAdapter | None = None, provider_runtime: ProviderRuntimeAdapter | None = None) -> LoadedProviderJob:
     decoded = decode_sync_job(job_file)
-    binding = (provider_runtime or PreconfiguredTushareRuntime(credential_adapter)).bind(decoded)
+    binding = (
+        provider_runtime or PreconfiguredProviderRuntime(credential_adapter)
+    ).bind(decoded)
     return LoadedProviderJob(
         decoded.job,
         binding.provider,
@@ -306,4 +418,4 @@ def load_sync_job(job_file: Path, credential_adapter: CredentialAdapter | None =
     )
 
 
-__all__ = ["DecodedProviderJob", "LoadedProviderJob", "PreconfiguredTushareRuntime", "ProviderJobCodecError", "ProviderRuntimeAdapter", "ProviderRuntimeBinding", "canonical_preconfigured_source_policy", "decode_sync_job", "load_sync_job", "production_transport_identity", "validate_preconfigured_source_policy"]
+__all__ = ["DecodedProviderJob", "LoadedProviderJob", "PreconfiguredProviderRuntime", "ProviderJobCodecError", "ProviderRuntimeAdapter", "ProviderRuntimeBinding", "canonical_official_source_policy", "canonical_preconfigured_source_policy", "decode_sync_job", "load_sync_job", "production_transport_identity", "validate_preconfigured_source_policy"]

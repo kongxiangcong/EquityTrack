@@ -296,8 +296,8 @@ class QualificationReceiptStore:
                 raise TypeError("qualified receipt snapshot missing")
             return
         row = self._connection.execute(
-            "SELECT requested_date,effective_session_date,as_of_at,query_policy_version,"
-            "source_policy_version,membership_hash,quality_status,coverage_expected,"
+            "SELECT requested_date,effective_session_date,as_of_at,query_policy_identity,"
+            "source_policy_identity,membership_hash,quality_status,coverage_expected,"
             "coverage_eligible,coverage_excluded,coverage_missing FROM data_snapshot "
             "WHERE data_snapshot_id=?",
             (snapshot_id,),
@@ -308,8 +308,8 @@ class QualificationReceiptStore:
             row["requested_date"] != receipt["requested_date"]
             or row["effective_session_date"] != receipt["effective_session_date"]
             or row["as_of_at"] != receipt["as_of_at"]
-            or row["query_policy_version"] != receipt["query_policy_identity"]
-            or row["source_policy_version"] != receipt["source_policy_identity"]
+            or row["query_policy_identity"] != receipt["query_policy_identity"]
+            or row["source_policy_identity"] != receipt["source_policy_identity"]
         ):
             raise TypeError("snapshot policy lineage mismatch")
         coverage = receipt["coverage"]

@@ -46,6 +46,7 @@ class MarketDataCapability(str, Enum):
     CORPORATE_ACTIONS = "corporate_actions"
     SUSPENSION_STATUS = "suspension_status"
     PRICE_LIMIT_STATUS = "price_limit_status"
+    T_PLUS_ONE = "t_plus_one"
 
 
 @dataclass(frozen=True)
@@ -96,9 +97,19 @@ class CursorCheckpoint:
 
 @dataclass(frozen=True)
 class SourceRights:
+    automation_allowed: bool
     local_storage_allowed: bool
     deterministic_replay_allowed: bool
+    derived_use_allowed: bool
     redistribution_allowed: bool
+    reviewed_on: str
+    evidence_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.reviewed_on:
+            raise ValueError("SOURCE_RIGHTS_REVIEW_REQUIRED")
+        if self.evidence_sha256 is not None and len(self.evidence_sha256) != 64:
+            raise ValueError("SOURCE_RIGHTS_EVIDENCE_INVALID")
 
 
 class FallbackMode(str, Enum):
@@ -188,9 +199,13 @@ class SourcePolicy:
             "source_authority": self.source_authority.value,
             "terms_profile": self.terms_profile,
             "rights": {
+                "automation_allowed": self.rights.automation_allowed,
                 "local_storage_allowed": self.rights.local_storage_allowed,
                 "deterministic_replay_allowed": self.rights.deterministic_replay_allowed,
+                "derived_use_allowed": self.rights.derived_use_allowed,
                 "redistribution_allowed": self.rights.redistribution_allowed,
+                "reviewed_on": self.rights.reviewed_on,
+                "evidence_sha256": self.rights.evidence_sha256,
             },
             "routes": [{
                 "dataset": route.dataset,
@@ -266,6 +281,23 @@ class SecurityMasterQuery:
 
 
 @dataclass(frozen=True)
+class OfficialFilingQuery:
+    invocation_id: str
+    security_id: str
+    security_code: str
+    venue: str
+    start_date: str
+    end_date: str
+    dataset_cursor: str | None
+    scope_id: str
+    network_authorized: bool
+
+    @property
+    def dataset(self) -> str:
+        return "official_filing"
+
+
+@dataclass(frozen=True)
 class ForecastActualQuery:
     invocation_id: str
     security_id: str
@@ -279,7 +311,13 @@ class ForecastActualQuery:
         return "forecast_actual"
 
 
-TypedDatasetQuery = TradingCalendarQuery | DailyOhlcvQuery | SecurityMasterQuery | ForecastActualQuery
+TypedDatasetQuery = (
+    TradingCalendarQuery
+    | DailyOhlcvQuery
+    | SecurityMasterQuery
+    | OfficialFilingQuery
+    | ForecastActualQuery
+)
 
 
 @dataclass(frozen=True)
@@ -317,6 +355,18 @@ class QueryPolicy:
             return DailyOhlcvQuery(request.invocation_id, request.security_id, request.security_code, request.market, start_date, end_date, self.adjustment_mode, cursor, request.security_id, request.network_authorized)
         if dataset == "market_universe":
             return SecurityMasterQuery(request.invocation_id, request.security_id, request.security_code, request.market, self.market_universe_list_status, request.requested_date, cursor, request.security_id, request.network_authorized)
+        if dataset == "official_filing":
+            return OfficialFilingQuery(
+                request.invocation_id,
+                request.security_id,
+                request.security_code,
+                request.market,
+                start_date,
+                end_date,
+                cursor,
+                request.security_id,
+                request.network_authorized,
+            )
         if dataset == "forecast_actual":
             return ForecastActualQuery(request.invocation_id, request.security_id, request.requested_date, cursor, request.security_id, request.network_authorized)
         raise ValueError("QUERY_DATASET_UNDECLARED")

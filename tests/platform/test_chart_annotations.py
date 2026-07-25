@@ -9,7 +9,12 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from tests.platform.application_task_fixture import PlatformTaskFixture
+from tests.platform.application_task_fixture import (
+    PlatformTaskFixture,
+    TEST_CHART_QUERY_POLICY,
+    TEST_QUERY_POLICY,
+    TEST_SOURCE_POLICY,
+)
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.chart import AnnotationError
 from trading_platform.domain.chart import (
@@ -43,7 +48,7 @@ def _root(path: Path) -> PlatformTaskFixture:
     ):
         with connection.transaction():
             connection.execute(
-                "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     "attempt_chart",
                     "chart-fixture",
@@ -65,6 +70,9 @@ def _root(path: Path) -> PlatformTaskFixture:
                     None,
                     None,
                     "not_applicable",
+                    TEST_QUERY_POLICY.identity,
+                    TEST_SOURCE_POLICY.identity,
+                    "rights_test_fixture",
                 ),
             )
             connection.execute(
@@ -119,8 +127,8 @@ def _root(path: Path) -> PlatformTaskFixture:
                     "2026-07-11T00:00:00+00:00",
                     "Asia/Shanghai",
                     "cn-calendar@2026",
-                    "chart-query@1",
-                    "source@1",
+                    TEST_CHART_QUERY_POLICY.identity,
+                    TEST_SOURCE_POLICY.identity,
                     "freshness@1",
                     "chart-members",
                     "valid",

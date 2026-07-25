@@ -38,7 +38,7 @@ from trading_platform.application.workflow_ledger import GenericObjectCommit, In
 from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.persistence.presence import RuntimePresence
-from trading_platform.persistence import PlatformStore
+from trading_platform.persistence import PersistenceError, PlatformStore
 from trading_platform.provider_config import load_sync_job
 
 
@@ -217,6 +217,368 @@ def test_release_migration_matrix_covers_fresh_prior_created_and_reused_roots(
     )
 
 
+def test_source_policy_migration_rejects_ambiguous_attempt_lineage_atomically(
+    tmp_path: Path,
+) -> None:
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
+    for source in migration_files[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    live = tmp_path / "ambiguous-lineage"
+    store = PlatformStore(live, prior_migrations)
+    store.migrate()
+    with store.connection:
+        store.connection.execute(
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "attempt_legacy",
+                "legacy-sync",
+                "fixture",
+                "fixture@1",
+                "daily",
+                "legacy-fixture",
+                "fixture",
+                "urn:test:legacy",
+                "{}",
+                "{}",
+                "date",
+                "fixture-terms@1",
+                "complete",
+                "created",
+                None,
+                "2026-07-10T09:00:00+00:00",
+                None,
+                None,
+                None,
+                "not_applicable",
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO fixture_rights_profile VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "fixture:daily",
+                "legacy-fixture",
+                1,
+                1,
+                0,
+                0,
+                "fixture-terms@1",
+                "2026-07-10",
+                None,
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO normalized_record VALUES(?,?,?)",
+            ("record_legacy", "daily", "security:2026-07-10"),
+        )
+        store.connection.execute(
+            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "version_legacy",
+                "record_legacy",
+                1,
+                "content",
+                "attempt_legacy",
+                "2026-07-10",
+                "2026-07-10",
+                "date",
+                "2026-07-10T09:00:00+00:00",
+                "publisher_timestamp",
+                "2026-07-10T09:00:00+00:00",
+                "pass",
+                None,
+            ),
+        )
+        for suffix, query_policy in (
+            ("one", "query-policy@1"),
+            ("two", "query-policy@2"),
+        ):
+            store.connection.execute(
+                "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    f"snapshot_{suffix}",
+                    "security",
+                    "workflow",
+                    "2026-07-11",
+                    "2026-07-10",
+                    f"2026-07-11T0{1 if suffix == 'one' else 2}:00:00+00:00",
+                    "Asia/Shanghai",
+                    "cn-calendar@2026",
+                    query_policy,
+                    "source-policy@1",
+                    "freshness@1",
+                    f"members-{suffix}",
+                    "valid",
+                    "pass",
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    "legacy fixture",
+                    "2026-07-10T09:00:00+00:00",
+                ),
+            )
+            store.connection.execute(
+                "INSERT INTO data_snapshot_member VALUES(?,?,?,?)",
+                (f"snapshot_{suffix}", "version_legacy", "daily", 0),
+            )
+    store.close()
+
+    upgraded = PlatformStore(live, Path.cwd() / "migrations")
+    with pytest.raises(PersistenceError) as raised:
+        upgraded.migrate()
+    assert raised.value.code == "SOURCE_POLICY_IDENTITY_UNMIGRATABLE"
+    assert (
+        upgraded.connection.execute(
+            "SELECT max(version) FROM schema_migration"
+        ).fetchone()[0]
+        == len(migration_files) - 1
+    )
+    assert (
+        upgraded.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='query_policy_record'"
+        ).fetchone()
+        is None
+    )
+    upgraded.close()
+
+
+def test_source_policy_migration_preserves_provable_populated_lineage(
+    tmp_path: Path,
+) -> None:
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
+    for source in migration_files[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    live = tmp_path / "provable-populated-lineage"
+    store = PlatformStore(live, prior_migrations)
+    store.migrate()
+    query_identity = "query_policy_" + "a" * 24
+    source_identity = "source_policy_" + "b" * 24
+    with store.connection:
+        store.connection.execute(
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "attempt_provable",
+                "legacy-sync",
+                "fixture",
+                "fixture@1",
+                "daily",
+                "legacy-fixture",
+                "fixture",
+                "urn:test:legacy",
+                "{}",
+                "{}",
+                "date",
+                "fixture-terms@1",
+                "complete",
+                "created",
+                None,
+                "2026-07-10T09:00:00+00:00",
+                None,
+                None,
+                None,
+                "not_applicable",
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO fixture_rights_profile VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "fixture:daily",
+                "legacy-fixture",
+                1,
+                1,
+                0,
+                0,
+                "fixture-terms@1",
+                "2026-07-10",
+                None,
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO normalized_record VALUES(?,?,?)",
+            ("record_provable", "daily", "security:2026-07-10"),
+        )
+        store.connection.execute(
+            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "version_provable",
+                "record_provable",
+                1,
+                "content",
+                "attempt_provable",
+                "2026-07-10",
+                "2026-07-10",
+                "date",
+                "2026-07-10T09:00:00+00:00",
+                "publisher_timestamp",
+                "2026-07-10T09:00:00+00:00",
+                "pass",
+                None,
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "snapshot_provable",
+                "security",
+                "workflow",
+                "2026-07-11",
+                "2026-07-10",
+                "2026-07-11T01:00:00+00:00",
+                "Asia/Shanghai",
+                "cn-calendar@2026",
+                query_identity,
+                source_identity,
+                "freshness@1",
+                "members-provable",
+                "valid",
+                "pass",
+                1,
+                1,
+                0,
+                0,
+                0,
+                "legacy fixture",
+                "2026-07-10T09:00:00+00:00",
+            ),
+        )
+        store.connection.execute(
+            "INSERT INTO data_snapshot_member VALUES(?,?,?,?)",
+            ("snapshot_provable", "version_provable", "daily", 0),
+        )
+    store.close()
+
+    upgraded = PlatformStore(live, Path.cwd() / "migrations")
+    upgraded.migrate()
+    attempt = upgraded.connection.execute(
+        "SELECT query_policy_identity,source_policy_identity,"
+        "rights_profile_id FROM provider_attempt"
+    ).fetchone()
+    assert tuple(attempt[:2]) == (query_identity, source_identity)
+    rights = upgraded.connection.execute(
+        "SELECT automation_allowed,local_storage_allowed,"
+        "derived_use_allowed,repository_redistribution_allowed,"
+        "packaged_distribution_allowed FROM source_rights_profile "
+        "WHERE rights_profile_id=?",
+        (attempt[2],),
+    ).fetchone()
+    assert tuple(rights) == (1, 1, 0, 0, 0)
+    snapshot_policy = upgraded.connection.execute(
+        "SELECT query_policy_identity,source_policy_identity "
+        "FROM data_snapshot"
+    ).fetchone()
+    assert tuple(snapshot_policy) == (query_identity, source_identity)
+    assert (
+        upgraded.connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='fixture_rights_profile'"
+        ).fetchone()
+        is None
+    )
+    assert upgraded.connection.execute(
+        "PRAGMA foreign_key_check"
+    ).fetchall() == []
+    upgraded.close()
+
+
+def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
+    tmp_path: Path,
+) -> None:
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
+    for source in migration_files[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    live = tmp_path / "faulted-migration"
+    prior = PlatformStore(live, prior_migrations)
+    prior.migrate()
+    prior.close()
+
+    upgraded = PlatformStore(live, Path.cwd() / "migrations")
+    with pytest.raises(PersistenceError) as raised:
+        upgraded.migrate(fail_after=5)
+    assert raised.value.code == "MIGRATION_INJECTED_FAILURE"
+    assert (
+        upgraded.connection.execute(
+            "SELECT max(version) FROM schema_migration"
+        ).fetchone()[0]
+        == len(migration_files) - 1
+    )
+    assert (
+        upgraded.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='query_policy_record'"
+        ).fetchone()
+        is None
+    )
+    assert (
+        upgraded.connection.execute("PRAGMA foreign_key_check").fetchall()
+        == []
+    )
+    upgraded.close()
+
+
+def test_source_policy_migration_rejects_unproved_legacy_source_rights(
+    tmp_path: Path,
+) -> None:
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
+    for source in migration_files[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    live = tmp_path / "unproved-source-rights"
+    prior = PlatformStore(live, prior_migrations)
+    prior.migrate()
+    with prior.connection:
+        prior.connection.execute(
+            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "attempt_unproved",
+                "legacy-live-sync",
+                "legacy-provider",
+                "legacy@1",
+                "daily",
+                "legacy-source",
+                "structured_aggregator",
+                "urn:legacy:redacted",
+                "{}",
+                "{}",
+                "date",
+                "unreviewed-terms",
+                "complete",
+                "created",
+                None,
+                "2026-07-10T09:00:00+00:00",
+                None,
+                None,
+                None,
+                "not_applicable",
+            ),
+        )
+    prior.close()
+
+    upgraded = PlatformStore(live, Path.cwd() / "migrations")
+    with pytest.raises(PersistenceError) as raised:
+        upgraded.migrate()
+    assert raised.value.code == "SOURCE_POLICY_IDENTITY_UNMIGRATABLE"
+    assert (
+        upgraded.connection.execute(
+            "SELECT max(version) FROM schema_migration"
+        ).fetchone()[0]
+        == len(migration_files) - 1
+    )
+    assert (
+        upgraded.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='source_rights_profile'"
+        ).fetchone()
+        is None
+    )
+    upgraded.close()
+
+
 def test_backup_rejects_target_inside_live_root(tmp_path: Path) -> None:
     live = tmp_path / "live"
     root = _root(live)
@@ -229,13 +591,16 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
     tmp_path: Path,
 ) -> None:
     live = tmp_path / "live"
-    root = _root(live)
-    object_store = PlatformStore(live, Path.cwd() / "migrations")
+    prior_migrations = tmp_path / "prior-migrations"
+    prior_migrations.mkdir()
+    for source in sorted((Path.cwd() / "migrations").glob("*.sql"))[:-1]:
+        shutil.copyfile(source, prior_migrations / source.name)
+    object_store = PlatformStore(live, prior_migrations)
+    object_store.migrate()
     object_store.workflow_ledger.commit_artifacts(
         GenericObjectCommit(b"backup-object")
     )
     object_store.close()
-    root.close()
     operations = PlatformOperations(live)
     archive = tmp_path / "immutable.zip"
     operations.backup(archive)
@@ -522,7 +887,7 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
                 "source_policy": {
                     "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
                     "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
-                    "rights": {"local_storage_allowed": True, "deterministic_replay_allowed": True, "redistribution_allowed": False},
+                    "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
                     "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
                 },
                 "request": {
@@ -742,7 +1107,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
                     "source_policy": {
                         "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
                         "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
-                        "rights": {"local_storage_allowed": True, "deterministic_replay_allowed": True, "redistribution_allowed": False},
+                        "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
                         "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
                     },
                     "request": {

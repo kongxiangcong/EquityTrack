@@ -339,7 +339,7 @@ def load_browser_fixture(
         source_identity,
         SourceAuthority.FIXTURE,
         "derived-fact-fixture-terms@1",
-        SourceRights(True, True, False),
+        SourceRights(True, True, True, True, False, "2026-07-24"),
         tuple(SourceRoute(dataset, 1, CompletenessRequirement.REQUIRED, 1, FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK) for dataset in payloads),
     )
     return provider, query_policy, source_policy, rights

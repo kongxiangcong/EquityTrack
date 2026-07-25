@@ -58,7 +58,7 @@ def test_acceptance_cli_executes_fixed_suites_and_freezes_evidence(tmp_path: Pat
             "source_policy": {
                 "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
                 "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
-                "rights": {"local_storage_allowed": True, "deterministic_replay_allowed": True, "redistribution_allowed": False},
+                "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
                 "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
             },
             "request": {"invocation_id": "acceptance-qualification", "security_id": "security_yihua", "security_code": "002897", "requested_date": "2026-07-10", "as_of_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(), "market_timezone": "Asia/Shanghai", "market": "SZSE", "snapshot_purpose": "workflow", "datasets": ["trade_cal", "market_universe", "daily"], "network_authorized": True, "offline": False},
