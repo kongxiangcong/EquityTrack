@@ -2,9 +2,11 @@
 
 **What to build:** 让研究用户只用 immutable ResearchWorkflowRequest@2 引用 Security、frozen DataSnapshot 与 ResearchEvaluationPlan，由唯一 ResearchWorkflow 管理lifecycle、concrete ResearchEvaluation执行source/PIT/quality、Forecast、ScenarioValuation、ValuationSimulation与publication policy，并由WorkflowLedger原子持久化artifacts和一个ResearchDecisionView@2 manifest。JSON、HTML、PDF、XLSX、Web与archive只投影该view。0014在完整backup后把安全旧历史变为read-only plan audit record并删除active projection、Request@1 decoder和research-view cutover runtime；三个超大owner先完成有行为意义的深化，不能增加forwarder、mirror port或第二persistence path。
 
-**Blocked by:** 14 — I03 SEC OfficialDisclosure vertical slice.
+**Blocked by:** 13 — I02 A股 OfficialDisclosure vertical slice 与 migration 0013（resolved）。
 
 **Status:** ready-for-agent
+
+Issue 14 已完成 A股-only scope migration，不建设 SEC/美股/港股 runtime，因此不再构成本票依赖。Vibe-Trading 不接入、不安装、不配置；StrategyValidation unavailable 不阻断本票的 ResearchEvaluation、交易计划或 presentation 主流程。
 
 ## Public seam first
 

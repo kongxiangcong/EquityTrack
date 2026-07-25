@@ -1,37 +1,34 @@
-# 14 — I03 SEC OfficialDisclosure vertical slice
+# 14 — I03 A股-only scope migration（不建设 SEC runtime）
 
-**What to build:** 让平台运营者通过同一个 public sync 与 provider-qualify path，为具有canonical Security/issuer/CIK identity的美股获取 SEC submissions、companyfacts 与 Archives documents；adapter按照SEC访问政策、truthful operator identity、rate/Retry-After、PIT、amendment/context/unit与raw hash规则，把合格filing/facts写入0013唯一schema和DataSnapshot。任何ticker-only、caller-authored、raw-JSON-to-research或aggregator fallback路径在同一票删除。
+**What to build:** 将用户最新且最高优先级的市场范围决定写入唯一 implementation Spec、Map 与 delivery frontier：本 Goal 只建设 A 股；不实现 SEC、美股或港股 runtime。既有 US/HK/SEC 资格化材料只保留为历史研究证据，不再形成 adapter、配置、凭据、schema、验收或 live-receipt 要求。Issue 15 直接由已完成的 Issue 13 解锁。
 
 **Blocked by:** 13 — I02 A股 OfficialDisclosure vertical slice 与 migration 0013.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-## Target interface and vertical slice
+## Scope decision
 
-- [ ] 先在public sync/provider-qualify seam写失败测试，证明caller只提交typed SEC official query、canonical identity与network authorization。
-- [ ] cohesive SEC production adapter完整拥有submissions/companyfacts/Archives protocol、truthful User-Agent/operator contact、rate/Retry-After、CIK/accession/document/context/unit/scale/period/amendment/coverage/PIT/hash与typed failure。
-- [ ] DataProvider保持唯一port；SEC production adapter与deterministic FixtureProvider是两个合理adapters，不新建SEC service/registry/port。
-- [ ] 使用0013的唯一QueryPolicy/SourcePolicy/SourceRights/OfficialFilingVersion/FinancialFactVersion/DataSnapshot schema；本票不新增database schema或parallel persistence。
-- [ ] companyfacts只在taxonomy/concept/context/period/unit/value/source fact identity完整且与filing/security/PIT一致时进入snapshot；unknown不等于zero。
-- [ ] raw submissions/companyfacts/document objects先durable publish，accepted typed records与snapshot membership在single transaction提交。
+- [x] 当前 production market scope 固定为 A 股；Tushare-compatible market data 与 CNINFO/SZSE official disclosure 是唯一已授权数据角色。
+- [x] SEC submissions/companyfacts/Archives、US Security/CIK、HKEX、issuer-IR registry 与 licensed HK feed 均不进入当前 runtime。
+- [x] 不创建 SEC/HK provider、query、codec、normalizer、persistence、config/env、fixture、route、CLI/Web、NOTICE dependency 或 live receipt。
+- [x] 已完成的 US/HK/SEC qualification research 保留为历史证据，明确不得解释为当前 implementation authorization。
+- [x] Vibe-Trading 不接入、不安装、不配置；StrategyValidation 保持 unavailable，且不阻断 ResearchEvaluation、交易计划或后续组合纪律主流程。
 
-## Caller migration and deletion
+## Dependency migration
 
-- [ ] public sync/qualify、normalization/persistence、doctor/backup/archive、Skill/runbook、fixtures、NOTICE与tests完成SEC role迁移。
-- [ ] 删除generic/ticker-only/caller SEC facts、raw SEC JSON直达research、upstream Skill parser、Yahoo/aggregator fallback和任何第二security master。
-- [ ] HKEX website、issuer-IR registry、licensed-feed placeholder与Vibe/StrategyValidation surface保持不存在。
-- [ ] SEC operator contact只来自本地approved config/env identity；不得把个人信息、secret或完整URL params写入logs/artifacts。
+- [x] `spec.md` 的 Solution、candidate matrix、canonical flow、vertical slices、phase gates、adapter matrix、release proof、acceptance criteria、preconditions 与 published frontier 全部迁为 A 股-only。
+- [x] `map.md` 记录 superseding scope decision，并把当前 delivery frontier 从 Issue 14 scope migration推进到 Issue 15。
+- [x] Issue 15 的 `Blocked by` 从 Issue 14 改为已完成的 Issue 13；Issue 14 不再是 ResearchEvaluation/Request@2/0014/PDF 的运行时前置条件。
+- [x] Issue 16 仍只 blocked by Issue 15，依赖顺序保持真实。
 
-## Acceptance and verification
+## Evidence
 
-- [ ] fixtures覆盖normal、legal empty、partial、stale、rate-limit、401/403、timeout、schema drift、wrong ticker/CIK/listing/accession、published/available/retrieved、amendment/restatement、context/unit/scale和coverage。
-- [ ] filing dataset的calendar/price-adjustment/T+1/suspension/price-limit格返回typed not-applicable；amendment/correction semantics必须通过。
-- [ ] deterministic replay字节/identity稳定；真实connectivity probe生成CIK/accession、command receipt、attempt/raw/snapshot hash绑定的qualification artifact。
-- [ ] narrow command通过：`python -m pytest -q tests/platform/test_data_sync_pit.py tests/platform/test_provider_qualification.py tests/platform/test_external_official_disclosure.py`。
-- [ ] slice verifier通过：`python .scratch/external-equity-capability-adoption/research/verify_market_validation_slices.py`。
-- [ ] full phase gate通过：`python -m trading_platform.cli test --repo-root .`；absence gates、`git diff --check`和code review无未处理finding。
+- Runtime absence audit：`src/`、`examples/`、`migrations/` 与 current tests 中没有 SEC provider/query/config/route；现有 `HKEX` 字样仅是既有市场代码映射，不是本票新增 runtime。
+- Issue 13 local commit：`c20938a912c4397d1abce8d58f7d092134e54d51`；A 股 CNINFO/SZSE production roles、migration 0013、两个 identity-bound live receipts 与完整 verifier 已通过。
+- Scope migration 只修改四个 planning assets：本票、Issue 15、`map.md`、`spec.md`；不修改生产代码、schema、依赖、凭据或用户 dirty。
+- `git diff --check` 与 exact-path diff/absence/dependency audit 通过；无 live payload、operator contact、personal/provider data、Token 或 gateway 参数进入提交。
 
 ## Commit scope
 
-- [ ] 一个local commit包含SEC adapter、public callers、0013 persistence usage、fixtures/tests/docs/NOTICE、旧SEC/aggregator paths删除和本票evidence。
-- [ ] 精确stage本票owning paths；不提交live raw filings、operator secret/contact value、external checkout、personal/provider data、gateway参数或unrelated dirty；不push/PR。
+- [x] 一个 local commit 仅包含上述 scope/dependency planning migration。
+- [x] 精确 stage 四个 owning paths；保护 `docs/prompts/trading_platform_codex_prompt_optimized.md` 的用户 dirty 与全部既有 untracked assets；不 push/PR。

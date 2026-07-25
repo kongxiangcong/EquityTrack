@@ -12,7 +12,7 @@ tradingSystem 已有可审计的 DataProvider、ResearchWorkflow、Forecast、Va
 
 ## Solution
 
-将合格的 CNINFO、SZSE 与 SEC 官方协议知识以 clean-room 方式纳入现有 DataProvider seam；以版本化 QueryPolicy/SourcePolicy、不可变 official evidence 与 qualification receipt 绑定数据身份；以 ResearchWorkflowRequest@2 和 ResearchEvaluationPlan 从 frozen DataSnapshot 驱动本地 ResearchEvaluation；让 ResearchDecisionView@2 唯一派生 JSON、HTML、PDF、XLSX、Web 与 archive。所有 caller、schema、persistence、presentation、tests 和 docs 在同一 vertical slice 原子迁移并删除旧路径。Public Equity、聚合器、HKEX scraper 与 Vibe runtime 不进入 production；StrategyValidation 在没有两个真实 adapters 前保持 unavailable 且不建 placeholder。
+将合格的 CNINFO 与 SZSE 官方协议知识以 clean-room 方式纳入现有 DataProvider seam；以版本化 QueryPolicy/SourcePolicy、不可变 official evidence 与 qualification receipt 绑定 A 股数据身份；以 ResearchWorkflowRequest@2 和 ResearchEvaluationPlan 从 frozen DataSnapshot 驱动本地 ResearchEvaluation；让 ResearchDecisionView@2 唯一派生 JSON、HTML、PDF、XLSX、Web 与 archive。所有 caller、schema、persistence、presentation、tests 和 docs 在同一 vertical slice 原子迁移并删除旧路径。当前 production market scope 只含 A 股；SEC/美股/港股、Public Equity、聚合器、HKEX scraper 与 Vibe runtime 不进入 production。StrategyValidation 保持 unavailable 且不建 placeholder，也不阻断交易计划主流程。
 
 ## User Stories
 
@@ -37,25 +37,25 @@ tradingSystem 已有可审计的 DataProvider、ResearchWorkflow、Forecast、Va
 
 - 唯一 public seams 是 named application tasks、现有 DataProvider、WorkflowLedgerPort 与 ResearchWorkflow；不新增 service locator、镜像 Facade 或第二 persistence/presentation graph。
 - Candidate decision 只使用 adopt-external、adapt-code、keep-local、reject；qualification state 单独记录。
-- 生产迁移由四张完整 vertical slices 完成，随后一张 planning slice 回写当前组合纪律 Map；final release proof 是 Goal gate而不是延期 cleanup ticket。
+- 生产迁移由 I01、I02 与 I04 三张完整 vertical slices 完成；I03 只迁移 A 股-only scope 与依赖，随后 I05 planning slice 回写当前组合纪律 Map。final release proof 是 Goal gate而不是延期 cleanup ticket。
 - Schema 0013/0014、migration-only decoder 隔离、large-file deepening、PDF projection、rights/source policies 与 deletion targets 以本文 detailed contract 为唯一实现依据。
 - 每张 implementation issue 一个本地 commit；old/new runtime 不得同时保留以换取绿色测试。
 
 ## Testing Decisions
 
 - 最高测试 seam 优先使用 public CLI application tasks、ResearchWorkflow、WorkflowLedgerPort query、production composition root 与真实浏览器；private helper tests 随退休 seam 删除。
-- 每个 DataProvider adapter 覆盖 normal、empty、partial、stale、auth/rate/timeout、schema/identity/time/market semantics、fixture replay 与一次 identity-bound live probe。
+- 每个获授权的 A 股 DataProvider adapter 覆盖 normal、empty、partial、stale、auth/rate/timeout、schema/identity/time/market semantics、fixture replay 与一次 identity-bound live probe。
 - 0013/0014 覆盖 fresh、prior/populated、fault、rollback、restore、active-old-workflow refusal 与 identity-stable retry。
 - material production gates运行完整 canonical verifier；presentation切换同时运行 Web build、real CDP、PDF render与workbook reconciliation。
 - release acceptance只信任由 production provider-qualify 持久化并可回查 command/object/ledger lineage 的 receipt artifact。
 
 ## Out of Scope
 
-真实或模拟券商下单、order lifecycle、盘中做 T、个性化买卖/仓位建议、Public Equity runtime、完整外部 Skill/App/MCP/Web/persistence、HKEX scraper、未授权数据 feed、Vibe wrapper、StrategyValidation placeholder，以及六张portfolio planning tickets中尚未授权的新产品实现均不在本 Spec 范围。
+真实或模拟券商下单、order lifecycle、盘中做 T、个性化买卖/仓位建议、SEC/美股/港股 runtime、Public Equity runtime、完整外部 Skill/App/MCP/Web/persistence、HKEX scraper、未授权数据 feed、Vibe wrapper、StrategyValidation placeholder，以及六张portfolio planning tickets中尚未授权的新产品实现均不在本 Spec 范围。
 
 ## Further Notes
 
-本 Spec 已完成 Standards + Spec 独立对抗审计并清空 Wayfinder fog；它描述待实施目标，不宣称 production migration 已完成。Public Equity plugin 仍精确 external_blocked，HK licensed feed 未资格化，Vibe runtime 已 reject；这些状态不阻塞当前 I01–I05 canonical frontier。
+本 Spec 已完成 Standards + Spec 独立对抗审计并清空 Wayfinder fog。用户在 2026-07-25 进一步把 production market scope 固定为 A 股-only：US/HK/SEC 研究证据继续保留，但不再授权 runtime 建设。Public Equity plugin 仍精确 external_blocked，Vibe runtime 已 reject 且无需安装配置，StrategyValidation unavailable；这些状态不阻塞当前 ResearchEvaluation、交易计划与组合纪律 frontier。
 
 ## Detailed implementation contract
 ## 1. 目标与完成边界
@@ -71,7 +71,7 @@ tradingSystem 已有可审计的 DataProvider、ResearchWorkflow、Forecast、Va
 5. rejected/blocked 外部能力没有 dependency、placeholder、schema、route、fallback、report 或第二 persistence/Web；
 6. fresh/old/populated data roots、public tasks、真实 provider canary、正式 presentation 和浏览器行为都通过与风险相称的验收。
 
-本 Spec 不宣称上述生产改造已经完成。当前 checkout 仍是 migration `0012`、`ResearchWorkflowRequest@1`、字符串 `provider_type`、generic `HttpJsonProvider`、hard-coded policy identity 和 research-view runtime cutover seam。实现必须由后续 implementation issues 完成。
+截至 Issue 13 local commit `c20938a912c4397d1abce8d58f7d092134e54d51`，ProviderJob@2、SourcePolicy、migration 0013 与 A 股 CNINFO/SZSE official-disclosure roles 已完成并通过 live receipts/full verifier。当前剩余 production frontier 是 ResearchWorkflowRequest@2、ResearchEvaluation、migration 0014、canonical presentation/PDF 与 planning backwrite；不包含 SEC/美股/港股 runtime。
 
 ## 2. 权威输入与事实等级
 
@@ -108,8 +108,8 @@ tradingSystem 已有可审计的 DataProvider、ResearchWorkflow、Forecast、Va
 | Policy identity | repository 写死 `query@1` / `source@1` | migration 0013 后 attempt/snapshot绑定 canonical typed policy identity |
 | Official facts | 无完整 official filing/financial fact production ingestion；测试存在 direct SQL/caller fixtures | typed immutable filing/fact persistence，只经 public sync 写入 |
 | A股 official data | CNINFO/SZSE protocol 可达；raw bodies未保存，available_at/target parser未完成 | clean-room CNINFO/SZSE adapters，经 rights/PIT/identity gates进入唯一 path |
-| US official data | SEC submissions/companyfacts 可达；无 production parser与 truthful UA | cohesive SEC submissions/companyfacts/Archives adapter |
-| HK official data | HKEX/issuer IR PDF hash一致；无自动许可/adapter | 保持 blocked/逐发行人 keep-local；不建 HKEX placeholder |
+| US official data | SEC submissions/companyfacts 的历史资格化证据可达 | 当前 A 股-only scope 明确不建设 US/SEC runtime、配置或验收 |
+| HK official data | HKEX/issuer IR 历史证据保留；无自动许可/adapter | 当前 A 股-only scope 明确不建设 HK runtime；不建 HKEX placeholder |
 | Research request | Request@1 携带 projection/free mappings/caller artifacts | Request@2 只携带 snapshot refs + `ResearchEvaluationPlan@1` |
 | Research execution | 本地 engine/workflow/deep modules已存在 | concrete `ResearchEvaluation` 从 frozen evidence构造 artifacts |
 | Strategy validation | 无 production engine/schema/caller；Vibe 全 runtime reject | 当前 typed unavailable；不创建 port/engine/table/artifact |
@@ -127,8 +127,8 @@ tradingSystem 已有可审计的 DataProvider、ResearchWorkflow、Forecast、Va
 | SZSE statutory disclosure protocol | `adapt-code` | qualified-for-clean-room-implementation | clean-room typed official source role | disabled TLS、raw text、Eastmoney fallback |
 | SSE/SZSE public trading records | `keep-local` | evidence-only | 无 current named caller | adapter/registry placeholder |
 | `global-stock-data` Skill/aggregators/parsers | `reject` | rejected | 无 | Yahoo/EM/Sina/Tencent production path、rating/target |
-| SEC submissions/companyfacts/Archives | `adapt-code` | qualified-for-clean-room-implementation | clean-room SEC official source role | copy upstream parser、ticker-only identity、raw JSON result |
-| SEC ticker discovery | `keep-local` | evidence-only | future discovery only after new need | second security master |
+| SEC submissions/companyfacts/Archives | `keep-local` | historical evidence-only; scope-superseded | 无 current runtime role | provider/query/config/CIK identity、copy upstream parser、ticker-only identity、raw JSON result |
+| SEC ticker discovery | `keep-local` | historical evidence-only | 无 current named caller | second security master |
 | HKEX website scraper | `reject` | rejected | 无 | programmatic website extraction |
 | licensed HKEX feed | `reject` | `external_blocked` / unqualified | future separately licensed qualification only after a new decision | empty adapter/table/config |
 | issuer IR | `keep-local` | per-issuer-qualification-required | per-issuer terms/identity cross-check | global assumption or authority upgrade |
@@ -177,7 +177,6 @@ CLI / Web / Codex Skill adapter
             -> TushareCompatibleProvider
             -> CninfoStatutoryDisclosureProvider
             -> SzseStatutoryDisclosureProvider
-            -> SecOfficialDisclosureProvider
             -> FixtureProvider (deterministic tests only)
        -> DataRepository
             -> provider attempt + raw object
@@ -549,15 +548,15 @@ Blocked by: I01。
 
 同票完成0013全部schema/backfill/restore、CNINFO与SZSE clean-room production adapters、existing deterministic `FixtureProvider` adapter coverage、public sync/qualify callers、raw object/typed filing persistence、snapshot membership、rights/PIT/identity/failure gates、target fixtures/live receipt/docs/NOTICE。A股PDF在本票只形成filing identity/metadata/raw hash；未另行资格化的PDF语义抽取不得生成financial facts。删除旧rights表、placeholder policy identities、direct SQL/caller fact fixtures、cleartext/guessed-ID/disabled-TLS/raw-text/aggregator fallback。首次新DataProvider进入production后运行完整canonical verifier。
 
-### I03 — SEC official-disclosure vertical slice
+### I03 — A股-only scope migration
 
 Blocked by: I02。
 
-同票在0013唯一schema上完成SEC submissions/companyfacts/Archives production adapter、FixtureProvider deterministic coverage、truthful User-Agent/rate/Retry-After、CIK/accession/context/unit/amendment/coverage/PIT/hash、public sync/qualify、raw/filing/fact/snapshot persistence、live receipt/docs/NOTICE；schema无新增。删除generic/ticker-only/caller SEC facts、raw SEC→research path及aggregator/Skill fallback。不得建HKEX/IR registry。运行narrow suites和完整canonical verifier。
+本票不实施 production runtime。它把用户最新范围决定原子写回唯一 Spec、Map 与 delivery tickets：当前只做 A 股；SEC/美股/港股资格化材料降为历史 evidence-only，不创建 provider/query/config/env/schema/fixture/route/NOTICE/live receipt。Issue 15 直接由已完成 I02 解锁。Vibe-Trading 不接入、不要求安装配置，StrategyValidation unavailable 不阻断 ResearchEvaluation 或交易计划主流程。验收只覆盖四个 planning assets 的 exact-path diff、依赖图、runtime absence 与 `git diff --check`。
 
 ### I04 — Request@2、ResearchEvaluation、migration 0014 与 canonical PDF
 
-Blocked by: I03。
+Blocked by: I02。I03 是已完成的 scope migration，不是 runtime 前置条件。
 
 同票完成ResearchEvaluationPlan@1、Request@2 codec与全部CLI/daily/browser/workflow/recovery callers、concrete ResearchEvaluation、workflow-owned artifact factories、0014 historical cutover、WorkflowLedger query/atomic commit、View@2-derived JSON/HTML/PDF/XLSX/Web/archive、real-browser与PDF render verification、docs/config/generated assets。
 
@@ -582,7 +581,7 @@ Blocked by: I04。
 |---|---|---|---|---|---|
 | I01 | sync/daily/qualify/acceptance | current artifact/receipt owners; no schema change | unchanged | config/task/operations/full verifier | old codec/dispatch/fallback/caller JSON |
 | I02 | public sync/qualify A roles | 0013 + raw/filing/snapshot | View@2 unchanged | fixtures/live receipt/restore/docs/full verifier | old rights/placeholders/direct SQL/unsafe A paths |
-| I03 | public sync/qualify SEC role | exact 0013 tables; no new schema | View@2 unchanged | fixtures/live receipt/docs/full verifier | generic/caller/raw SEC and aggregator paths |
+| I03 | no production caller | no schema change | unchanged | Spec/Map/ticket exact-path scope evidence | stale SEC/US/HK runtime authorization and dependency edge |
 | I04 | all research callers Request@2 | 0014 + ledger query/atomic commit | View@2 JSON/HTML/PDF/XLSX/Web/archive | public/recovery/browser/PDF/docs/full verifier | all Request@1/projection/cutover/old readers |
 | I05 | no production caller | planning assets only | planning references only | six-ticket diff/link/frontier checks | stale planning assumptions only |
 
@@ -625,7 +624,7 @@ upstream、endpoint、schema、terms、entitlement、UA/rate policy或target par
 
 ## 20. Phase acceptance
 
-所有命令从repo root、项目当前Python环境执行；外部网络状态必须记录，skip/timeout不是pass。I01、I02、I03、I04的narrow suite之后均执行 `python -m trading_platform.cli test --repo-root .`；I02覆盖首个新DataProvider production gate，I04覆盖WorkflowLedger/schema/identity migration与Web/presentation切换gate。
+所有命令从repo root、项目当前Python环境执行；外部网络状态必须记录，skip/timeout不是pass。I01、I02、I04的narrow suite之后执行 `python -m trading_platform.cli test --repo-root .`；I02覆盖 A 股 DataProvider production gate，I04覆盖WorkflowLedger/schema/identity migration与Web/presentation切换gate。I03 是 planning-only scope migration，不重复运行 provider phase gate。
 
 ### 20.1 Narrow and phase-gate commands
 
@@ -646,9 +645,8 @@ python -m trading_platform.cli test --repo-root .
 I03：
 
 ```powershell
-python -m pytest -q tests/platform/test_data_sync_pit.py tests/platform/test_provider_qualification.py tests/platform/test_external_official_disclosure.py
-python .scratch/external-equity-capability-adoption/research/verify_market_validation_slices.py
-python -m trading_platform.cli test --repo-root .
+git diff --check
+git diff -- .scratch/external-equity-capability-adoption/spec.md .scratch/external-equity-capability-adoption/map.md .scratch/external-equity-capability-adoption/issues/14-i03-sec-official-disclosure.md .scratch/external-equity-capability-adoption/issues/15-i04-research-evaluation-0014-pdf.md
 ```
 
 I04：
@@ -669,17 +667,17 @@ I04还必须运行Request@1/cutover/free-mapping/caller-artifact absence gate、
 
 每个production adapter及其deterministic fixture replay必须逐格产生typed evidence；与该dataset无语义关系的格只能记录 `not_applicable` + typed reason，不可记pass。
 
-| Case | Tushare structured market | CNINFO/SZSE filing | SEC filing/facts |
-|---|---|---|---|
-| normal / legal empty / partial / stale | 各自fixture + status | 各自fixture + status | 各自fixture + status |
-| rate limit / 401 / 403 / timeout | typed transport/auth outcome | typed transport/auth outcome | typed transport/auth outcome incl Retry-After |
-| schema drift / wrong security identity | reject before snapshot | reject before snapshot | reject CIK/accession/listing mismatch |
-| published/available/retrieved | all three or typed N/A basis | all three, no published→available guess | all three, amendment availability preserved |
-| trading calendar | required fixture/live role | `not_applicable: filing_dataset` | `not_applicable: filing_dataset` |
-| adjustment/corporate action | supported roles prove behavior; unsupported role is typed unavailable | `not_applicable: filing_dataset` | facts amendment/correction tested; price adjustment N/A |
-| suspension/price limit/T+1 | supported role proves constraints or typed unavailable | `not_applicable: filing_dataset` | `not_applicable: filing_dataset` |
-| authority/rights | gateway identity not official disclosure | official authority plus per-source rights | official authority plus SEC access policy |
-| real connectivity | one canonical provider-qualify receipt | one controlled identity-bound receipt per production source | one CIK/accession-bound receipt |
+| Case | Tushare structured market | CNINFO/SZSE filing |
+|---|---|---|
+| normal / legal empty / partial / stale | 各自fixture + status | 各自fixture + status |
+| rate limit / 401 / 403 / timeout | typed transport/auth outcome | typed transport/auth outcome |
+| schema drift / wrong security identity | reject before snapshot | reject before snapshot |
+| published/available/retrieved | all three or typed N/A basis | all three, no published→available guess |
+| trading calendar | required fixture/live role | `not_applicable: filing_dataset` |
+| adjustment/corporate action | supported roles prove behavior; unsupported role is typed unavailable | `not_applicable: filing_dataset` |
+| suspension/price limit/T+1 | supported role proves constraints or typed unavailable | `not_applicable: filing_dataset` |
+| authority/rights | gateway identity not official disclosure | official authority plus per-source rights |
+| real connectivity | one canonical provider-qualify receipt | one controlled identity-bound receipt per production source |
 
 合法empty必须由source response semantics证明；transport/outage/permission/parse error永远不能折叠为empty。A股PDF在无独立semantic extractor时只验证document identity、MIME/size/hash和malicious-content quarantine，不产生critical financial facts。
 
@@ -710,7 +708,7 @@ python -m trading_platform.cli acceptance `
   --live-qualification-artifact-id <ProviderQualificationReceipt@1-artifact-id>
 ```
 
-production verifier必须从data root回查由canonical `provider-qualify`实际生成的command receipt、request/policy/provider/code/run identities、attempt/raw/snapshot hashes和object bytes；任意caller file、JSON、boolean、孤立hash或字段自述均被拒绝。A/SEC required live receipt缺失、identity不匹配或过期时不能声称production qualified。
+production verifier必须从data root回查由canonical `provider-qualify`实际生成的command receipt、request/policy/provider/code/run identities、attempt/raw/snapshot hashes和object bytes；任意caller file、JSON、boolean、孤立hash或字段自述均被拒绝。A 股 required live receipt缺失、identity不匹配或过期时不能声称production qualified。SEC/US/HK 不在当前 production scope，因此不得要求或伪造相应 receipt。
 
 ### 21.3 Migration/restore matrix
 
@@ -733,7 +731,7 @@ python -m trading_platform.cli doctor --data-root <restored-root>
 - 每票及最终运行 `git diff --check`、forbidden-symbol/dependency/generated-asset/current-doc searches、完整status/diff/staged diff inspection；
 - 每票只精确stage owning paths，一票一个local commit；baseline commit只含本effort planning assets；
 - preserve startup dirty/untracked user assets；不push/PR；
-- final Goal gate复跑full verifier、live receipts、Vibe adversarial evidence（当前reject结论仍与pinned evidence一致）、Web/browser/PDF、license/NOTICE和final code review。
+- final Goal gate复跑full verifier、A 股 live receipts、Web/browser/PDF、license/NOTICE和final code review；不安装、配置或调用 Vibe-Trading。
 
 ## 22. Acceptance Criteria
 
@@ -742,7 +740,7 @@ python -m trading_platform.cli doctor --data-root <restored-root>
 - [ ] ProviderJob@2是唯一production job schema；SourcePolicy routes/fallback可审计且critical official no-fallback。
 - [ ] DataSyncService不构造wire params、不做未声明provider fallback；concrete adapters拥有protocol/parser/failure。
 - [ ] policy/rights identities非placeholder；official facts只经public sync/persistence进入snapshots。
-- [ ] A股/SEC adapters逐格通过20.2 target fixtures与identity-bound live receipts。
+- [ ] A股 adapters逐格通过20.2 target fixtures与identity-bound live receipts；SEC/US/HK runtime保持不存在。
 - [ ] HK/Public Equity/Vibe/aggregators没有runtime surface。
 
 ### Research/presentation
@@ -786,17 +784,16 @@ python -m trading_platform.cli doctor --data-root <restored-root>
 
 Standards + Spec独立审计的blockers已在本版关闭：decision enum、vertical slices、cleanup ownership、large-file deepening、portfolio backwrite、PDF、declared fallback、phase full gates、live proof、adapter matrix和0013/0014 schema均有唯一owner与acceptance。八视角失败用例及逐finding closure记录在 `research/adoption-spec-adversarial-audit.md`。
 
-以下是implementation必须验证的preconditions，不是Wayfinder fog或已完成事实：A/SEC production adapters与live receipts尚未实现；A股raw document/security identity需在I02绑定；SEC operator contact需在I03配置；persisted roots需通过0013/0014 preflight；PDF renderer需在I04资格化。HKEX entitlement、Public Equity plugin和StrategyValidation当前分别维持reject/external_blocked/unavailable，不阻塞已选canonical path。
+当前 implementation preconditions 是：persisted roots通过0014 preflight，PDF renderer在I04资格化，并完成 Request@2/View@2 单向切换。A 股 production adapters、migration 0013 与 live receipts已由 I02 完成。SEC/US/HK runtime被 scope decision排除；没有 SEC operator contact、CIK config或live receipt前置条件。Public Equity plugin维持external_blocked，Vibe不接入，StrategyValidation维持unavailable；均不阻塞已选canonical path。
 
 Fog: none。剩余工作是已明确的I01–I05 delivery queue，不是未决架构问题。
 
 ## 25. Published implementation frontier
 
 - Wayfinder tickets 01–11 are resolved; Map is resolved and fog is empty.
-- [12 / I01 ProviderJob@2、SourcePolicy 与 qualification receipt cutover](issues/12-i01-provider-source-policy-receipt-cutover.md) — `ready-for-agent`, no blockers, current frontier.
-- [13 / I02 A股 OfficialDisclosure 与 migration 0013](issues/13-i02-a-share-official-disclosure-0013.md) — blocked by 12.
-- [14 / I03 SEC OfficialDisclosure](issues/14-i03-sec-official-disclosure.md) — blocked by 13.
-- [15 / I04 ResearchEvaluation、Request@2、migration 0014 与 PDF](issues/15-i04-research-evaluation-0014-pdf.md) — blocked by 14.
+- [12 / I01 ProviderJob@2、SourcePolicy 与 qualification receipt cutover](issues/12-i01-provider-source-policy-receipt-cutover.md) — resolved.
+- [13 / I02 A股 OfficialDisclosure 与 migration 0013](issues/13-i02-a-share-official-disclosure-0013.md) — resolved at `c20938a912c4397d1abce8d58f7d092134e54d51`.
+- [14 / I03 A股-only scope migration](issues/14-i03-sec-official-disclosure.md) — resolved; no SEC/US/HK runtime.
+- [15 / I04 ResearchEvaluation、Request@2、migration 0014 与 PDF](issues/15-i04-research-evaluation-0014-pdf.md) — ready-for-agent, blocked only by resolved 13, current frontier.
 - [16 / I05 portfolio-aware planning backwrite](issues/16-i05-backwrite-portfolio-discipline-planning.md) — blocked by 15.
-- `/to-spec` published-contract verification and `/to-tickets` publication are complete. After ticket audit, create one baseline local commit containing only this effort's planning assets, then claim ticket 12 in the next Goal continuation.
-- This publication continuation does not start production implementation.
+- `/to-spec` published-contract verification and `/to-tickets` publication are complete. Continue automatically from Issue 15 after the Issue 14 scope-migration commit.

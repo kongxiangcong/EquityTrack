@@ -18,8 +18,8 @@ Status: `resolved`
 - 使用 `research` 将官方文档、canonical 上游源码、许可证、数据条款、当前仓库正式代码/schema/tests 和可复现实验作为一手证据；研究结论保存在本 effort 的 `research/`，票据只链接资产并记录答案。
 - 外部仓库只允许位于 `E:\workspace\tradingSystem-upstreams\` 下三个指定隔离目录，不得进入本仓库、`.scratch`、`src`、`vendor` 或 submodule。外部依赖使用隔离 venv/container；不污染本项目运行环境。
 - 采用决策只能是 `adopt-external`、`adapt-code`、`keep-local` 或 `reject`。没有 callers、tests、docs、persistence 和 presentation 的原子切换与明确删除对象，就不能标记 adopted。
-- Public Equity Investing 只可作为 Codex 控制面的研究框架/质量对照；结构化数据仍通过资格化 `DataProvider`，关键财务事实仍以官方披露为权威。Vibe-Trading 若合格，只能经最小 allowlist 的隔离 `StrategyValidation` seam。
-- Vibe-Trading 资格化固定使用 pinned checkout 内由本机 `uv` 和 CPython 3.11 创建的独立 `.venv`，自动验证 stdio MCP `initialize`、`tools/list`、受限 `tools/call` 和失败语义；不得等待 Docker、登录或凭据，也不得为 live trading、模拟下单、broker、order、文件、web/search、memory、swarm 或完整 Web 建立主项目 interface/占位符。
+- Public Equity Investing 只可作为历史控制面研究证据；结构化数据仍通过资格化 `DataProvider`，关键财务事实仍以官方披露为权威。当前 delivery scope 只做 A 股，Vibe-Trading 不接入、不安装、不配置，StrategyValidation 保持 unavailable。
+- 既有 Vibe-Trading 隔离资格化材料只作为历史证据保留，不形成当前 runtime、复验、安装、配置或用户前置条件；不得为 live trading、模拟下单、broker、order、文件、web/search、memory、swarm 或完整 Web 建立主项目 interface/占位符。
 - 金融输出、PIT、source manifest、unknown-not-zero、隐私、fail-closed 和无个性化交易建议边界保持不变。网络失败或外部不可用必须记录为 typed/external evidence，不得用旧实现 fallback 冒充成功。
 - 启动基线见 [Goal 启动 Git 与 dirty 基线](research/startup-baseline.md)。所有既有 modified、deleted、untracked 路径均为用户资产；本 effort 只新增明确授权的 adoption 规划与验证资产。
 
@@ -32,18 +32,26 @@ Status: `resolved`
 - [黑盒评估 Public Equity Investing 的研究质量与输出边界](issues/03-evaluate-public-equity-investing.md) — 官方产品存在但当前精确 `plugin_not_found`，插件侧 0 个可执行用例故质量未资格化；production 角色 `reject`、控制面 `keep-local`，并已锁定可用后同源 canary 与金融输出 admission gate。
 
 - [资格化 a-stock-data 的 A 股端点与失败语义](issues/04-qualify-a-stock-data-endpoints.md) — 全部聚合行情/研究/信号端点及现成 parser 均 `reject`，Tushare-compatible 保持 canonical；只保留 CNINFO、SSE/SZSE 法定公告与监管公开记录的安全官方请求协议作为受限 `adapt-code` 候选。
-- [资格化 global-stock-data 的美港股端点与官方交叉验证](issues/05-qualify-global-stock-data-endpoints.md) — 全部美港聚合端点与现成 parser 均 `reject`；只保留 SEC 官方协议重写为唯一 OfficialDisclosure/DataProvider path 的 `adapt-code` 候选，HKEX 网页抓取拒绝且不建无许可占位 adapter。
+- [资格化 global-stock-data 的美港股端点与官方交叉验证](issues/05-qualify-global-stock-data-endpoints.md) — 全部美港聚合端点与现成 parser 均 `reject`；SEC/HK 结果现仅保留为历史 evidence-only，已被 A 股-only delivery scope 取代，不授权 runtime。
 - [验证 Vibe-Trading 的回测、Walk-Forward 与模拟可信度](issues/06-validate-vibe-trading-credibility.md) — 整个 MCP、通用 backtest、伪 Walk-Forward、IID Bootstrap、交易 P&L 置换“Monte Carlo”和 Shadow 报告均 `reject`，生产 allowlist 为空；仅保留信号滞后/PIT/A 股执行骨架/哈希清单作为需本项目重写补强的 `adapt-code` 候选。
 - [锁定 ResearchEvaluation 与 StrategyValidation 的深模块 interface](issues/07-lock-research-evaluation-and-strategy-validation-interfaces.md) — 唯一公开入口保持 `ResearchWorkflow.handle`，后续以 Request@2 + frozen snapshots + typed plan 单向删除自由 mapping/caller artifacts；ResearchEvaluation、source policy 与 future StrategyValidation 均为目标内进程具体深模块，不建无真实 production adapter 的新 port。
 - [完成隔离的 A股、美股、港股纵向验证切片](issues/08-complete-isolated-market-validation-slices.md) — 三市场均形成 hash-bound frozen metadata evidence，但研究均 data-insufficient、估值均 not-comparable、策略均 unavailable 且三个 production replacement gate 全部按明确缺口失败；raw HTML/PDF/free text/caller JSON 均不能升级为权威结果。
-- [决定单向迁移、旧实现删除和第三方升级政策](issues/09-decide-one-way-migration-deletion-and-upgrades.md) — 当前无 adopt-external；六步总序以 ProviderJob@2、migration 0013、A股/SEC clean-room adapters、Request@2/Plan@1 + migration 0014 和 release proof 原子切换，每步同票删除旧 caller/schema/tests/docs/assets，StrategyValidation 不建占位，升级必须重新 pin/hash/rights/NOTICE/运行资格化。
+- [决定单向迁移、旧实现删除和第三方升级政策](issues/09-decide-one-way-migration-deletion-and-upgrades.md) — 历史六步序列已由 2026-07-25 A 股-only 范围决定修订：SEC runtime slice改为scope migration，Request@2/Plan@1 + migration 0014直接由已完成的A股 slice解锁；StrategyValidation仍不建占位。
 - [综合外部能力 adoption 实现级 Spec](issues/10-synthesize-adoption-implementation-spec.md) — 唯一 `spec.md` 已综合零 adopt-external 的矩阵、canonical flow、typed contracts、安全门和待审计实现队列；未把未来实现写成完成。
 
 - [对抗性审计 adoption Spec 与真实替换门](issues/11-adversarially-audit-adoption-spec.md) — Standards + Spec 双审计与八视角失败用例已修复全部 blocker：最终决策枚举、I01–I05 vertical slices、0013/0014 schema、phase/live/adapter/PDF gates和六票规划回写均有唯一 owner；fog 清零，移交 `/to-spec` 后续核验与 `/to-tickets`。
 
+## Superseding delivery scope（2026-07-25）
+
+- [12 / I01 ProviderJob@2、SourcePolicy 与 qualification receipt cutover](issues/12-i01-provider-source-policy-receipt-cutover.md) — resolved。
+- [13 / I02 A股 OfficialDisclosure 与 migration 0013](issues/13-i02-a-share-official-disclosure-0013.md) — resolved at `c20938a912c4397d1abce8d58f7d092134e54d51`。
+- [14 / I03 A股-only scope migration](issues/14-i03-sec-official-disclosure.md) — resolved；不建设 SEC/US/HK runtime。
+- [15 / I04 ResearchEvaluation、Request@2、migration 0014 与 PDF](issues/15-i04-research-evaluation-0014-pdf.md) — ready-for-agent，blocked only by resolved 13，current frontier。
+- [16 / I05 portfolio-aware planning backwrite](issues/16-i05-backwrite-portfolio-discipline-planning.md) — blocked by 15。
+
 ## Fog
 
-- None。A/SEC adapters、migrations、PDF和live receipts是已分配的implementation preconditions，不是未决Wayfinder决定。
+- None。A 股 adapters、migration 0013 与 live receipts已完成；剩余 migration 0014、PDF和planning backwrite都有明确owner。SEC/US/HK runtime已明确排除，不是fog或blocker。
 ## Out of scope
 
 - 真实券商下单、自动交易、盘中做 T、分钟级执行优化，以及任何绕过用户确认的行动副作用。
