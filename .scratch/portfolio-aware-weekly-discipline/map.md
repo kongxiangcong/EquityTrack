@@ -27,12 +27,12 @@ Status: `open`
 - [审计当前每周决策旅程与可复用 seam](issues/01-audit-current-weekly-decision-journey.md) — 复用窄应用任务接口、不可变账户/研究/计划/市场/工作流能力；手工账户、计划创建、组合日终编排、下一交易日任务与周末复盘尚未形成真实可走的产品闭环。
 - [决定用户声明账户快照的信任与降级合同](issues/02-decide-user-declared-account-snapshot-contract.md) — 截图、自然语言与文件先形成草稿；确认快照按来源信任和字段 capability 双轴降级、保持不可变，且不得从状态差额伪造账户历史。
 - [决定收盘后评估与下一交易日窗口语义](issues/03-decide-daily-close-decision-window.md) — 只用截至 PIT cutoff 已完整可用的数据冻结当日快照；周末/节假日按版本化交易日历回退，但开放日数据缺失、停牌/涨跌停、T+1、复权或公司行动冲突必须显式阻断或降级，决不把日线信号回填成同收盘价成交。
+- [资格化 MarketRegime v2 的数据与最小组件](issues/05-qualify-market-regime-v2-data.md) — 最小目标包固定 A 股-only `930903.CSI` 中证 A 股指数的趋势/波动率，并按逐 session PIT 成分计算宽度/流动性且不合成黑箱分；runtime 仍以 typed `instrument_type=A_SHARE` fail closed。当前单证券 receipt 和 legal-empty constituent probe 不足以证明这些输入，planning disposition 为 `blocked_data_qualification`，行业轮动与资金流第一版 disabled。
 
 ## Not yet specified
 
 - 在 Provider 资格和行业分类来源确定前，跨持仓相关性、行业集中度和风格暴露应采用何种最小可审计方法仍处于 fog。
-- 在市场状态最小组件与 freshness 能力确定前，哪些状态变化需要在主视图主动提示、哪些只进入按需审计仍处于 fog。
-- 当前 frontier 是 [资格化 MarketRegime v2 的数据与最小组件](issues/05-qualify-market-regime-v2-data.md)；05/06 的数据与研究门控结论将分别解锁 07/08，随后按既有 blocked edges 推进 09-12。本次架构回写不改变任何依赖边。
+- 当前 frontier 是 [决定持仓研究与条件估值的计划门控](issues/06-decide-holding-research-readiness-gates.md)；它将把 MarketRegime 的 `blocked_data_qualification` planning disposition 映射为现有 typed blocked/unknown capability limit，不能假设四组件已生产可用。需要主动提示还是渐进披露的交互问题由既有驾驶舱原型票解决，不再重复留在 fog。
 
 ## Out of scope
 
