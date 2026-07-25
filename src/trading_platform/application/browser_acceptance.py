@@ -2,23 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from equity_research.forecast import (
-    CompanyArchetype,
-    DataInsufficientForecastRequest,
-    DataInsufficientSnapshot,
-    ForecastEngine,
-    Security,
-)
-from equity_research.scenario_valuation import (
-    DataInsufficientScenarioRequest,
-    ScenarioValuationEngine,
-)
-from equity_research import validate_source_manifest_runtime
 from trading_platform.application.contracts import (
     SecurityIdentity,
     StartResearchWorkflow,
@@ -34,12 +22,13 @@ from trading_platform.domain.plans import (
     PlanReference,
     PlanRule,
 )
-from trading_platform.domain.research_inputs import ResearchInputs
-from trading_platform.domain.workflow import (
-    FieldSemantics,
-    ImmutableArtifactDraft,
-    ResearchProjection,
+from trading_platform.domain.research_evaluation import (
+    EvaluationDimension,
+    EvaluationHorizon,
+    EvaluationPurpose,
+    ResearchEvaluationPlan,
     ResearchWorkflowRequest,
+    StrategyValidationSelection,
 )
 from trading_platform.plans import PlanService
 from trading_platform.workflows.research import ResearchWorkflow
@@ -65,13 +54,11 @@ class BrowserAcceptanceFixture:
         data: DataSyncService,
         research: ResearchWorkflow,
         plans: PlanService,
-        repo_root: Path,
     ) -> None:
         self._watchlist = watchlist
         self._data = data
         self._research = research
         self._plans = plans
-        self._repo_root = repo_root
 
     def prepare(self) -> BrowserAcceptanceFixtureResult:
         security_id = "security_yihua"
@@ -92,23 +79,40 @@ class BrowserAcceptanceFixture:
                 datetime(2026, 7, 11, tzinfo=timezone.utc),
                 "Asia/Shanghai",
                 "SZSE",
-                SnapshotPurpose.CHART,
+                SnapshotPurpose.WORKFLOW,
                 ("trade_cal", "market_universe", "daily"),
                 network_authorized=True,
                 offline=False,
             )
         )
-        projection = self._projection()
-        analysis_artifacts = self.analysis_artifacts(security_id)
+        if snapshot.snapshot_id is None or snapshot.effective_session_date is None:
+            raise ValueError("BROWSER_FIXTURE_SNAPSHOT_UNAVAILABLE")
         research = self._research.handle(
             StartResearchWorkflow(
                 ResearchWorkflowRequest(
+                    schema_version="ResearchWorkflowRequest@2",
                     invocation_id="browser-acceptance:research",
                     security_id=security_id,
-                    requested_date="2026-07-07",
-                    effective_session_date="2026-07-07",
-                    projection=projection,
-                    analysis_artifacts=analysis_artifacts,
+                    requested_date=snapshot.requested_date,
+                    effective_session_date=snapshot.effective_session_date,
+                    data_snapshot_id=snapshot.snapshot_id,
+                    evaluation_plan=ResearchEvaluationPlan(
+                        schema_version="ResearchEvaluationPlan@1",
+                        purpose=EvaluationPurpose.COMPANY_OUTLOOK,
+                        horizon=EvaluationHorizon(
+                            as_of=snapshot.requested_date,
+                            forecast_end="2028-12-31",
+                            review_by="2026-10-11",
+                        ),
+                        required_dimensions=(
+                            EvaluationDimension.SOURCE_QUALITY,
+                            EvaluationDimension.FORECAST,
+                            EvaluationDimension.VALUATION,
+                        ),
+                        strategy_validation=(
+                            StrategyValidationSelection.NOT_REQUESTED
+                        ),
+                    ),
                 )
             )
         )
@@ -167,106 +171,6 @@ class BrowserAcceptanceFixture:
             research.workflow_run_id,
             research.research_run_id,
             plan.draft_id,
-        )
-
-    def _projection(self) -> ResearchProjection:
-        example = self._repo_root / "examples" / "yihua-002897"
-        manifest = self._load(example / "source_manifest.json")
-        semantics = tuple(
-            FieldSemantics(
-                source_id=str(source["source_id"]),
-                source_authority=str(source["tier"]),
-                field_name=str(field["field_name"]),
-                period=str(field["period"]),
-                statement_scope=str(field.get("statement_scope", "consolidated")),
-                unit=str(field.get("unit", "")),
-                currency=str(field.get("currency", "")),
-                scale=str(field.get("scale", "1")),
-                restatement_status=str(field.get("restatement_status", "as_reported")),
-                published_at=str(source.get("published_at", source["report_date"])),
-                available_at=str(source["retrieved_at"]),
-                retrieved_at=str(source["retrieved_at"]),
-                supersedes_identity=(
-                    str(source["supersedes_identity"])
-                    if source.get("supersedes_identity") is not None
-                    else None
-                ),
-                availability_basis=(
-                    "publisher_timestamp"
-                    if source.get("available_at")
-                    else "conservative_retrieval_time"
-                ),
-            )
-            for source in manifest["sources"]
-            for field in source["extracted_fields"]
-        )
-        source_validation = validate_source_manifest_runtime(
-            manifest,
-            example / "source_manifest.json",
-        )
-        return ResearchProjection(
-            manifest=manifest,
-            estimates=self._load(example / "estimate_overlay.json"),
-            research_inputs=replace(
-                ResearchInputs.from_mapping(
-                    self._load(example / "research_context.json")
-                ),
-                workflow_research_member_ids=(),
-            ),
-            as_of_date="2026-07-07",
-            profile="standard",
-            field_semantics=semantics,
-            diluted_share_identity="SRC_CNINFO_2026Q1:diluted_shares:2026Q1",
-            net_debt_bridge_identity="SRC_CNINFO_2026Q1:cash+debt:2026Q1",
-            source_manifest_validation_result=source_validation,
-            source_manifest_path="examples/yihua-002897/source_manifest.json",
-        )
-
-    @staticmethod
-    def analysis_artifacts(
-        security_id: str,
-    ) -> tuple[ImmutableArtifactDraft, ...]:
-        """Build a fail-closed analysis set containing no financial claims."""
-
-        snapshot = DataInsufficientSnapshot(
-            snapshot_id="browser-acceptance-analysis-snapshot",
-            security_id=security_id,
-            as_of="2026-07-07",
-            missing_fields=(
-                "official_financial_statements",
-                "valuation_method_inputs",
-            ),
-        )
-        request = DataInsufficientForecastRequest(
-            security=Security(
-                security_id,
-                "温州意华接插件股份有限公司",
-                "SZSE",
-                "CNY",
-                CompanyArchetype.GENERAL_MANUFACTURING,
-                ("company",),
-            ),
-            as_of=snapshot.as_of,
-            data_snapshot=snapshot,
-            forecast_periods=("2027E",),
-            review_date="2026-08-07",
-        )
-        forecast = ForecastEngine().build(request)
-        valuation = ScenarioValuationEngine().run(
-            DataInsufficientScenarioRequest(forecast, "2027E")
-        )
-        identities = {
-            "model_identity": "browser-acceptance-analysis@1",
-            "policy_identity": "data-insufficient-browser-acceptance@1",
-        }
-        return (
-            ImmutableArtifactDraft.from_data_snapshot(snapshot, **identities),
-            ImmutableArtifactDraft.from_forecast_graph(forecast, **identities),
-            ImmutableArtifactDraft.from_scenario_valuation(
-                valuation,
-                forecast_graph=forecast,
-                **identities,
-            ),
         )
 
     @staticmethod

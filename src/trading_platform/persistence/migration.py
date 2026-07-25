@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -56,7 +57,11 @@ class MigrationRunner:
         for index, path in pending:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             rebuilds_parent_tables = (
-                path.name == "0013_source_policy_official_evidence.sql"
+                path.name
+                in {
+                    "0013_source_policy_official_evidence.sql",
+                    "0014_research_evaluation.sql",
+                }
             )
             try:
                 if rebuilds_parent_tables:
@@ -64,7 +69,10 @@ class MigrationRunner:
                     self.connection.execute("PRAGMA legacy_alter_table=ON")
                 self.connection.execute("BEGIN IMMEDIATE")
                 if rebuilds_parent_tables:
-                    self._preflight_source_policy_0013()
+                    if path.name == "0013_source_policy_official_evidence.sql":
+                        self._preflight_source_policy_0013()
+                    else:
+                        self._preflight_research_evaluation_0014()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
@@ -76,8 +84,13 @@ class MigrationRunner:
                     ).fetchall()
                     if violations:
                         raise PersistenceError(
-                            "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
-                            "Migration 0013 produced invalid foreign-key lineage.",
+                            (
+                                "SOURCE_POLICY_IDENTITY_UNMIGRATABLE"
+                                if path.name
+                                == "0013_source_policy_official_evidence.sql"
+                                else "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE"
+                            ),
+                            f"Migration {index:04d} produced invalid foreign-key lineage.",
                         )
                 self.connection.execute(
                     "INSERT INTO schema_migration VALUES(?,?,?,?,?)",
@@ -194,6 +207,167 @@ class MigrationRunner:
             raise PersistenceError(
                 "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
                 "A legacy non-fixture provider attempt has no persisted rights evidence.",
+            )
+
+    def _preflight_research_evaluation_0014(self) -> None:
+        from .migrations.research_evaluation_0014 import (
+            decode_request_v1_for_audit,
+        )
+
+        nonterminal = self.connection.execute(
+            "SELECT workflow_run_id FROM workflow_run "
+            "WHERE workflow_id='research-workflow' "
+            "AND status IN ('queued','running') LIMIT 1"
+        ).fetchone()
+        if nonterminal is not None:
+            raise PersistenceError(
+                "MIGRATION_WORKFLOW_NOT_TERMINAL",
+                "A nonterminal legacy research workflow blocks migration 0014.",
+            )
+        legacy_requests = tuple(
+            self.connection.execute(
+                "SELECT w.workflow_run_id,r.request_hash,a.object_sha256,"
+                "o.size_bytes,o.relative_path "
+                "FROM workflow_run w "
+                "JOIN workflow_run_request r USING(workflow_run_id) "
+                "JOIN artifact a ON a.artifact_id=r.request_artifact_id "
+                "JOIN object_blob o ON o.sha256=a.object_sha256 "
+                "WHERE w.workflow_id='research-workflow' "
+                "AND r.request_schema_version='ResearchWorkflowRequest@1'"
+            )
+        )
+        for row in legacy_requests:
+            path = (self.data_root / row["relative_path"]).resolve()
+            try:
+                path.relative_to(self.data_root.resolve())
+                payload = path.read_bytes()
+                audit = decode_request_v1_for_audit(payload)
+            except (OSError, ValueError) as error:
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy Request@1 audit identity is unavailable.",
+                ) from error
+            digest = hashlib.sha256(payload).hexdigest()
+            if (
+                len(payload) != row["size_bytes"]
+                or digest != row["object_sha256"]
+                or digest != row["request_hash"]
+            ):
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy Request@1 failed identity verification.",
+                )
+            projection = self.connection.execute(
+                "SELECT security_id FROM research_input_projection "
+                "WHERE research_projection_id=?",
+                (audit.research_projection_id,),
+            ).fetchone()
+            if projection is None or projection["security_id"] != audit.security_id:
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy Request@1 projection identity does not match history.",
+                )
+        ambiguous = self.connection.execute(
+            "SELECT research_projection_id FROM research_input_projection "
+            "GROUP BY projection_hash HAVING count(*)<>1 LIMIT 1"
+        ).fetchone()
+        if ambiguous is not None:
+            raise PersistenceError(
+                "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                "Legacy projection identity is not unique.",
+            )
+        missing_artifact = self.connection.execute(
+            "SELECT p.research_projection_id FROM research_input_projection p "
+            "LEFT JOIN artifact a ON a.artifact_id=p.projection_artifact_id "
+            "LEFT JOIN object_blob o ON o.sha256=a.object_sha256 "
+            "WHERE a.artifact_id IS NULL OR o.sha256 IS NULL LIMIT 1"
+        ).fetchone()
+        if missing_artifact is not None:
+            raise PersistenceError(
+                "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                "Legacy projection audit artifact is missing.",
+            )
+        projection_artifacts = tuple(
+            self.connection.execute(
+                "SELECT p.research_projection_id,p.projection_hash,"
+                "a.object_sha256,o.size_bytes,o.relative_path "
+                "FROM research_input_projection p "
+                "JOIN artifact a ON a.artifact_id=p.projection_artifact_id "
+                "JOIN object_blob o ON o.sha256=a.object_sha256"
+            )
+        )
+        for row in projection_artifacts:
+            path = (self.data_root / row["relative_path"]).resolve()
+            try:
+                path.relative_to(self.data_root.resolve())
+                payload = path.read_bytes()
+            except (OSError, ValueError) as error:
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy projection audit object is unavailable.",
+                ) from error
+            digest = hashlib.sha256(payload).hexdigest()
+            if (
+                len(payload) != row["size_bytes"]
+                or digest != row["object_sha256"]
+                or digest != row["projection_hash"]
+            ):
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy projection audit object failed identity verification.",
+                )
+        research_artifacts = tuple(
+            self.connection.execute(
+                "SELECT r.research_run_id,r.engine_schema_version,"
+                "a.object_sha256,o.size_bytes,o.relative_path "
+                "FROM research_run_record r "
+                "JOIN artifact a "
+                "ON a.artifact_id=r.canonical_json_artifact_id "
+                "JOIN object_blob o ON o.sha256=a.object_sha256"
+            )
+        )
+        for row in research_artifacts:
+            path = (self.data_root / row["relative_path"]).resolve()
+            try:
+                path.relative_to(self.data_root.resolve())
+                payload = path.read_bytes()
+                decoded = json.loads(payload)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy research artifact is missing or corrupt.",
+                ) from error
+            if (
+                len(payload) != row["size_bytes"]
+                or hashlib.sha256(payload).hexdigest()
+                != row["object_sha256"]
+                or not isinstance(decoded, dict)
+                or decoded.get("run_id") != row["research_run_id"]
+                or decoded.get("schema_version")
+                != row["engine_schema_version"]
+            ):
+                raise PersistenceError(
+                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                    "Legacy research artifact failed identity verification.",
+                )
+        incomplete_view = self.connection.execute(
+            "SELECT w.workflow_run_id FROM workflow_run w "
+            "LEFT JOIN workflow_run_ref r "
+            "ON r.workflow_run_id=w.workflow_run_id "
+            "AND r.ref_role='decision_view_manifest' "
+            "LEFT JOIN artifact_manifest f "
+            "ON f.artifact_manifest_id=r.ref_id "
+            "WHERE w.workflow_id='research-workflow' "
+            "AND w.status IN ('succeeded','succeeded_with_limits') "
+            "GROUP BY w.workflow_run_id "
+            "HAVING count(f.artifact_manifest_id)<>1 "
+            "OR min(f.manifest_role)<>'workflow_decision_view@1' "
+            "OR min(f.member_count)<>2 LIMIT 1"
+        ).fetchone()
+        if incomplete_view is not None:
+            raise PersistenceError(
+                "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
+                "Legacy successful workflow lacks one complete decision view.",
             )
 
     @staticmethod

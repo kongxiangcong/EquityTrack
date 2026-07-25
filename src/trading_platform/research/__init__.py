@@ -1,3 +1,6 @@
-from .assembler import ProjectionError, SnapshotToResearchRequestAssembler
+from .evaluation import ResearchEvaluation, ResearchEvaluationError
 
-__all__ = ["ProjectionError", "SnapshotToResearchRequestAssembler"]
+__all__ = [
+    "ResearchEvaluation",
+    "ResearchEvaluationError",
+]

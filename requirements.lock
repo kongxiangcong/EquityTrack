@@ -1,2 +1,5 @@
-# Runtime dependency lock for the deterministic platform.
-# The project has no third-party Python runtime dependencies.
+# Runtime dependency lock for the deterministic platform on the qualified
+# Windows CPython 3.14 runtime.
+charset-normalizer==3.4.4 --hash=sha256:8a6562c3700cce886c5be75ade4a5db4214fda19fede41d9792d100288d8f94c
+pillow==12.0.0 --hash=sha256:8dc232e39d409036af549c86f24aed8273a40ffa459981146829a324e0848b4b
+reportlab==4.4.9 --hash=sha256:68e2d103ae8041a37714e8896ec9b79a1c1e911d68c3bd2ea17546568cf17bfd

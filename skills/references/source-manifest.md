@@ -1,7 +1,7 @@
 # Source Manifest Schema
 
 > The active manifest contract is version 2. Formal platform authority is the
-> frozen ResearchProjection / DataSnapshot plus typed artifact invariants.
+> frozen DataSnapshot / ResearchEvaluationPlan plus typed artifact invariants.
 
 This file defines the minimum source manifest required before an equity research output can contain valuation conclusions.
 

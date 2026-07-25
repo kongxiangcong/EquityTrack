@@ -29,6 +29,7 @@ from tests.platform.test_trade_plans import _content
 
 def _root(path: Path, *, missing_amount: bool = False, freshness: str = "valid", suspended: bool = False, peer_suspended: bool = False, at_limit_up: bool = False, corporate_conflict: bool = False):
     root = chart_root(path)
+    root.faults.record_official_filing_workflow_snapshot()
     research = root.research.handle(
         StartResearchWorkflow(research_request("market:research"))
     )

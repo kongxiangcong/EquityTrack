@@ -26,13 +26,12 @@ from tests.platform.test_research_workflow import (
     _request as research_request,
     _root as research_root,
 )
-from tests.platform.test_research_workflow import CountingEngine
 from tests.platform.application_task_fixture import PlatformTaskFixture
 from tests.platform.test_workflow_ledger_recovery import (
     CrashAt,
     InjectedCrash,
-    _expire,
-    _root as recovery_root,
+    _expire_lease as _expire,
+    recovery_root,
 )
 from trading_platform.application.workflow_ledger import GenericObjectCommit, IntegrityScope
 from trading_platform.operations import OperationError, PlatformOperations
@@ -110,13 +109,20 @@ def _exercise_release_root(
         manifest = tasks.archive.manifest(history.final_manifest_id)
         refs = tuple(item["ref_role"] for item in history.refs)
         assert refs.count("decision_view_manifest") == 1
-        assert {"research_json", "research_source_identity_html"} <= set(refs)
-        forecast = next(
-            tasks.archive.artifact(record_id)
-            for record_id in workflow_result.artifact_record_ids
-            if tasks.archive.artifact(record_id).artifact_kind == "Forecast"
+        assert {
+            "evaluation_plan",
+            "research_run",
+            "research_snapshot",
+            "decision_view_manifest",
+            "final_manifest",
+        } <= set(refs)
+        view = json.loads(
+            tasks.archive.decision_view(
+                workflow_result.workflow_run_id
+            ).json_bytes
         )
-        assert forecast.payload["graph_id"].startswith("fg2_")
+        assert view["schema_version"] == "ResearchDecisionView@2"
+        assert workflow_result.artifact_record_ids == ()
         assert manifest.artifact_manifest_id == history.final_manifest_id
         tasks.close()
 
@@ -172,7 +178,7 @@ def test_release_migration_matrix_covers_fresh_prior_created_and_reused_roots(
     _exercise_release_root(tmp_path, "prior", prior)
 
     created = tmp_path / "created"
-    created_tasks = research_root(created, CountingEngine())
+    created_tasks = research_root(created)
     legacy_bytes = (
         Path.cwd() / "tests/fixtures/legacy_forecast_graph_fg1.json"
     ).read_bytes()
@@ -194,7 +200,7 @@ def test_release_migration_matrix_covers_fresh_prior_created_and_reused_roots(
     )
 
     reused = tmp_path / "reused"
-    reused_tasks = research_root(reused, CountingEngine())
+    reused_tasks = research_root(reused)
     reused_store = PlatformStore(reused, Path.cwd() / "migrations")
     reused_legacy_sha = reused_store.workflow_ledger.commit_artifacts(
         GenericObjectCommit(legacy_bytes)
@@ -223,7 +229,7 @@ def test_source_policy_migration_rejects_ambiguous_attempt_lineage_atomically(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-1]:
+    for source in migration_files[:-2]:
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "ambiguous-lineage"
     store = PlatformStore(live, prior_migrations)
@@ -334,7 +340,7 @@ def test_source_policy_migration_rejects_ambiguous_attempt_lineage_atomically(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 1
+        == len(migration_files) - 2
     )
     assert (
         upgraded.connection.execute(
@@ -351,7 +357,7 @@ def test_source_policy_migration_preserves_provable_populated_lineage(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-1]:
+    for source in migration_files[:-2]:
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "provable-populated-lineage"
     store = PlatformStore(live, prior_migrations)
@@ -491,7 +497,7 @@ def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-1]:
+    for source in migration_files[:-2]:
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "faulted-migration"
     prior = PlatformStore(live, prior_migrations)
@@ -506,7 +512,7 @@ def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 1
+        == len(migration_files) - 2
     )
     assert (
         upgraded.connection.execute(
@@ -527,7 +533,7 @@ def test_source_policy_migration_rejects_unproved_legacy_source_rights(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-1]:
+    for source in migration_files[:-2]:
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "unproved-source-rights"
     prior = PlatformStore(live, prior_migrations)
@@ -568,7 +574,7 @@ def test_source_policy_migration_rejects_unproved_legacy_source_rights(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 1
+        == len(migration_files) - 2
     )
     assert (
         upgraded.connection.execute(
@@ -607,7 +613,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
     with pytest.raises(OperationError, match="BACKUP_TARGET_EXISTS"):
         operations.backup(archive)
     migrated = operations.migrate()
-    full_backup = tmp_path / f"live-pre-migrate-v0012.zip"
+    full_backup = tmp_path / "live-pre-migrate-v0013.zip"
     assert migrated["status"] == "passed" and full_backup.is_file()
     with zipfile.ZipFile(full_backup) as bundle:
         assert "platform.sqlite3" in bundle.namelist() and any(
@@ -642,7 +648,7 @@ def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruptio
 ) -> None:
     live = tmp_path / "live"
     root = recovery_root(
-        live, CountingEngine(), CrashAt("workflow.final_manifest_committed")
+        live, CrashAt("workflow.final_manifest_committed")
     )
     with pytest.raises(InjectedCrash):
         root.research.handle(StartResearchWorkflow(research_request("operations:maintenance")))
@@ -937,6 +943,7 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
     repo = Path(__file__).resolve().parents[2]
     live = tmp_path / "live"
     root = _root(live)
+    root.faults.record_official_filing_workflow_snapshot()
     workflow = root.research.handle(StartResearchWorkflow(research_request("operations:e2e")))
     root.close()
     secret = "secret-value-that-must-never-leak"
@@ -1048,7 +1055,7 @@ def test_windows_cli_resume_executes_recovery_and_returns_refs(tmp_path: Path) -
     repo = Path(__file__).resolve().parents[2]
     data_root = tmp_path / "resume"
     root = recovery_root(
-        data_root, CountingEngine(), CrashAt("workflow.freeze_checkpoint_committed")
+        data_root, CrashAt("workflow.research_checkpoint_committed")
     )
     with pytest.raises(InjectedCrash):
         root.research.handle(StartResearchWorkflow(research_request("operations:resume")))

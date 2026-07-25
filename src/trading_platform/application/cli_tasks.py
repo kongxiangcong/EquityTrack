@@ -6,7 +6,7 @@ from typing import Protocol
 from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import SyncRequest, SyncResult
 from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
-from trading_platform.domain.workflow import ResearchWorkflowResult
+from trading_platform.domain.research_evaluation import ResearchWorkflowResult
 from trading_platform.market import MarketEvaluationService
 from trading_platform.workflows.research import ResearchWorkflow
 

@@ -8,7 +8,6 @@ from typing import Any, Mapping
 from trading_platform.persistence.locking import DataRootWriterLock
 from trading_platform.application.workflow_ledger import (
     DecisionViewPayloadQuery,
-    ResearchViewCutoverCompleteQuery,
     ResearchArtifactQuery,
     WorkflowLedgerPort,
     WorkspaceWorkflowQuery,
@@ -31,8 +30,6 @@ class WorkspaceService:
         self.workflow_ledger = workflow_ledger
 
     def build(self, security_id: str, snapshot_id: str) -> dict[str, Any]:
-        if not self.workflow_ledger.load(ResearchViewCutoverCompleteQuery()):
-            raise ResearchViewError("RESEARCH_VIEW_CUTOVER_INCOMPLETE")
         snapshot = self._one(
             "SELECT requested_date,effective_session_date,freshness_status,quality_status FROM data_snapshot WHERE data_snapshot_id=?",
             (snapshot_id,),
@@ -121,12 +118,14 @@ class WorkspaceService:
         }
 
     def _research_views(self, security_id: str) -> list[dict[str, Any]]:
-        rows = self.workflow_ledger.load(
+        evidence = self.workflow_ledger.load(
             WorkspaceWorkflowQuery(security_id)
-        ).artifact_uses
-        workflow_run_ids: dict[str, None] = {}
-        for row in rows:
-            workflow_run_ids.setdefault(str(row["workflow_run_id"]), None)
+        )
+        workflow_run_ids = {
+            str(row["workflow_run_id"]): None
+            for row in evidence.workflows
+            if row["status"] in {"succeeded", "succeeded_with_limits"}
+        }
         result: list[dict[str, Any]] = []
         for workflow_run_id in workflow_run_ids:
             persisted = self.workflow_ledger.load(

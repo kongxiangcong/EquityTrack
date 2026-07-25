@@ -12,6 +12,16 @@ if (view.schema_version !== "ResearchDecisionView@2") {
 }
 
 const workbook = Workbook.create();
+let modelIdentitySummary = view.model_identity;
+try {
+  const parsedIdentity = JSON.parse(view.model_identity);
+  modelIdentitySummary =
+    parsedIdentity.model_policy_hash
+    || parsedIdentity.workflow_hash
+    || view.model_identity;
+} catch {
+  // A non-JSON identity is already a concise, typed display value.
+}
 const summary = workbook.worksheets.add("Summary");
 const imported = workbook.worksheets.add("Canonical Inputs");
 const bridge = workbook.worksheets.add("Bridge Trace");
@@ -64,7 +74,32 @@ for (const scenario of view.scenarios || []) {
     }
   }
 }
-if (!methodRows.length || !bridgeRows.length) {
+if (!methodRows.length && view.valuation_view?.status === "not_ready") {
+  methodRows.push([
+    "limited",
+    "Data insufficient",
+    "not_ready",
+    "base",
+    null,
+    null,
+    null,
+    "unknown",
+    "",
+    view.as_of,
+    "not_applicable",
+    "qualified-inputs-missing",
+  ]);
+  bridgeRows.push([
+    "limited",
+    "not_ready",
+    "base",
+    1,
+    "basis_value",
+    null,
+    "",
+    null,
+  ]);
+} else if (!methodRows.length || !bridgeRows.length) {
   throw new Error("VALUATION_WORKBOOK_RECONCILIATION_INPUT_MISSING");
 }
 const reconciliationRows = methodRows.map((row) => [row[0], row[2], row[3]]);
@@ -74,7 +109,7 @@ summary.getRange("A1").values = [["Canonical Valuation Artifact Export"]];
 summary.getRange("A3:B9").values = [
   ["Subject", view.subject_id],
   ["As of", view.as_of],
-  ["Model", view.model_identity],
+  ["Model identity", modelIdentitySummary],
   ["Policy", view.policy_identity],
   ["View schema", view.schema_version],
   ["Status", view.status],
@@ -102,6 +137,15 @@ for (const scenario of view.scenarios || []) {
       ]);
     }
   }
+}
+if (!summaryRows.length && view.valuation_view?.status === "not_ready") {
+  summaryRows.push([
+    "Data insufficient",
+    "not_ready",
+    2,
+    "No formal valuation",
+    "basis_value",
+  ]);
 }
 if (summaryRows.length) {
   summary.getRangeByIndexes(11, 0, summaryRows.length, 4).values =
@@ -135,7 +179,7 @@ for (let index = 0; index < bridgeRows.length; index += 1) {
     && bridgeRows[index - 1][2] === bridgeRows[index][2];
   const previous = sameGroup ? `I${row - 1}` : "0";
   bridge.getRange(`I${row}`).formulas = [[
-    `=IF(E${row}="basis_value",F${row},IF(LEFT(E${row},4)="add_",${previous}+F${row},IF(LEFT(E${row},9)="subtract_",${previous}-F${row},IF(E${row}="convert_fx",${previous}*F${row},IF(E${row}="divide_diluted_shares",${previous}/F${row},NA())))))`,
+    `=IF(F${row}="","",IF(E${row}="basis_value",F${row},IF(LEFT(E${row},4)="add_",${previous}+F${row},IF(LEFT(E${row},9)="subtract_",${previous}-F${row},IF(E${row}="convert_fx",${previous}*F${row},IF(E${row}="divide_diluted_shares",${previous}/F${row},NA()))))))`,
   ]];
 }
 
@@ -149,34 +193,60 @@ for (let index = 0; index < reconciliationRows.length; index += 1) {
   const row = index + 2;
   reconciliation.getRange(`D${row}`).formulas = [[`='Canonical Inputs'!E${row}`]];
   reconciliation.getRange(`E${row}`).formulas = [[
-    `=SUMIFS('Bridge Trace'!$I$2:$I$${bridgeRows.length + 1},'Bridge Trace'!$A$2:$A$${bridgeRows.length + 1},A${row},'Bridge Trace'!$B$2:$B$${bridgeRows.length + 1},B${row},'Bridge Trace'!$C$2:$C$${bridgeRows.length + 1},C${row},'Bridge Trace'!$H$2:$H$${bridgeRows.length + 1},1)`,
+    `=IF(D${row}="","",SUMIFS('Bridge Trace'!$I$2:$I$${bridgeRows.length + 1},'Bridge Trace'!$A$2:$A$${bridgeRows.length + 1},A${row},'Bridge Trace'!$B$2:$B$${bridgeRows.length + 1},B${row},'Bridge Trace'!$C$2:$C$${bridgeRows.length + 1},C${row},'Bridge Trace'!$H$2:$H$${bridgeRows.length + 1},1))`,
   ]];
   reconciliation.getRange(`F${row}`).formulas = [[`='Canonical Inputs'!F${row}`]];
-  reconciliation.getRange(`G${row}`).formulas = [[`=E${row}-F${row}`]];
+  reconciliation.getRange(`G${row}`).formulas = [[`=IF(OR(E${row}="",F${row}=""),"",E${row}-F${row})`]];
   reconciliation.getRange(`H${row}`).formulas = [[
     `=SUMIFS('Bridge Trace'!$F$2:$F$${bridgeRows.length + 1},'Bridge Trace'!$A$2:$A$${bridgeRows.length + 1},A${row},'Bridge Trace'!$B$2:$B$${bridgeRows.length + 1},B${row},'Bridge Trace'!$C$2:$C$${bridgeRows.length + 1},C${row},'Bridge Trace'!$E$2:$E$${bridgeRows.length + 1},"divide_diluted_shares")`,
   ]];
-  reconciliation.getRange(`I${row}`).formulas = [[`=IF(H${row}=0,"",E${row}/H${row})`]];
+  reconciliation.getRange(`I${row}`).formulas = [[`=IF(OR(H${row}=0,E${row}=""),"",E${row}/H${row})`]];
   reconciliation.getRange(`J${row}`).formulas = [[`='Canonical Inputs'!G${row}`]];
-  reconciliation.getRange(`K${row}`).formulas = [[`=I${row}-J${row}`]];
-  reconciliation.getRange(`L${row}`).formulas = [[`=IF(ABS(G${row})<0.0000001,"OK","FAIL")`]];
-  reconciliation.getRange(`M${row}`).formulas = [[`=IF('Canonical Inputs'!G${row}=0,"N/A",IF(ABS(K${row})<0.0000001,"OK","FAIL"))`]];
+  reconciliation.getRange(`K${row}`).formulas = [[`=IF(OR(I${row}="",J${row}=""),"",I${row}-J${row})`]];
+  reconciliation.getRange(`L${row}`).formulas = [[`=IF(G${row}="","NOT_READY",IF(ABS(G${row})<0.0000001,"OK","FAIL"))`]];
+  reconciliation.getRange(`M${row}`).formulas = [[`=IF(K${row}="","NOT_READY",IF(ABS(K${row})<0.0000001,"OK","FAIL"))`]];
 }
 
 const artifactRows = (view.audit?.artifact_records || []).map((item) => [
   item.artifact_kind, item.schema_version, item.content_hash, item.source_identity, item.status,
 ]);
-audit.getRange("A1:E1").values = [["Artifact", "Schema", "Content Hash", "Source Identity", "Status"]];
+if (!artifactRows.length) {
+  artifactRows.push(
+    [
+      "Evaluation plan",
+      view.audit?.evaluation_plan?.schema_version || "",
+      view.audit?.evaluation_plan_identity || "",
+      view.audit?.source_policy_identity || "",
+      view.status,
+    ],
+    [
+      "Strategy validation",
+      "",
+      "",
+      view.audit?.strategy_validation?.reason_code || "",
+      view.audit?.strategy_validation?.status || "not_requested",
+    ],
+    [
+      "Model code identity",
+      "",
+      view.model_identity,
+      "",
+      "bound",
+    ],
+  );
+}
+audit.getRange("A1:E1").values = [["Audit Item", "Schema", "Identity / Hash", "Source / Reason", "Status"]];
 if (artifactRows.length) audit.getRangeByIndexes(1, 0, artifactRows.length, 5).values = artifactRows;
 const formulaRows = (view.audit?.formula_identities || []).map((item) => [item]);
 audit.getRange("G1").values = [["Formula Identities"]];
 if (formulaRows.length) audit.getRangeByIndexes(1, 6, formulaRows.length, 1).values = formulaRows;
 
 checks.getRange("A1:F1").values = [["Check", "Actual", "Expected", "Difference", "Tolerance", "Status"]];
-checks.getRange("A2:F4").values = [
-  ["Equity bridge rows", methodRows.length, methodRows.length, 0, 0, null],
+checks.getRange("A2:F5").values = [
+  ["Workbook projection rows", methodRows.length, methodRows.length, 0, 0, null],
   ["Equity reconciliation failures", null, 0, null, 0, null],
   ["Per-share reconciliation failures", null, 0, null, 0, null],
+  ["Valuation readiness", view.valuation_view?.status || "unknown", "ready", null, null, null],
 ];
 checks.getRange("F2").formulas = [['=IF(B2=C2,"OK","FAIL")']];
 checks.getRange("B3").formulas = [[`=COUNTIF('Reconciliation'!L2:L${methodRows.length + 1},"FAIL")`]];
@@ -185,8 +255,9 @@ checks.getRange("F3").formulas = [['=IF(B3=C3,"OK","FAIL")']];
 checks.getRange("B4").formulas = [[`=COUNTIF('Reconciliation'!M2:M${methodRows.length + 1},"FAIL")`]];
 checks.getRange("D4").formulas = [["=B4-C4"]];
 checks.getRange("F4").formulas = [['=IF(B4=C4,"OK","FAIL")']];
-checks.getRange("A6:B6").values = [["Overall Model Status", null]];
-checks.getRange("B6").formulas = [['=IF(COUNTIF(F2:F4,"FAIL")=0,"OK","FAIL")']];
+checks.getRange("F5").formulas = [['=IF(B5=C5,"OK","NOT_READY")']];
+checks.getRange("A7:B7").values = [["Overall Model Status", null]];
+checks.getRange("B7").formulas = [['=IF(F5="NOT_READY","NOT_READY",IF(COUNTIF(F2:F4,"FAIL")=0,"OK","FAIL"))']];
 
 const headerStyle = {
   fill: "#173B52",
@@ -213,7 +284,7 @@ bridge.getRange(`F2:I${bridgeRows.length + 1}`).format.numberFormat =
   "#,##0.0000;[Red](#,##0.0000);-";
 reconciliation.getRange(`D2:K${methodRows.length + 1}`).format.numberFormat =
   "#,##0.0000;[Red](#,##0.0000);-";
-checks.getRange("A6:B6").format = {
+checks.getRange("A7:B7").format = {
   fill: "#DCECF2",
   font: { bold: true, color: "#102F43" },
   borders: { preset: "outside", style: "medium", color: "#173B52" },
@@ -224,10 +295,14 @@ for (const sheet of [summary, imported, bridge, reconciliation, audit, checks]) 
   used.format.autofitRows();
 }
 summary.getRange("A1:A30").format.columnWidth = 24;
-summary.getRange("B1:B30").format.columnWidth = 38;
+summary.getRange("B1:B30").format.columnWidth = 60;
+summary.getRange("B3:B9").format.wrapText = true;
 summary.getRange("D1:D30").format.columnWidth = 46;
 bridge.getRange(`G1:G${bridgeRows.length + 1}`).format.columnWidth = 60;
 audit.getRange(`C1:D${Math.max(2, artifactRows.length + 1)}`).format.columnWidth = 52;
+audit.getRange(`A1:E${artifactRows.length + 1}`).format.wrapText = true;
+summary.getRange("A1:H30").format.autofitRows();
+audit.getRange(`A1:E${artifactRows.length + 1}`).format.autofitRows();
 
 const errors = await workbook.inspect({
   kind: "match",
@@ -240,9 +315,9 @@ if (errors.ndjson && /#REF!|#DIV\/0!|#VALUE!|#NAME\?|#N\/A/.test(errors.ndjson))
 }
 const reconciliationCheck = await workbook.inspect({
   kind: "table",
-  range: "Checks!A1:F6",
+  range: "Checks!A1:F7",
   include: "values,formulas",
-  tableMaxRows: 6,
+  tableMaxRows: 7,
   tableMaxCols: 6,
 });
 if (reconciliationCheck.ndjson && /\"FAIL\"/.test(reconciliationCheck.ndjson)) {

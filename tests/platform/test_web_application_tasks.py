@@ -156,18 +156,5 @@ def test_public_browser_fixture_prepares_decision_and_plan_journeys(
     assert projected["plan_drafts"][0]["draft_id"] == prepared.plan_draft_id
 
 
-def test_browser_analysis_fixture_contains_no_fabricated_financial_facts() -> None:
-    drafts = BrowserAcceptanceFixture.analysis_artifacts("security_yihua")
-    by_kind = {draft.artifact_kind: draft for draft in drafts}
-
-    snapshot = json.loads(by_kind["DataSnapshot"].payload_json)
-    valuation = json.loads(by_kind["Valuation"].payload_json)
-    assert snapshot["facts"] == []
-    assert snapshot["segment_baselines"] == []
-    assert snapshot["company_opening_balance_sheet"] is None
-    assert {draft.status for draft in drafts} == {"blocked"}
-    assert all(
-        method["conditional_value_range"] is None
-        for scenario in valuation["scenarios"]
-        for method in scenario["methods"]
-    )
+def test_browser_fixture_has_no_caller_authored_research_artifact_surface() -> None:
+    assert not hasattr(BrowserAcceptanceFixture, "analysis_artifacts")

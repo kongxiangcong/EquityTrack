@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand
-from trading_platform.domain.workflow import ResearchWorkflowRequest
+from trading_platform.domain.research_evaluation import ResearchWorkflowRequest
 
 
 @dataclass(frozen=True)

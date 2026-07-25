@@ -10,10 +10,12 @@ from trading_platform.domain.workflow import (
     NodeDefinition,
     ReferenceDisposition,
     ResearchArtifactView,
-    ResearchProjection,
-    ResearchWorkflowResult,
     WorkflowDefinition,
     WorkflowHistory,
+)
+from trading_platform.domain.research_evaluation import (
+    ResearchWorkflowRequest,
+    ResearchWorkflowResult,
 )
 
 
@@ -78,30 +80,28 @@ class WorkflowReferencesQuery:
 
 
 @dataclass(frozen=True)
-class CompletedResearchQuery:
+class CompletedEvaluationQuery:
     workflow_node_run_id: str
 
 
 @dataclass(frozen=True)
-class ResearchRecordQuery:
-    research_run_id: str | None = None
-    research_input_fingerprint: str | None = None
-    engine_code_identity: str | None = None
+class ResearchEvaluationRecordQuery:
+    evaluation_fingerprint: str
+    engine_code_identity: str
 
 
 @dataclass(frozen=True)
-class ResearchRecord:
+class ResearchEvaluationRecord:
     research_run_id: str
-    research_input_fingerprint: str
-    research_projection_id: str
-    research_snapshot_id: str
+    evaluation_fingerprint: str
+    evaluation_plan_id: str
+    data_snapshot_id: str
     request_fingerprint: str
     engine_schema_version: int
     engine_code_identity: str
     original_cutoff_date: str
     status: str
     canonical_json_artifact_id: str | None = None
-    html_artifact_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,11 +112,6 @@ class NodeNameQuery:
 @dataclass(frozen=True)
 class SnapshotEvidenceQuery:
     data_snapshot_id: str
-
-
-@dataclass(frozen=True)
-class ProjectionEvidenceQuery:
-    research_projection_id: str
 
 
 @dataclass(frozen=True)
@@ -135,22 +130,41 @@ class WorkspaceWorkflowEvidence:
 
 
 @dataclass(frozen=True)
-class CompletedResearch:
-    record: ResearchRecord
-    disposition: ReferenceDisposition
-    members: tuple[tuple[str, str, str], ...]
+class CompletedEvaluation:
+    checkpoint: EvaluationCheckpointResult
     workflow_node_attempt_id: str
 
 
 @dataclass(frozen=True)
 class SnapshotEvidence:
+    data_snapshot_id: str
+    scope_id: str
     purpose: str
+    requested_date: str
+    effective_session_date: str
+    as_of_at: str
+    source_policy_identity: str
+    freshness_status: str
     members: Mapping[str, str]
+    member_evidence: tuple["SnapshotMemberEvidence", ...]
     quality_status: str
     coverage_expected: int
     coverage_eligible: int
     coverage_excluded: int
     coverage_missing: int
+
+
+@dataclass(frozen=True)
+class SnapshotMemberEvidence:
+    normalized_version_id: str
+    dataset: str
+    source_identity: str
+    source_authority: str
+    real_source_url: str
+    retrieved_at: str
+    published_at: str
+    available_at: str
+    quality_status: str
 
 
 @dataclass(frozen=True)
@@ -181,19 +195,6 @@ class CheckpointMember:
     member_role: str
     direction: str
     schema_version: str
-
-
-@dataclass(frozen=True)
-class ProjectionEvidence:
-    research_projection_id: str
-    research_snapshot_id: str
-    projection_artifact_id: str
-    research_input_fingerprint: str
-    security_id: str
-    as_of_date: str
-    snapshot_purpose: str
-    freshness_status: str
-    quality_status: str
 
 
 @dataclass(frozen=True)
@@ -231,41 +232,10 @@ class DecisionViewPayload:
     manifest_id: str
     json_artifact_id: str
     html_artifact_id: str
+    pdf_artifact_id: str
     json_bytes: bytes
     html_bytes: bytes
-
-
-@dataclass(frozen=True)
-class ResearchDecisionMaterialization:
-    workflow_run_id: str
-    research_run_id: str
-    request_bytes: bytes
-    source_payload: Mapping[str, object]
-    artifacts: tuple[ResearchArtifactView, ...]
-
-
-@dataclass(frozen=True)
-class ResearchDecisionBytes:
-    json_bytes: bytes
-    html_bytes: bytes
-
-
-class ResearchDecisionViewMaterializerPort(Protocol):
-    def materialize(
-        self, request: ResearchDecisionMaterialization
-    ) -> ResearchDecisionBytes: ...
-
-    def expected_html(
-        self,
-        workflow_run_id: str,
-        research_run_id: str,
-        json_bytes: bytes,
-    ) -> bytes: ...
-
-
-@dataclass(frozen=True)
-class ResearchViewCutoverCompleteQuery:
-    pass
+    pdf_bytes: bytes
 
 
 @dataclass(frozen=True)
@@ -350,63 +320,27 @@ class ArtifactPayload:
 
 
 @dataclass(frozen=True)
-class CommitResearchNode:
+class CommitEvaluationNode:
     workflow_run_id: str
     workflow_node_run_id: str
     workflow_node_attempt_id: str
     owner_token: str
-    disposition: ReferenceDisposition
-    new_record: ResearchRecord | None
-    record: ResearchRecord
-    projection_artifact_id: str
-    source_json_artifact: ArtifactPayload | None
-    source_html_artifact: ArtifactPayload | None
+    request: ResearchWorkflowRequest
+    evaluation_fingerprint: str
+    engine_code_identity: str
+    research_json_artifact: ArtifactPayload
     decision_json_artifact: ArtifactPayload
     decision_html_artifact: ArtifactPayload
-    artifact_bundle: ResearchArtifactBundle
+    decision_pdf_artifact: ArtifactPayload
 
 
 @dataclass(frozen=True)
-class ResearchCheckpointResult:
-    manifest_id: str
-    record: ResearchRecord
-    members: tuple[tuple[str, str, str], ...]
-
-
-@dataclass(frozen=True)
-class FreezeProjection:
-    security_id: str
-    projection: ResearchProjection
-    projection_fingerprint: str
-
-
-@dataclass(frozen=True)
-class PreparedProjection:
-    research_projection_id: str
-    research_snapshot_id: str
-    projection_artifact_id: str
+class EvaluationCheckpointResult:
+    record: ResearchEvaluationRecord
     disposition: ReferenceDisposition
-
-
-@dataclass(frozen=True)
-class ProjectionPreviewQuery:
-    freeze: FreezeProjection
-
-
-@dataclass(frozen=True)
-class ProjectionCheckpointCommit:
-    workflow_run_id: str
-    workflow_node_run_id: str
-    workflow_node_attempt_id: str
-    owner_token: str
-    freeze: FreezeProjection
-    workflow_snapshot_id: str | None
-
-
-@dataclass(frozen=True)
-class ProjectionCheckpointResult:
     manifest_id: str
-    projection: PreparedProjection
+    decision_manifest_id: str
+    members: tuple[tuple[str, str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -417,46 +351,17 @@ class ForecastReviewCommit:
 
 
 @dataclass(frozen=True)
-class FinalizeResearchSuccess:
+class FinalizeEvaluationSuccess:
     workflow_run_id: str
     owner_token: str
-    run_node_id: str
-    run_attempt_id: str
+    evaluation_node_id: str
+    evaluation_attempt_id: str
     final_node_id: str
     final_attempt_id: str
-    disposition: ReferenceDisposition
-    record: ResearchRecord
-    run_members: tuple[tuple[str, str, str], ...]
-    projection_id: str
-    workflow_snapshot_id: str | None
-    reason_code: str
-    stale_by_days: int
-    candidate_member_ids: tuple[str, ...]
-    market_only_member_ids: tuple[str, ...]
-    terminal_status: str
-
-
-@dataclass(frozen=True)
-class ResearchArtifactBundle:
-    research_run_id: str
+    checkpoint: EvaluationCheckpointResult
     data_snapshot_id: str
-    code_identity: str
-    drafts: tuple[ImmutableArtifactDraft, ...]
-    workflow_run_id: str | None = None
-    market_data_snapshot_id: str | None = None
-    research_record: ResearchRecord | None = None
-
-
-@dataclass(frozen=True)
-class PreparedArtifactBundle:
-    record_ids: tuple[str, ...]
-    views: tuple[ResearchArtifactView, ...]
-    members: tuple[tuple[str, str], ...]
-
-
-@dataclass(frozen=True)
-class ArtifactBundlePreviewQuery:
-    bundle: ResearchArtifactBundle
+    workflow_snapshot_id: str | None
+    terminal_status: str
 
 
 @dataclass(frozen=True)
@@ -514,24 +419,22 @@ class DurableObject:
 LedgerLoadResult: TypeAlias = (
     WorkflowLedgerView
     | ResearchRunIdentity
-    | CompletedResearch
+    | CompletedEvaluation
     | SnapshotEvidence
     | CheckpointView
-    | ProjectionEvidence
     | WorkspaceWorkflowEvidence
     | ResearchWorkflowResult
     | WorkflowHistory
     | ArtifactManifestView
     | ResearchArtifactView
-    | ResearchRecord
+    | ResearchEvaluationRecord
     | Mapping[str, object]
     | tuple[Mapping[str, object], ...]
     | tuple[DurableObject, ...]
-    | PreparedArtifactBundle
-    | PreparedProjection
     | DecisionViewPayload
     | tuple[CheckpointMember, ...]
     | QualificationReceiptReplay
+    | EvaluationCheckpointResult
     | bytes
     | str
     | bool
@@ -542,11 +445,10 @@ LedgerQuery: TypeAlias = (
     WorkflowRunQuery
     | ResearchRunIdentityQuery
     | WorkflowReferencesQuery
-    | CompletedResearchQuery
-    | ResearchRecordQuery
+    | CompletedEvaluationQuery
+    | ResearchEvaluationRecordQuery
     | NodeNameQuery
     | SnapshotEvidenceQuery
-    | ProjectionEvidenceQuery
     | WorkspaceWorkflowQuery
     | RequestPayloadQuery
     | CheckpointQuery
@@ -557,13 +459,10 @@ LedgerQuery: TypeAlias = (
     | ResearchArtifactQuery
     | ResearchPayloadQuery
     | DecisionViewPayloadQuery
-    | ResearchViewCutoverCompleteQuery
     | NonterminalWorkflowQuery
     | ObjectInventoryQuery
     | WorkflowDiagnosticQuery
     | PersistenceCountsQuery
-    | ArtifactBundlePreviewQuery
-    | ProjectionPreviewQuery
     | QualificationReceiptQuery
     | QualificationReceiptReplayQuery
 )
@@ -574,11 +473,9 @@ TransitionCommand: TypeAlias = (
     | BeginNode | MarkRetryable | FailExecution
 )
 ArtifactCommit: TypeAlias = ForecastReviewCommit | GenericObjectCommit | QualificationReceiptCommit
-CheckpointCommit: TypeAlias = (
-    CommitResearchNode | ProjectionCheckpointCommit
-)
+CheckpointCommit: TypeAlias = CommitEvaluationNode
 CheckpointResult: TypeAlias = (
-    str | ProjectionCheckpointResult | ResearchCheckpointResult | None
+    str | EvaluationCheckpointResult | None
 )
 
 
@@ -591,10 +488,9 @@ class WorkflowLedgerPort(Protocol):
     @overload
     def record_transition(self, command: Heartbeat | RequestCancellation | StopIfCancelled | MarkRetryable | FailExecution) -> None: ...
     def record_transition(self, command: TransitionCommand) -> tuple[str, str] | None: ...
-    @overload
-    def commit_checkpoint(self, command: CommitResearchNode) -> ResearchCheckpointResult: ...
-    @overload
-    def commit_checkpoint(self, command: ProjectionCheckpointCommit) -> ProjectionCheckpointResult: ...
+    def commit_checkpoint(
+        self, command: CommitEvaluationNode
+    ) -> EvaluationCheckpointResult: ...
     def commit_checkpoint(self, command: CheckpointCommit) -> CheckpointResult: ...
     @overload
     def commit_artifacts(self, command: GenericObjectCommit) -> ObjectCommitResult: ...
@@ -603,23 +499,24 @@ class WorkflowLedgerPort(Protocol):
     @overload
     def commit_artifacts(self, command: QualificationReceiptCommit) -> str: ...
     def commit_artifacts(self, command: ArtifactCommit) -> ObjectCommitResult | str: ...
-    def complete(self, command: FinalizeResearchSuccess) -> str: ...
+    def complete(self, command: FinalizeEvaluationSuccess) -> str: ...
     @overload
     def load(self, query: WorkflowRunQuery) -> WorkflowLedgerView: ...
     @overload
     def load(self, query: ResearchRunIdentityQuery) -> ResearchRunIdentity: ...
     @overload
     def load(self, query: WorkflowReferencesQuery) -> Mapping[str, str]: ...
+    def load(
+        self, query: CompletedEvaluationQuery
+    ) -> CompletedEvaluation: ...
     @overload
-    def load(self, query: CompletedResearchQuery) -> CompletedResearch: ...
-    @overload
-    def load(self, query: ResearchRecordQuery) -> ResearchRecord | None: ...
+    def load(
+        self, query: ResearchEvaluationRecordQuery
+    ) -> ResearchEvaluationRecord | None: ...
     @overload
     def load(self, query: NodeNameQuery) -> str: ...
     @overload
     def load(self, query: SnapshotEvidenceQuery) -> SnapshotEvidence: ...
-    @overload
-    def load(self, query: ProjectionEvidenceQuery) -> ProjectionEvidence | None: ...
     @overload
     def load(self, query: WorkspaceWorkflowQuery) -> WorkspaceWorkflowEvidence: ...
     @overload
@@ -643,8 +540,6 @@ class WorkflowLedgerPort(Protocol):
     def load(self, query: DecisionViewPayloadQuery) -> DecisionViewPayload: ...
 
     @overload
-    def load(self, query: ResearchViewCutoverCompleteQuery) -> bool: ...
-    @overload
     def load(self, query: NonterminalWorkflowQuery) -> bool: ...
     @overload
     def load(self, query: ObjectInventoryQuery) -> tuple[DurableObject, ...]: ...
@@ -652,10 +547,6 @@ class WorkflowLedgerPort(Protocol):
     def load(self, query: WorkflowDiagnosticQuery) -> Mapping[str, object]: ...
     @overload
     def load(self, query: PersistenceCountsQuery) -> Mapping[str, object]: ...
-    @overload
-    def load(self, query: ArtifactBundlePreviewQuery) -> PreparedArtifactBundle: ...
-    @overload
-    def load(self, query: ProjectionPreviewQuery) -> PreparedProjection: ...
     @overload
     def load(self, query: QualificationReceiptQuery) -> bytes: ...
     @overload

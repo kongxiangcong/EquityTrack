@@ -7,7 +7,6 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Mapping
 
-from .research_inputs import ResearchInputs
 
 
 class WorkflowStatus(str, Enum):
@@ -1076,66 +1075,6 @@ class ImmutableArtifactDraft:
             "summary_json": self.summary_json,
             "content_hash": self.content_hash,
         }
-
-
-@dataclass(frozen=True)
-class FieldSemantics:
-    source_id: str
-    source_authority: str
-    field_name: str
-    period: str
-    statement_scope: str
-    unit: str
-    currency: str
-    scale: str
-    restatement_status: str
-    published_at: str
-    available_at: str
-    retrieved_at: str
-    supersedes_identity: str | None = None
-    availability_basis: str = "publisher_timestamp"
-
-
-@dataclass(frozen=True)
-class ResearchProjection:
-    manifest: Mapping[str, Any]
-    estimates: Mapping[str, Any] | None
-    research_inputs: ResearchInputs
-    as_of_date: str
-    profile: str
-    field_semantics: tuple[FieldSemantics, ...]
-    diluted_share_identity: str
-    net_debt_bridge_identity: str
-    source_manifest_validation_result: Mapping[str, Any] | None = None
-    source_manifest_path: str | None = None
-
-
-@dataclass(frozen=True)
-class ResearchWorkflowRequest:
-    invocation_id: str
-    security_id: str
-    requested_date: str
-    effective_session_date: str
-    projection: ResearchProjection
-    workflow_snapshot_id: str | None = None
-    candidate_member_ids: tuple[str, ...] = ()
-    market_only_member_ids: tuple[str, ...] = ()
-    analysis_artifacts: tuple[ImmutableArtifactDraft, ...] = ()
-
-
-@dataclass(frozen=True)
-class ResearchWorkflowResult:
-    workflow_run_id: str
-    research_run_id: str
-    research_snapshot_id: str
-    workflow_snapshot_id: str | None
-    final_manifest_id: str | None
-    disposition: ReferenceDisposition
-    reason_code: str
-    stale_by_days: int
-    json_artifact_id: str
-    html_artifact_id: str
-    artifact_record_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

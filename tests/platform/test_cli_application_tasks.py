@@ -256,6 +256,7 @@ def test_research_inspection_and_archive_cli_cross_named_tasks(tmp_path: Path) -
         "cli:watch",
         SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"),
     )
+    fixture.faults.record_official_filing_workflow_snapshot()
     fixture.close()
     request_file = tmp_path / "request.json"
     request_file.write_text(

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, TypeAlias
 
-from trading_platform.domain.workflow import ResearchWorkflowRequest
+from trading_platform.domain.research_evaluation import ResearchWorkflowRequest
 
 
 class CapabilityStatus(str, Enum):

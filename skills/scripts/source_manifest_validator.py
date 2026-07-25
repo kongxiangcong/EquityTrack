@@ -3,7 +3,7 @@
 
 The CLI result is an audit artifact. Formal publication authority is granted
 only when the platform executes this validator itself against a repo-contained
-manifest whose canonical content matches the frozen ResearchProjection.
+manifest whose canonical content matches the frozen DataSnapshot evidence.
 
 Usage:
     python source_manifest_validator.py --manifest path/to/source_manifest.json

@@ -7,7 +7,9 @@ name = "personal-equity-research"
 version = "0.3.0"
 description = "Evidence-constrained professional equity research narrative core"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "reportlab==4.4.9",
+]
 
 [project.optional-dependencies]
 browser-test = [

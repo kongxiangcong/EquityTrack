@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import json
 
-from trading_platform.domain.workflow import (
-    FieldSemantics,
-    ImmutableArtifactDraft,
-    ResearchProjection,
-    ResearchWorkflowRequest,
-)
-from trading_platform.domain.research_inputs import ResearchInputs
+from trading_platform.domain.research_evaluation import ResearchWorkflowRequest
 
 
 class ResearchRequestCodecError(ValueError):
@@ -20,26 +14,38 @@ class ResearchRequestCodecError(ValueError):
 
 
 def decode_research_workflow_request(payload: bytes) -> ResearchWorkflowRequest:
-    """Decode the one persisted ResearchWorkflowRequest contract."""
+    """Decode the sole active persisted research request contract."""
+
     try:
-        raw = json.loads(payload)
-        projection = raw["projection"]
-        projection["research_inputs"] = ResearchInputs.from_mapping(
-            projection["research_inputs"]
-        )
-        projection["field_semantics"] = tuple(
-            FieldSemantics(**item) for item in projection["field_semantics"]
-        )
-        raw["projection"] = ResearchProjection(**projection)
-        raw["candidate_member_ids"] = tuple(raw.get("candidate_member_ids", ()))
-        raw["market_only_member_ids"] = tuple(raw.get("market_only_member_ids", ()))
-        raw["analysis_artifacts"] = tuple(
-            ImmutableArtifactDraft.from_serialized(item)
-            for item in raw.get("analysis_artifacts", ())
-        )
-        return ResearchWorkflowRequest(**raw)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raw = json.loads(payload.decode("utf-8"))
+        if not isinstance(raw, dict):
+            raise TypeError
+        expected = {
+            "schema_version",
+            "invocation_id",
+            "security_id",
+            "requested_date",
+            "effective_session_date",
+            "data_snapshot_id",
+            "evaluation_plan",
+            "workflow_snapshot_id",
+            "market_data_snapshot_id",
+        }
+        missing = expected - set(raw)
+        if missing:
+            raise KeyError(sorted(missing)[0])
+        return ResearchWorkflowRequest.from_mapping(raw)
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
         raise ResearchRequestCodecError(type(error).__name__) from None
 
 
-__all__ = ["ResearchRequestCodecError", "decode_research_workflow_request"]
+__all__ = [
+    "ResearchRequestCodecError",
+    "decode_research_workflow_request",
+]

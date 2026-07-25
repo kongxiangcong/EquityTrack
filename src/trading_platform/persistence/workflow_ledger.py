@@ -9,7 +9,6 @@ import threading
 import time
 import uuid
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -20,25 +19,20 @@ from trading_platform.domain.workflow import (
     ImmutableArtifactDraft,
     ReferenceDisposition,
     ResearchArtifactView,
-    ResearchWorkflowResult,
     WorkflowHistory,
     NodeDefinition,
     WorkflowDefinition,
 )
+from trading_platform.domain.research_evaluation import ResearchWorkflowResult
 from trading_platform.domain.artifact_lineage import (
     ArtifactLineage,
     ArtifactSubmission,
     FrozenLineageEvidence,
-    MarketCalibrationEvidence,
     ReviewFactEvidence,
     ReviewSnapshotEvidence,
-    artifact_member_role,
 )
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock, PersistenceError
-from trading_platform.persistence.research_view_cutover import (
-    ResearchDecisionViewCutover,
-)
 
 
 def _now() -> str:
@@ -66,67 +60,21 @@ def _durable_replace(source: Path, target: Path) -> None:
             os.close(descriptor)
 
 
-@dataclass(frozen=True)
-class _PreparedResearchBundle:
-    result: PreparedArtifactBundle
-    published_by_record_id: Mapping[str, DurableObject]
-
-
-def _research_record(row: Mapping[str, object]) -> ResearchRecord:
-    return ResearchRecord(
-        research_run_id=str(row["research_run_id"]),
-        research_input_fingerprint=str(row["research_input_fingerprint"]),
-        research_projection_id=str(row["research_projection_id"]),
-        research_snapshot_id=str(row["research_snapshot_id"]),
-        request_fingerprint=str(row["request_fingerprint"]),
-        engine_schema_version=int(row["engine_schema_version"]),
-        engine_code_identity=str(row["engine_code_identity"]),
-        original_cutoff_date=str(row["original_cutoff_date"]),
-        status=str(row["status"]),
-        canonical_json_artifact_id=(
-            None
-            if row["canonical_json_artifact_id"] is None
-            else str(row["canonical_json_artifact_id"])
-        ),
-        html_artifact_id=(
-            None if row["html_artifact_id"] is None else str(row["html_artifact_id"])
-        ),
-    )
-
-
-def _research_record_values(record: ResearchRecord) -> tuple[object, ...]:
-    return (
-        record.research_run_id,
-        record.research_input_fingerprint,
-        record.research_projection_id,
-        record.research_snapshot_id,
-        record.request_fingerprint,
-        record.engine_schema_version,
-        record.engine_code_identity,
-        record.original_cutoff_date,
-        record.status,
-        record.canonical_json_artifact_id,
-        record.html_artifact_id,
-    )
-
-
 # The application owns the command/query contract; this adapter only implements it.
 from trading_platform.application.workflow_ledger import (
     AcquireLease,
-    ArtifactBundlePreviewQuery,
     BeginNode,
     CheckpointMembersQuery,
     CheckpointMember,
     CheckpointQuery,
     CheckpointView,
-    CommitResearchNode,
-    CompletedResearch,
-    CompletedResearchQuery,
+    CommitEvaluationNode,
+    CompletedEvaluation,
+    CompletedEvaluationQuery,
     DurableObject,
     FailExecution,
-    FinalizeResearchSuccess,
+    FinalizeEvaluationSuccess,
     ForecastReviewCommit,
-    FreezeProjection,
     GenericObjectCommit,
     QualificationReceiptCommit,
     QualificationReceiptQuery,
@@ -144,29 +92,19 @@ from trading_platform.application.workflow_ledger import (
     WorkflowDiagnosticQuery,
     ObjectCommitResult,
     PersistenceCountsQuery,
-    ProjectionCheckpointCommit,
-    ProjectionCheckpointResult,
-    ProjectionEvidence,
-    ProjectionEvidenceQuery,
-    ProjectionPreviewQuery,
-    PreparedProjection,
-    PreparedArtifactBundle,
     RequestCancellation,
     RequestPayloadQuery,
     ResearchArtifactQuery,
-    ResearchArtifactBundle,
     ResearchPayloadQuery,
-    ResearchDecisionMaterialization,
-    ResearchDecisionViewMaterializerPort,
     DecisionViewPayload,
     DecisionViewPayloadQuery,
-    ResearchViewCutoverCompleteQuery,
-    ResearchRecord,
-    ResearchRecordQuery,
-    ResearchCheckpointResult,
+    ResearchEvaluationRecordQuery,
+    EvaluationCheckpointResult,
+    ResearchEvaluationRecord,
     ResearchRunIdentity,
     ResearchRunIdentityQuery,
     SnapshotEvidence,
+    SnapshotMemberEvidence,
     SnapshotEvidenceQuery,
     StartDisposition,
     StartOutcome,
@@ -182,6 +120,10 @@ from trading_platform.application.workflow_ledger import (
     WorkspaceWorkflowQuery,
 )
 from trading_platform.persistence.qualification_receipts import QualificationReceiptStore
+from trading_platform.persistence.research_artifact_commit import (
+    _ResearchArtifactCommit,
+    _evaluation_record,
+)
 
 
 class WorkflowLedger:
@@ -192,6 +134,13 @@ class WorkflowLedger:
         self.__object_root.mkdir(parents=True, exist_ok=True)
         self.__writer_lock = writer_lock
         self.__qualification_receipts = QualificationReceiptStore(connection, self.__data_root, writer_lock, self._publish_durable)
+        self.__research_artifact_commit = _ResearchArtifactCommit(
+            connection,
+            writer_lock,
+            self._publish_durable,
+            self._register_artifact,
+            self._assert_mutation_owner,
+        )
         self.fault_injector = None
         self._research_artifact_lock = threading.RLock()
 
@@ -251,11 +200,10 @@ class WorkflowLedger:
         query: WorkflowRunQuery
         | ResearchRunIdentityQuery
         | WorkflowReferencesQuery
-        | CompletedResearchQuery
-        | ResearchRecordQuery
+        | CompletedEvaluationQuery
+        | ResearchEvaluationRecordQuery
         | NodeNameQuery
         | SnapshotEvidenceQuery
-        | ProjectionEvidenceQuery
         | WorkspaceWorkflowQuery
         | RequestPayloadQuery
         | CheckpointQuery
@@ -269,16 +217,13 @@ class WorkflowLedger:
         | ObjectInventoryQuery
         | WorkflowDiagnosticQuery
         | PersistenceCountsQuery
-        | ArtifactBundlePreviewQuery | QualificationReceiptQuery | QualificationReceiptReplayQuery,
+        | QualificationReceiptQuery
+        | QualificationReceiptReplayQuery,
     ) -> LedgerLoadResult:
-        if isinstance(query, ProjectionPreviewQuery):
-            return self._projection_plan(query.freeze)[0]
         if isinstance(query, QualificationReceiptQuery):
             return self.__qualification_receipts.load(query)
         if isinstance(query, QualificationReceiptReplayQuery):
             return self.__qualification_receipts.replay(query)
-        if isinstance(query, ArtifactBundlePreviewQuery):
-            return self._preview_artifact_bundle(query.bundle)
         if isinstance(query, NonterminalWorkflowQuery):
             table = self.__connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_run'"
@@ -374,8 +319,6 @@ class WorkflowLedger:
             return self._research_run_payload(query.research_run_id)
         if isinstance(query, DecisionViewPayloadQuery):
             return self._decision_view_payload(query.workflow_run_id)
-        if isinstance(query, ResearchViewCutoverCompleteQuery):
-            return self._research_view_cutover_complete()
         if isinstance(query, ResearchRunIdentityQuery):
             identity = self.__connection.execute(
                 "SELECT engine_code_identity FROM research_run_record WHERE research_run_id=?",
@@ -394,47 +337,76 @@ class WorkflowLedger:
                     (query.workflow_run_id,),
                 )
             }
-        if isinstance(query, CompletedResearchQuery):
+        if isinstance(query, CompletedEvaluationQuery):
             members = self._checkpoint_members(query.workflow_node_run_id)
-            by_role = {row["member_role"]: row["artifact_id"] for row in members}
-            record = self.__connection.execute(
-                "SELECT * FROM research_run_record WHERE canonical_json_artifact_id=?",
-                (by_role["research_run_json"],),
+            by_role = {
+                row["member_role"]: row["artifact_id"] for row in members
+            }
+            record_row = self.__connection.execute(
+                "SELECT * FROM research_run_record "
+                "WHERE canonical_json_artifact_id=?",
+                (by_role.get("research_run_json"),),
             ).fetchone()
-            if record is None:
-                placeholders = ",".join("?" for _ in members)
-                record = self.__connection.execute(
-                    "SELECT DISTINCT r.* FROM research_run_record r JOIN research_artifact_record a ON a.research_run_id=r.research_run_id WHERE a.artifact_id IN ("
-                    + placeholders
-                    + ")",
-                    tuple(row["artifact_id"] for row in members),
-                ).fetchone()
             attempt = self.__connection.execute(
-                "SELECT workflow_node_attempt_id,disposition FROM workflow_node_attempt WHERE workflow_node_run_id=? ORDER BY attempt_no DESC LIMIT 1",
+                "SELECT a.workflow_node_attempt_id,a.disposition,"
+                "n.checkpoint_manifest_id,n.workflow_run_id "
+                "FROM workflow_node_attempt a JOIN workflow_node_run n "
+                "USING(workflow_node_run_id) "
+                "WHERE a.workflow_node_run_id=? "
+                "AND a.completed_at IS NOT NULL "
+                "ORDER BY a.attempt_no DESC LIMIT 1",
                 (query.workflow_node_run_id,),
             ).fetchone()
-            if record is None or attempt is None:
+            if record_row is None or attempt is None:
                 raise WorkflowPersistenceError(
-                    "CHECKPOINT_INTEGRITY_FAILED", "load", query.workflow_node_run_id
+                    "CHECKPOINT_INTEGRITY_FAILED",
+                    "load",
+                    query.workflow_node_run_id,
                 )
-            return CompletedResearch(
-                record=_research_record(record),
-                disposition=(ReferenceDisposition.REUSED if attempt["disposition"] == "reused" else ReferenceDisposition.CREATED),
-                members=tuple((row["artifact_id"], row["member_role"], row["direction"]) for row in members),
-                workflow_node_attempt_id=attempt["workflow_node_attempt_id"],
+            decision = self.__connection.execute(
+                "SELECT artifact_manifest_id FROM artifact_manifest "
+                "WHERE producer_type='WorkflowRun' AND producer_id=? "
+                "AND manifest_role='workflow_decision_view@2'",
+                (attempt["workflow_run_id"],),
+            ).fetchone()
+            if decision is None:
+                raise WorkflowPersistenceError(
+                    "CHECKPOINT_INTEGRITY_FAILED",
+                    "load",
+                    query.workflow_node_run_id,
+                )
+            disposition = (
+                ReferenceDisposition.REUSED
+                if attempt["disposition"] == "reused"
+                else ReferenceDisposition.CREATED
             )
-        if isinstance(query, ResearchRecordQuery):
-            if query.research_run_id is not None:
-                row = self.__connection.execute(
-                    "SELECT * FROM research_run_record WHERE research_run_id=?",
-                    (query.research_run_id,),
-                ).fetchone()
-            else:
-                row = self.__connection.execute(
-                    "SELECT * FROM research_run_record WHERE research_input_fingerprint=? AND engine_code_identity=?",
-                    (query.research_input_fingerprint, query.engine_code_identity),
-                ).fetchone()
-            return None if row is None else _research_record(row)
+            checkpoint = EvaluationCheckpointResult(
+                record=_evaluation_record(record_row),
+                disposition=disposition,
+                manifest_id=str(attempt["checkpoint_manifest_id"]),
+                decision_manifest_id=str(decision[0]),
+                members=tuple(
+                    (
+                        str(row["artifact_id"]),
+                        str(row["member_role"]),
+                        str(row["direction"]),
+                    )
+                    for row in members
+                ),
+            )
+            return CompletedEvaluation(
+                checkpoint=checkpoint,
+                workflow_node_attempt_id=str(
+                    attempt["workflow_node_attempt_id"]
+                ),
+            )
+        if isinstance(query, ResearchEvaluationRecordQuery):
+            row = self.__connection.execute(
+                "SELECT * FROM research_run_record "
+                "WHERE evaluation_fingerprint=? AND engine_code_identity=?",
+                (query.evaluation_fingerprint, query.engine_code_identity),
+            ).fetchone()
+            return None if row is None else _evaluation_record(row)
         if isinstance(query, NodeNameQuery):
             row = self.__connection.execute(
                 "SELECT node_id FROM workflow_node_run WHERE workflow_node_run_id=?",
@@ -445,50 +417,83 @@ class WorkflowLedger:
             return row[0]
         if isinstance(query, SnapshotEvidenceQuery):
             snapshot = self.__connection.execute(
-                "SELECT snapshot_purpose,quality_status,coverage_expected,coverage_eligible,coverage_excluded,coverage_missing FROM data_snapshot WHERE data_snapshot_id=?",
+                "SELECT data_snapshot_id,scope_id,snapshot_purpose,requested_date,"
+                "effective_session_date,as_of_at,source_policy_identity,"
+                "freshness_status,quality_status,coverage_expected,"
+                "coverage_eligible,coverage_excluded,coverage_missing "
+                "FROM data_snapshot WHERE data_snapshot_id=?",
                 (query.data_snapshot_id,),
             ).fetchone()
             if snapshot is None:
                 raise WorkflowPersistenceError("WORKFLOW_SNAPSHOT_INVALID", "load", query.data_snapshot_id)
             rows = self.__connection.execute(
-                "SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=?",
+                "SELECT m.normalized_version_id,r.dataset,p.source_identity,"
+                "p.source_authority,p.real_source_url,p.retrieved_at,"
+                "v.published_at,v.available_at,v.quality_status "
+                "FROM data_snapshot_member m "
+                "JOIN normalized_version v USING(normalized_version_id) "
+                "JOIN normalized_record r USING(normalized_record_id) "
+                "JOIN provider_attempt p ON p.attempt_id=v.source_attempt_id "
+                "WHERE m.data_snapshot_id=? ORDER BY m.member_order",
                 (query.data_snapshot_id,),
             ).fetchall()
             return SnapshotEvidence(
+                data_snapshot_id=str(snapshot["data_snapshot_id"]),
+                scope_id=str(snapshot["scope_id"]),
                 purpose=str(snapshot["snapshot_purpose"]),
+                requested_date=str(snapshot["requested_date"]),
+                effective_session_date=str(snapshot["effective_session_date"]),
+                as_of_at=str(snapshot["as_of_at"]),
+                source_policy_identity=str(snapshot["source_policy_identity"]),
+                freshness_status=str(snapshot["freshness_status"]),
                 members={row[0]: row[1] for row in rows},
+                member_evidence=tuple(
+                    SnapshotMemberEvidence(
+                        normalized_version_id=str(row["normalized_version_id"]),
+                        dataset=str(row["dataset"]),
+                        source_identity=str(row["source_identity"]),
+                        source_authority=str(row["source_authority"]),
+                        real_source_url=str(row["real_source_url"]),
+                        retrieved_at=str(row["retrieved_at"]),
+                        published_at=str(row["published_at"]),
+                        available_at=str(row["available_at"]),
+                        quality_status=str(row["quality_status"]),
+                    )
+                    for row in rows
+                ),
                 quality_status=str(snapshot["quality_status"]),
                 coverage_expected=int(snapshot["coverage_expected"]),
                 coverage_eligible=int(snapshot["coverage_eligible"]),
                 coverage_excluded=int(snapshot["coverage_excluded"]),
                 coverage_missing=int(snapshot["coverage_missing"]),
             )
-        if isinstance(query, ProjectionEvidenceQuery):
-            row = self.__connection.execute(
-                "SELECT p.*,s.snapshot_purpose,s.freshness_status,s.quality_status FROM research_input_projection p JOIN data_snapshot s ON s.data_snapshot_id=p.research_snapshot_id WHERE p.research_projection_id=?",
-                (query.research_projection_id,),
-            ).fetchone()
-            return None if row is None else ProjectionEvidence(
-                research_projection_id=str(row["research_projection_id"]),
-                research_snapshot_id=str(row["research_snapshot_id"]),
-                projection_artifact_id=str(row["projection_artifact_id"]),
-                research_input_fingerprint=str(row["research_input_fingerprint"]),
-                security_id=str(row["security_id"]),
-                as_of_date=str(row["as_of_date"]),
-                snapshot_purpose=str(row["snapshot_purpose"]),
-                freshness_status=str(row["freshness_status"]),
-                quality_status=str(row["quality_status"]),
-            )
         if isinstance(query, WorkspaceWorkflowQuery):
             workflows = [
                 dict(row)
                 for row in self.__connection.execute(
-                    "SELECT w.workflow_run_id,w.status,w.requested_date,w.effective_session_date,w.created_at,w.completed_at,d.disposition AS research_disposition,d.reason_code AS research_reuse_reason,d.policy_version AS research_reuse_policy FROM workflow_run w LEFT JOIN research_reuse_decision d USING(workflow_run_id) WHERE EXISTS (SELECT 1 FROM workflow_run_ref r JOIN research_input_projection p ON p.research_projection_id=r.ref_id WHERE r.workflow_run_id=w.workflow_run_id AND r.ref_role='research_projection' AND p.security_id=?) ORDER BY w.created_at DESC",
+                    "SELECT w.workflow_run_id,w.status,w.requested_date,"
+                    "w.effective_session_date,w.created_at,w.completed_at,"
+                    "d.disposition AS research_disposition,"
+                    "d.reason_code AS research_reuse_reason,"
+                    "d.policy_version AS research_reuse_policy "
+                    "FROM workflow_run w LEFT JOIN research_reuse_decision d "
+                    "USING(workflow_run_id) WHERE EXISTS ("
+                    "SELECT 1 FROM workflow_run_ref r "
+                    "JOIN data_snapshot s ON s.data_snapshot_id=r.ref_id "
+                    "WHERE r.workflow_run_id=w.workflow_run_id "
+                    "AND r.ref_role='research_snapshot' AND s.scope_id=?"
+                    ") ORDER BY w.created_at DESC",
                     (query.security_id,),
                 )
             ]
             refs = self.__connection.execute(
-                "SELECT r.workflow_run_id,r.ref_role,r.ref_type,r.ref_id,r.disposition FROM workflow_run_ref r WHERE EXISTS (SELECT 1 FROM workflow_run_ref scope_ref JOIN research_input_projection p ON p.research_projection_id=scope_ref.ref_id WHERE scope_ref.workflow_run_id=r.workflow_run_id AND scope_ref.ref_role='research_projection' AND p.security_id=?) ORDER BY r.workflow_run_id,r.ref_role",
+                "SELECT r.workflow_run_id,r.ref_role,r.ref_type,r.ref_id,"
+                "r.disposition FROM workflow_run_ref r WHERE EXISTS ("
+                "SELECT 1 FROM workflow_run_ref scope_ref "
+                "JOIN data_snapshot s ON s.data_snapshot_id=scope_ref.ref_id "
+                "WHERE scope_ref.workflow_run_id=r.workflow_run_id "
+                "AND scope_ref.ref_role='research_snapshot' "
+                "AND s.scope_id=?) ORDER BY r.workflow_run_id,r.ref_role",
                 (query.security_id,),
             ).fetchall()
             by_run: dict[str, list[dict[str, object]]] = {}
@@ -500,7 +505,18 @@ class WorkflowLedger:
             manifests = [
                 dict(row)
                 for row in self.__connection.execute(
-                    "SELECT DISTINCT m.artifact_manifest_id,m.manifest_role,m.producer_type,m.producer_id,m.membership_hash,m.created_at FROM artifact_manifest m JOIN workflow_run_ref r ON r.ref_type='ArtifactManifest' AND r.ref_id=m.artifact_manifest_id JOIN workflow_run w USING(workflow_run_id) JOIN research_reuse_decision d USING(workflow_run_id) JOIN research_run_record rr ON rr.research_run_id=d.research_run_id JOIN research_input_projection p ON p.research_projection_id=rr.research_projection_id WHERE p.security_id=? ORDER BY m.created_at",
+                    "SELECT DISTINCT m.artifact_manifest_id,m.manifest_role,"
+                    "m.producer_type,m.producer_id,m.membership_hash,"
+                    "m.created_at FROM artifact_manifest m "
+                    "JOIN workflow_run_ref r ON r.ref_type='ArtifactManifest' "
+                    "AND r.ref_id=m.artifact_manifest_id "
+                    "JOIN workflow_run w USING(workflow_run_id) "
+                    "WHERE EXISTS (SELECT 1 FROM workflow_run_ref scope_ref "
+                    "JOIN data_snapshot s "
+                    "ON s.data_snapshot_id=scope_ref.ref_id "
+                    "WHERE scope_ref.workflow_run_id=w.workflow_run_id "
+                    "AND scope_ref.ref_role='research_snapshot' "
+                    "AND s.scope_id=?) ORDER BY m.created_at",
                     (query.security_id,),
                 )
             ]
@@ -515,7 +531,13 @@ class WorkflowLedger:
             research_runs = tuple(
                 dict(row)
                 for row in self.__connection.execute(
-                    "SELECT r.research_run_id,r.research_snapshot_id,r.original_cutoff_date,r.status,r.engine_schema_version,r.engine_code_identity,r.canonical_json_artifact_id,r.html_artifact_id FROM research_run_record r JOIN research_input_projection p ON p.research_projection_id=r.research_projection_id WHERE p.security_id=? ORDER BY r.original_cutoff_date",
+                    "SELECT r.research_run_id,r.data_snapshot_id,"
+                    "r.original_cutoff_date,r.status,"
+                    "r.engine_schema_version,r.engine_code_identity,"
+                    "r.canonical_json_artifact_id "
+                    "FROM research_run_record r JOIN data_snapshot s "
+                    "ON s.data_snapshot_id=r.data_snapshot_id "
+                    "WHERE s.scope_id=? ORDER BY r.original_cutoff_date",
                     (query.security_id,),
                 )
             )
@@ -575,7 +597,23 @@ class WorkflowLedger:
                 errors.append("WORKFLOW_CHECKPOINT_MISSING")
             if self.__connection.execute("SELECT workflow_node_run_id FROM workflow_node_attempt GROUP BY workflow_node_run_id HAVING min(attempt_no)!=1 OR max(attempt_no)!=count(*) LIMIT 1").fetchone():
                 errors.append("WORKFLOW_ATTEMPT_NON_MONOTONIC")
-            ref_targets = {"Artifact": ("artifact", "artifact_id"), "ResearchArtifact": ("research_artifact_record", "artifact_record_id"), "ResearchRun": ("research_run_record", "research_run_id"), "DataSnapshot": ("data_snapshot", "data_snapshot_id"), "ResearchProjection": ("research_input_projection", "research_projection_id"), "ArtifactManifest": ("artifact_manifest", "artifact_manifest_id")}
+            ref_targets = {
+                "Artifact": ("artifact", "artifact_id"),
+                "ResearchArtifact": (
+                    "research_artifact_record",
+                    "artifact_record_id",
+                ),
+                "ResearchRun": ("research_run_record", "research_run_id"),
+                "DataSnapshot": ("data_snapshot", "data_snapshot_id"),
+                "ResearchEvaluationPlan": (
+                    "research_evaluation_plan_record",
+                    "evaluation_plan_id",
+                ),
+                "ArtifactManifest": (
+                    "artifact_manifest",
+                    "artifact_manifest_id",
+                ),
+            }
             for ref in self.__connection.execute("SELECT ref_type,ref_id FROM workflow_run_ref"):
                 target = ref_targets.get(ref["ref_type"])
                 if target is None or self.__connection.execute(f"SELECT 1 FROM {target[0]} WHERE {target[1]}=?", (ref["ref_id"],)).fetchone() is None:
@@ -657,34 +695,14 @@ class WorkflowLedger:
 
     def commit_checkpoint(
         self,
-        command: CommitResearchNode
-        | ProjectionCheckpointCommit,
-    ) -> str | ProjectionCheckpointResult | ResearchCheckpointResult | None:
-        if isinstance(command, CommitResearchNode):
-            return self._commit_research_checkpoint(command)
-        if isinstance(command, ProjectionCheckpointCommit):
-            return self._commit_projection_checkpoint(command)
-        raise TypeError("WORKFLOW_CHECKPOINT_TYPE_INVALID")
+        command: CommitEvaluationNode,
+    ) -> EvaluationCheckpointResult:
+        return self.__research_artifact_commit.commit(command)
 
-    def complete(self, command: FinalizeResearchSuccess) -> str:
-        return self._finalize_research_success(
-            command.workflow_run_id,
-            command.owner_token,
-            command.run_node_id,
-            command.run_attempt_id,
-            command.final_node_id,
-            command.final_attempt_id,
-            command.disposition,
-            command.record,
-            command.run_members,
-            command.projection_id,
-            command.workflow_snapshot_id,
-            command.reason_code,
-            command.stale_by_days,
-            command.candidate_member_ids,
-            command.market_only_member_ids,
-            command.terminal_status,
-        )
+    def complete(
+        self, command: FinalizeEvaluationSuccess
+    ) -> str:
+        return self._finalize_evaluation_success(command)
 
     def _insert_started_run(
         self, command: StartWorkflow, request_artifact_id: str, request_hash: str
@@ -902,196 +920,6 @@ class WorkflowLedger:
                 "WORKFLOW_LEASE_LOST", operation, workflow_run_id
             )
 
-    def _commit_research_checkpoint(
-        self, command: CommitResearchNode
-    ) -> ResearchCheckpointResult:
-        completed = _now()
-        with self.__writer_lock.acquire(
-            f"research-checkpoint:{command.workflow_run_id}"
-        ):
-            if (command.source_json_artifact is None) != (command.source_html_artifact is None):
-                raise WorkflowPersistenceError(
-                    "RESEARCH_PRESENTATION_INCOMPLETE",
-                    "commit_checkpoint",
-                    command.workflow_run_id,
-                )
-            published_source_json = (
-                None
-                if command.source_json_artifact is None
-                else self._publish_durable(command.source_json_artifact.payload)
-            )
-            published_source_html = (
-                None
-                if command.source_html_artifact is None
-                else self._publish_durable(command.source_html_artifact.payload)
-            )
-            published_decision_json = self._publish_durable(command.decision_json_artifact.payload)
-            published_decision_html = self._publish_durable(command.decision_html_artifact.payload)
-            bundle = command.artifact_bundle
-            prepared_bundle = self._prepare_research_artifact_bundle(
-                research_run_id=bundle.research_run_id,
-                data_snapshot_id=bundle.data_snapshot_id,
-                code_identity=bundle.code_identity,
-                drafts=bundle.drafts,
-                workflow_run_id=bundle.workflow_run_id,
-                market_data_snapshot_id=bundle.market_data_snapshot_id,
-                research_record=bundle.research_record,
-                publish_objects=True,
-            )
-            self.__connection.execute("BEGIN IMMEDIATE")
-            try:
-                self._assert_mutation_owner(
-                    command.workflow_run_id,
-                    command.workflow_node_run_id,
-                    command.workflow_node_attempt_id,
-                    command.owner_token,
-                    "commit_checkpoint",
-                )
-                if command.source_json_artifact is not None:
-                    if published_source_json is None or published_source_html is None or command.source_html_artifact is None:
-                        raise WorkflowPersistenceError(
-                            "RESEARCH_PRESENTATION_INCOMPLETE",
-                            "commit_checkpoint",
-                            command.workflow_run_id,
-                        )
-                    source_json_artifact_id = self._register_artifact(
-                        published_source_json,
-                        command.source_json_artifact.media_type,
-                        command.source_json_artifact.schema_version,
-                    )
-                    source_html_artifact_id = self._register_artifact(
-                        published_source_html,
-                        command.source_html_artifact.media_type,
-                        command.source_html_artifact.schema_version,
-                    )
-                else:
-                    if (
-                        command.record.canonical_json_artifact_id is None
-                        or command.record.html_artifact_id is None
-                    ):
-                        raise WorkflowPersistenceError(
-                            "RESEARCH_PRESENTATION_INCOMPLETE",
-                            "commit_checkpoint",
-                            command.workflow_run_id,
-                        )
-                    source_json_artifact_id = command.record.canonical_json_artifact_id
-                    source_html_artifact_id = command.record.html_artifact_id
-                decision_json_artifact_id = self._register_artifact(
-                    published_decision_json,
-                    command.decision_json_artifact.media_type,
-                    command.decision_json_artifact.schema_version,
-                )
-                decision_html_artifact_id = self._register_artifact(
-                    published_decision_html,
-                    command.decision_html_artifact.media_type,
-                    command.decision_html_artifact.schema_version,
-                )
-                if command.new_record is not None:
-                    record = replace(
-                        command.new_record,
-                        canonical_json_artifact_id=source_json_artifact_id,
-                        html_artifact_id=source_html_artifact_id,
-                    )
-                    self.__connection.execute(
-                        "INSERT OR IGNORE INTO research_run_record VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        _research_record_values(record),
-                    )
-                else:
-                    record = command.record
-                self._register_prepared_research_bundle(prepared_bundle)
-                committed_bundle = prepared_bundle.result
-                members = (
-                    (
-                        command.projection_artifact_id,
-                        "research_projection",
-                        "input",
-                    ),
-                    (source_json_artifact_id, "research_run_json", "output"),
-                    (source_html_artifact_id, "research_source_identity_html", "output"),
-                    (decision_json_artifact_id, "decision_view_json", "output"),
-                    (decision_html_artifact_id, "decision_view_html", "output"),
-                    *(
-                        (artifact_id, member_role, "output")
-                        for artifact_id, member_role in committed_bundle.members
-                    ),
-                )
-                identity = [
-                    {"artifact_id": artifact_id, "role": role, "direction": direction}
-                    for artifact_id, role, direction in members
-                ]
-                manifest_id = "manifest_" + canonical_hash(
-                    {
-                        "role": "checkpoint",
-                        "producer_type": "WorkflowNodeRun",
-                        "producer_id": command.workflow_node_run_id,
-                        "members": identity,
-                    }
-                )[:24]
-                for artifact_record_id in committed_bundle.record_ids:
-                    self.__connection.execute(
-                        "INSERT OR IGNORE INTO workflow_run_artifact_use VALUES(?,?,?)",
-                        (
-                            command.workflow_run_id,
-                            artifact_record_id,
-                            "reused"
-                            if command.disposition is ReferenceDisposition.REUSED
-                            else "created",
-                        ),
-                    )
-                self.__connection.execute(
-                    "INSERT OR IGNORE INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)",
-                    (
-                        manifest_id,
-                        "checkpoint",
-                        "WorkflowNodeRun",
-                        command.workflow_node_run_id,
-                        canonical_hash(identity),
-                        completed,
-                        len(members),
-                    ),
-                )
-                for index, (artifact_id, role, direction) in enumerate(members):
-                    self.__connection.execute(
-                        "INSERT OR IGNORE INTO artifact_manifest_member VALUES(?,?,?,?,?)",
-                        (manifest_id, index, artifact_id, role, direction),
-                    )
-                attempt_disposition = (
-                    "reused"
-                    if command.disposition is ReferenceDisposition.REUSED
-                    else "succeeded"
-                )
-                node = self.__connection.execute(
-                    "UPDATE workflow_node_run SET status='succeeded',checkpoint_manifest_id=? "
-                    "WHERE workflow_node_run_id=? AND owner_token=? AND status='running'",
-                    (
-                        manifest_id,
-                        command.workflow_node_run_id,
-                        command.owner_token,
-                    ),
-                )
-                attempt = self.__connection.execute(
-                    "UPDATE workflow_node_attempt SET disposition=?,completed_at=? "
-                    "WHERE workflow_node_attempt_id=? AND owner_token=? AND completed_at IS NULL",
-                    (
-                        attempt_disposition,
-                        completed,
-                        command.workflow_node_attempt_id,
-                        command.owner_token,
-                    ),
-                )
-                if node.rowcount != 1 or attempt.rowcount != 1:
-                    raise WorkflowPersistenceError(
-                        "WORKFLOW_LEASE_LOST",
-                        "commit_checkpoint",
-                        command.workflow_run_id,
-                    )
-                self.__connection.commit()
-                self._fault("research_artifact.after_commit")
-            except BaseException:
-                self.__connection.rollback()
-                raise
-        return ResearchCheckpointResult(manifest_id, record, members)
-
     def _checkpoint_members(self, node_run_id: str) -> tuple[sqlite3.Row, ...]:
         return tuple(self.__connection.execute("SELECT m.*,a.schema_version FROM workflow_node_run n JOIN artifact_manifest_member m ON m.artifact_manifest_id=n.checkpoint_manifest_id JOIN artifact a USING(artifact_id) WHERE n.workflow_node_run_id=? ORDER BY m.member_order", (node_run_id,)))
 
@@ -1146,20 +974,6 @@ class WorkflowLedger:
             size_bytes=len(payload),
             relative_path=target.relative_to(self.__data_root).as_posix(),
         )
-
-    def _preview_artifact_bundle(
-        self, bundle: ResearchArtifactBundle
-    ) -> PreparedArtifactBundle:
-        with self._research_artifact_lock:
-            return self._prepare_research_artifact_bundle(
-                research_run_id=bundle.research_run_id,
-                data_snapshot_id=bundle.data_snapshot_id,
-                code_identity=bundle.code_identity,
-                drafts=bundle.drafts,
-                workflow_run_id=bundle.workflow_run_id,
-                market_data_snapshot_id=bundle.market_data_snapshot_id,
-                research_record=bundle.research_record,
-            ).result
 
     def _persist_forecast_review(
         self,
@@ -1422,427 +1236,6 @@ class WorkflowLedger:
                 )
         return snapshot_evidence, tuple(facts)
 
-    def _prepare_research_artifact_bundle(
-        self,
-        *,
-        research_run_id: str,
-        data_snapshot_id: str,
-        code_identity: str,
-        drafts: tuple[ImmutableArtifactDraft, ...],
-        workflow_run_id: str | None = None,
-        market_data_snapshot_id: str | None = None,
-        research_record: ResearchRecord | None = None,
-        publish_objects: bool = False,
-    ) -> _PreparedResearchBundle:
-        if not isinstance(drafts, tuple) or any(
-            not isinstance(draft, ImmutableArtifactDraft) for draft in drafts
-        ):
-            raise ValueError("RESEARCH_ARTIFACT_BUNDLE_TYPE_INVALID")
-        if not drafts:
-            return _PreparedResearchBundle(
-                PreparedArtifactBundle(record_ids=(), views=(), members=()), {}
-            )
-        kinds = tuple(draft.artifact_kind for draft in drafts)
-        if len(kinds) != len(set(kinds)):
-            raise ValueError("RESEARCH_ARTIFACT_KIND_DUPLICATE")
-        seen: set[str] = set()
-        for draft in drafts:
-            if not set(draft.dependency_kinds).issubset(seen):
-                raise ValueError("RESEARCH_ARTIFACT_DEPENDENCY_ORDER_INVALID")
-            seen.add(draft.artifact_kind)
-        run = self.__connection.execute(
-            "SELECT * FROM research_run_record WHERE research_run_id=?",
-            (research_run_id,),
-        ).fetchone()
-        if run is None and research_record is not None:
-            run = {
-                "research_run_id": research_record.research_run_id,
-                "research_input_fingerprint": research_record.research_input_fingerprint,
-                "research_projection_id": research_record.research_projection_id,
-                "research_snapshot_id": research_record.research_snapshot_id,
-                "request_fingerprint": research_record.request_fingerprint,
-                "engine_schema_version": research_record.engine_schema_version,
-                "engine_code_identity": research_record.engine_code_identity,
-                "original_cutoff_date": research_record.original_cutoff_date,
-                "status": research_record.status,
-                "canonical_json_artifact_id": research_record.canonical_json_artifact_id,
-                "html_artifact_id": research_record.html_artifact_id,
-            }
-        snapshot = self.__connection.execute(
-            "SELECT * FROM data_snapshot WHERE data_snapshot_id=?",
-            (data_snapshot_id,),
-        ).fetchone()
-        if run is None or snapshot is None:
-            raise ValueError("RESEARCH_ARTIFACT_PARENT_MISSING")
-        if (
-            data_snapshot_id != run["research_snapshot_id"]
-            or code_identity != run["engine_code_identity"]
-        ):
-            raise ValueError("RESEARCH_ARTIFACT_PARENT_IDENTITY_MISMATCH")
-        if any(draft.as_of != run["original_cutoff_date"] for draft in drafts):
-            raise ValueError("RESEARCH_ARTIFACT_AS_OF_MISMATCH")
-        platform_security_id = snapshot["scope_id"]
-        subject_aliases = self._platform_subject_aliases(
-            platform_security_id,
-            run["original_cutoff_date"],
-        )
-        by_kind = {draft.artifact_kind: draft for draft in drafts}
-        data_snapshot_draft = by_kind.get("DataSnapshot")
-        if data_snapshot_draft is None:
-            raise ValueError("RESEARCH_ARTIFACT_DATA_SNAPSHOT_MISSING")
-        model_data_snapshot_identity = data_snapshot_draft.source_identity
-        market_data_draft = by_kind.get("MarketDataSnapshot")
-        market_calibration = (
-            None
-            if market_data_draft is None
-            else self._load_frozen_market_calibration(
-                market_data_draft.payload,
-                subject_aliases=subject_aliases,
-                market_data_snapshot_id=market_data_snapshot_id,
-                market_path=by_kind.get("MarketPathSimulation"),
-            )
-        )
-        validated = ArtifactLineage.validate(
-            ArtifactSubmission(
-                research_run_id=research_run_id,
-                workflow_run_id=workflow_run_id,
-                data_snapshot_id=data_snapshot_id,
-                code_identity=code_identity,
-                drafts=drafts,
-                market_data_snapshot_id=market_data_snapshot_id,
-            ),
-            FrozenLineageEvidence(
-                research_run_id=research_run_id,
-                workflow_run_id=workflow_run_id,
-                platform_security_id=platform_security_id,
-                subject_aliases=subject_aliases,
-                research_snapshot_id=run["research_snapshot_id"],
-                model_data_snapshot_identity=model_data_snapshot_identity,
-                original_cutoff_date=run["original_cutoff_date"],
-                engine_code_identity=run["engine_code_identity"],
-                market_calibration=market_calibration,
-            ),
-        )
-        result = PreparedArtifactBundle(
-            record_ids=validated.record_ids,
-            views=tuple(
-                ResearchArtifactView(
-                    artifact_record_id=envelope.record_id,
-                    artifact_kind=envelope.draft.artifact_kind,
-                    schema_version=envelope.draft.schema_version,
-                    research_run_id=research_run_id,
-                    data_snapshot_id=data_snapshot_id,
-                    model_data_snapshot_identity=model_data_snapshot_identity,
-                    platform_security_id=platform_security_id,
-                    subject_id=envelope.draft.subject_id,
-                    as_of=envelope.draft.as_of,
-                    source_identity=envelope.draft.source_identity,
-                    model_identity=envelope.draft.model_identity,
-                    formula_identities=envelope.draft.formula_identities,
-                    code_identity=code_identity,
-                    policy_identity=envelope.draft.policy_identity,
-                    status=envelope.draft.status,
-                    content_hash=envelope.draft.content_hash,
-                    dependency_record_ids=envelope.dependency_record_ids,
-                    summary=envelope.draft.summary,
-                    payload=envelope.draft.payload,
-                )
-                for envelope in validated.envelopes
-            ),
-            members=tuple(
-                (envelope.artifact_id, artifact_member_role(envelope.draft.artifact_kind))
-                for envelope in validated.envelopes
-            ),
-        )
-        published_by_record_id = (
-            {
-                envelope.record_id: self._publish_durable(envelope.payload)
-                for envelope in validated.envelopes
-            }
-            if publish_objects
-            else {}
-        )
-        if publish_objects:
-            self._fault("research_artifact.objects_published")
-        return _PreparedResearchBundle(result, published_by_record_id)
-
-    def _register_prepared_research_bundle(
-        self, prepared: _PreparedResearchBundle
-    ) -> None:
-        created_at = _now()
-        record_by_kind = {
-            view.artifact_kind: view.artifact_record_id
-            for view in prepared.result.views
-        }
-        for view in prepared.result.views:
-                    published = prepared.published_by_record_id[view.artifact_record_id]
-                    artifact_id = next(
-                        artifact_id
-                        for artifact_id, role in prepared.result.members
-                        if role == artifact_member_role(view.artifact_kind)
-                    )
-                    registered_artifact_id = self._register_artifact(
-                        published, "application/json", view.schema_version
-                    )
-                    if registered_artifact_id != artifact_id:
-                        raise ValueError("RESEARCH_ARTIFACT_IDENTITY_COLLISION")
-                    object_hash = published.sha256
-                    values = (
-                        view.artifact_record_id,
-                        view.artifact_kind,
-                        view.schema_version,
-                        artifact_id,
-                        object_hash,
-                        view.research_run_id,
-                        view.data_snapshot_id,
-                        view.model_data_snapshot_identity,
-                        view.platform_security_id,
-                        view.subject_id,
-                        view.as_of,
-                        view.source_identity,
-                        view.content_hash,
-                        view.model_identity,
-                        json.dumps(list(view.formula_identities), separators=(",", ":")),
-                        view.code_identity,
-                        view.policy_identity,
-                        view.status,
-                        json.dumps(view.summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                        created_at,
-                    )
-                    self.__connection.execute(
-                        "INSERT OR IGNORE INTO research_artifact_record VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        values,
-                    )
-                    existing = self.__connection.execute(
-                        "SELECT artifact_kind,schema_version,artifact_id,content_hash,research_run_id,data_snapshot_id,model_data_snapshot_identity,platform_security_id,subject_id,as_of_date,source_identity,input_fingerprint,model_identity,formula_identities_json,code_identity,policy_identity,status,summary_json FROM research_artifact_record WHERE artifact_record_id=?",
-                        (view.artifact_record_id,),
-                    ).fetchone()
-                    if existing is None or tuple(existing) != (
-                        view.artifact_kind,
-                        view.schema_version,
-                        artifact_id,
-                        object_hash,
-                        view.research_run_id,
-                        view.data_snapshot_id,
-                        view.model_data_snapshot_identity,
-                        view.platform_security_id,
-                        view.subject_id,
-                        view.as_of,
-                        view.source_identity,
-                        view.content_hash,
-                        view.model_identity,
-                        json.dumps(list(view.formula_identities), separators=(",", ":")),
-                        view.code_identity,
-                        view.policy_identity,
-                        view.status,
-                        json.dumps(view.summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                    ):
-                        raise ValueError("RESEARCH_ARTIFACT_IDENTITY_COLLISION")
-        for view in prepared.result.views:
-                    child_id = record_by_kind[view.artifact_kind]
-                    for parent_id in view.dependency_record_ids:
-                        self.__connection.execute(
-                            "INSERT OR IGNORE INTO research_artifact_relation VALUES(?,?,?)",
-                            (
-                                parent_id,
-                                child_id,
-                                "depends_on",
-                            ),
-                        )
-        self._fault("research_artifact.before_commit")
-
-
-    def _load_frozen_market_calibration(
-        self,
-        payload: Mapping[str, object],
-        *,
-        subject_aliases: frozenset[str],
-        market_data_snapshot_id: str | None,
-        market_path: ImmutableArtifactDraft | None,
-    ) -> MarketCalibrationEvidence | None:
-        if market_data_snapshot_id is None or market_path is None:
-            return None
-        snapshot = self.__connection.execute(
-            "SELECT * FROM data_snapshot WHERE data_snapshot_id=?",
-            (market_data_snapshot_id,),
-        ).fetchone()
-        calendar_ids = tuple(payload.get("calendar_member_ids", ()))
-        next_calendar_id = payload.get("next_session_calendar_member_id")
-        series_ids = tuple(payload.get("series_member_ids", ()))
-        adjustment_ids = tuple(payload.get("adjustment_member_ids", ()))
-        corporate_action_ids = tuple(payload.get("corporate_action_member_ids", ()))
-        member_ids = (
-            *calendar_ids,
-            next_calendar_id,
-            *series_ids,
-            *adjustment_ids,
-            *corporate_action_ids,
-        )
-        members = ()
-        if member_ids:
-            placeholders = ",".join("?" for _ in member_ids)
-            members = tuple(
-                dict(row)
-                for row in self.__connection.execute(
-                    "SELECT m.normalized_version_id,nr.dataset,nv.event_at,"
-                    "nv.available_at,nv.quality_status,pa.source_identity,"
-                    "pa.source_authority,pa.retrieved_at "
-                    "FROM data_snapshot_member m "
-                    "JOIN normalized_version nv USING(normalized_version_id) "
-                    "JOIN normalized_record nr USING(normalized_record_id) "
-                    "JOIN provider_attempt pa ON pa.attempt_id=nv.source_attempt_id "
-                    f"WHERE m.data_snapshot_id=? AND m.normalized_version_id IN ({placeholders})",
-                    (market_data_snapshot_id, *member_ids),
-                )
-            )
-        calendar_rows = ()
-        if calendar_ids:
-            calendar_rows = tuple(
-                dict(row)
-                for row in self.__connection.execute(
-                    "SELECT nv.normalized_version_id,nv.event_at,ms.market,ms.session_date,ms.is_open,ms.calendar_version "
-                    "FROM normalized_version nv JOIN market_session_version ms "
-                    "ON ms.source_attempt_id=nv.source_attempt_id AND ms.session_date=nv.event_at "
-                    f"WHERE nv.normalized_version_id IN ({','.join('?' for _ in calendar_ids)})",
-                    calendar_ids,
-                )
-            )
-        snapshot_calendar_rows = tuple(
-            dict(row)
-            for row in self.__connection.execute(
-                "SELECT nv.normalized_version_id,ms.session_date FROM data_snapshot_member m "
-                "JOIN normalized_version nv USING(normalized_version_id) "
-                "JOIN normalized_record nr USING(normalized_record_id) "
-                "JOIN market_session_version ms ON ms.source_attempt_id=nv.source_attempt_id AND ms.session_date=nv.event_at "
-                "WHERE m.data_snapshot_id=? AND nr.dataset='trade_cal' AND ms.market=? "
-                "AND ms.calendar_version=? AND ms.is_open=1 AND ms.session_date BETWEEN ? AND ?",
-                (
-                    market_data_snapshot_id,
-                    payload.get("market"),
-                    payload.get("trading_calendar_identity"),
-                    payload.get("window_start"),
-                    payload.get("window_end"),
-                ),
-            )
-        )
-        next_calendar_rows = tuple(
-            dict(row)
-            for row in self.__connection.execute(
-                "SELECT nv.normalized_version_id,ms.market,ms.session_date,ms.is_open,ms.calendar_version "
-                "FROM data_snapshot_member m JOIN normalized_version nv USING(normalized_version_id) "
-                "JOIN market_session_version ms ON ms.source_attempt_id=nv.source_attempt_id AND ms.session_date=nv.event_at "
-                "WHERE m.data_snapshot_id=? AND ms.market=? AND ms.calendar_version=? AND ms.is_open=1 "
-                "AND ms.session_date>? AND ms.session_date<=?",
-                (
-                    market_data_snapshot_id,
-                    payload.get("market"),
-                    payload.get("trading_calendar_identity"),
-                    payload.get("window_end"),
-                    market_path.payload.get("starting_price_session"),
-                ),
-            )
-        )
-        known_open_rows = tuple(
-            dict(row)
-            for row in self.__connection.execute(
-                "SELECT session_date,available_at FROM market_session_version "
-                "WHERE market=? AND calendar_version=? AND is_open=1 AND session_date>? AND session_date<=?",
-                (
-                    payload.get("market"),
-                    payload.get("trading_calendar_identity"),
-                    payload.get("window_end"),
-                    market_path.payload.get("starting_price_session"),
-                ),
-            )
-        )
-        series_rows = ()
-        if series_ids:
-            series_rows = tuple(
-                dict(row)
-                for row in self.__connection.execute(
-                    "SELECT o.* FROM ohlcv_version o "
-                    f"WHERE o.normalized_version_id IN ({','.join('?' for _ in series_ids)})",
-                    series_ids,
-                )
-            )
-        snapshot_series_rows = ()
-        if subject_aliases:
-            snapshot_series_rows = tuple(
-                dict(row)
-                for row in self.__connection.execute(
-                    "SELECT o.normalized_version_id,o.session_date FROM data_snapshot_member m "
-                    "JOIN normalized_version nv USING(normalized_version_id) "
-                    "JOIN normalized_record nr USING(normalized_record_id) "
-                    "JOIN ohlcv_version o USING(normalized_version_id) "
-                    "WHERE m.data_snapshot_id=? AND nr.dataset='daily' AND o.security_id IN "
-                    f"({','.join('?' for _ in subject_aliases)}) AND o.session_date BETWEEN ? AND ?",
-                    (
-                        market_data_snapshot_id,
-                        *subject_aliases,
-                        payload.get("window_start"),
-                        payload.get("window_end"),
-                    ),
-                )
-            )
-        starting_row = self.__connection.execute(
-            "SELECT nr.dataset,nv.available_at,nv.quality_status,pa.source_identity,pa.source_authority,o.* "
-            "FROM data_snapshot_member m JOIN normalized_version nv USING(normalized_version_id) "
-            "JOIN normalized_record nr USING(normalized_record_id) "
-            "JOIN provider_attempt pa ON pa.attempt_id=nv.source_attempt_id "
-            "JOIN ohlcv_version o USING(normalized_version_id) "
-            "WHERE m.data_snapshot_id=? AND m.normalized_version_id=?",
-            (market_data_snapshot_id, market_path.payload.get("starting_price_member_id")),
-        ).fetchone()
-        return MarketCalibrationEvidence(
-            snapshot=None if snapshot is None else dict(snapshot),
-            members=members,
-            calendar_rows=calendar_rows,
-            snapshot_calendar_rows=snapshot_calendar_rows,
-            next_calendar_rows=next_calendar_rows,
-            known_open_rows=known_open_rows,
-            series_rows=series_rows,
-            snapshot_series_rows=snapshot_series_rows,
-            starting_row=None if starting_row is None else dict(starting_row),
-        )
-
-
-    def _platform_subject_aliases(
-        self,
-        platform_security_id: str,
-        as_of: str,
-    ) -> frozenset[str]:
-        security = self.__connection.execute(
-            "SELECT 1 FROM security WHERE security_id=?",
-            (platform_security_id,),
-        ).fetchone()
-        if security is None:
-            raise ValueError("RESEARCH_ARTIFACT_PLATFORM_SECURITY_MISSING")
-        aliases = {platform_security_id}
-        suffixes = {
-            "BSE": "BJ",
-            "HKEX": "HK",
-            "SSE": "SH",
-            "SH": "SH",
-            "SHSE": "SH",
-            "SZ": "SZ",
-            "SZSE": "SZ",
-            "XSHG": "SH",
-            "XSHE": "SZ",
-        }
-        for row in self.__connection.execute(
-            "SELECT market,code FROM security_identifier "
-            "WHERE security_id=? AND valid_from<=? "
-            "AND (valid_to IS NULL OR valid_to>=?)",
-            (platform_security_id, as_of, as_of),
-        ):
-            market = str(row["market"]).upper()
-            code = str(row["code"])
-            aliases.add(code)
-            suffix = suffixes.get(market)
-            if suffix:
-                aliases.add(f"{code}.{suffix}")
-        return frozenset(aliases)
-
     def _research_artifact_view(self, artifact_record_id: str) -> ResearchArtifactView:
         row = self.__connection.execute(
             "SELECT r.*,a.object_sha256,o.size_bytes,o.relative_path "
@@ -1962,356 +1355,78 @@ class WorkflowLedger:
             )
         return decoded
 
-    def _research_view_persistence(self) -> ResearchDecisionViewCutover:
-        return ResearchDecisionViewCutover(
-            self.__connection,
-            self.__data_root,
-            self.__writer_lock,
-            self._publish_durable,
-            self._register_artifact,
-            self._research_artifact_view,
-            self._research_run_payload,
-            self._fault,
-        )
-
     def _decision_view_payload(self, workflow_run_id: str) -> DecisionViewPayload:
-        return self._research_view_persistence().decision_payload(workflow_run_id)
-
-    def _research_view_cutover_complete(self) -> bool:
-        return self._research_view_persistence().complete()
-
-    def cutover_research_decision_views(
-        self,
-        materializer: ResearchDecisionViewMaterializerPort,
-        *,
-        acquire_lock: bool = True,
-    ) -> None:
-        self._research_view_persistence().run(
-            materializer, acquire_lock=acquire_lock
+        rows = tuple(
+            self.__connection.execute(
+                "SELECT r.ref_id AS manifest_id,m.member_order,"
+                "m.member_role,m.artifact_id,a.media_type,a.schema_version,"
+                "a.object_sha256,o.size_bytes,o.relative_path "
+                "FROM workflow_run_ref r "
+                "JOIN artifact_manifest f ON f.artifact_manifest_id=r.ref_id "
+                "JOIN artifact_manifest_member m "
+                "ON m.artifact_manifest_id=f.artifact_manifest_id "
+                "JOIN artifact a USING(artifact_id) "
+                "JOIN object_blob o ON o.sha256=a.object_sha256 "
+                "WHERE r.workflow_run_id=? "
+                "AND r.ref_role='decision_view_manifest' "
+                "AND f.manifest_role='workflow_decision_view@2' "
+                "ORDER BY m.member_order",
+                (workflow_run_id,),
+            )
         )
-
-    def _commit_projection_checkpoint(
-        self, command: ProjectionCheckpointCommit
-    ) -> ProjectionCheckpointResult:
-        completed_at = _now()
-        with self.__writer_lock.acquire(
-            f"projection-checkpoint:{command.workflow_run_id}"
+        expected = (
+            (
+                "decision_view_json",
+                "application/json",
+                "ResearchDecisionView@2",
+            ),
+            (
+                "decision_view_html",
+                "text/html",
+                "ResearchDecisionHtml@2",
+            ),
+            (
+                "decision_view_pdf",
+                "application/pdf",
+                "ResearchDecisionPdf@1",
+            ),
+        )
+        if len(rows) != 3 or any(
+            (
+                row["member_order"] != index
+                or row["member_role"] != role
+                or row["media_type"] != media
+                or row["schema_version"] != schema
+            )
+            for index, (row, (role, media, schema)) in enumerate(
+                zip(rows, expected)
+            )
         ):
-            projection, payload = self._projection_plan(command.freeze)
-            published = (
-                self._publish_durable(payload)
-                if projection.disposition is ReferenceDisposition.CREATED
-                else None
+            raise PersistenceError(
+                "RESEARCH_DECISION_VIEW_INCOMPLETE",
+                "Canonical decision view manifest is incomplete.",
             )
-            members = ((projection.projection_artifact_id, "research_projection", "output"),)
-            identity = [
-                {"artifact_id": artifact_id, "role": role, "direction": direction}
-                for artifact_id, role, direction in members
-            ]
-            manifest_id = f"manifest_{canonical_hash({'role': 'checkpoint', 'producer_type': 'WorkflowNodeRun', 'producer_id': command.workflow_node_run_id, 'members': identity})[:24]}"
-            self.__connection.execute("BEGIN IMMEDIATE")
-            try:
-                self._assert_mutation_owner(
-                    command.workflow_run_id,
-                    command.workflow_node_run_id,
-                    command.workflow_node_attempt_id,
-                    command.owner_token,
-                    "commit_checkpoint",
+        payloads: list[bytes] = []
+        for row in rows:
+            payload = (self.__data_root / row["relative_path"]).read_bytes()
+            if (
+                len(payload) != row["size_bytes"]
+                or hashlib.sha256(payload).hexdigest()
+                != row["object_sha256"]
+            ):
+                raise PersistenceError(
+                    "OBJECT_INTEGRITY_FAILED",
+                    "Decision view artifact failed content verification.",
                 )
-                if published is not None:
-                    self._register_projection_plan(
-                        command.freeze, projection, payload, published
-                    )
-                self.__connection.execute(
-                    "INSERT OR IGNORE INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)",
-                    (manifest_id, "checkpoint", "WorkflowNodeRun", command.workflow_node_run_id, canonical_hash(identity), completed_at, 1),
-                )
-                self.__connection.execute(
-                    "INSERT OR IGNORE INTO artifact_manifest_member VALUES(?,?,?,?,?)",
-                    (manifest_id, 0, *members[0]),
-                )
-                attempt_disposition = "reused" if projection.disposition is ReferenceDisposition.REUSED else "succeeded"
-                node = self.__connection.execute(
-                    "UPDATE workflow_node_run SET status='succeeded',checkpoint_manifest_id=? WHERE workflow_node_run_id=? AND owner_token=? AND status='running'",
-                    (manifest_id, command.workflow_node_run_id, command.owner_token),
-                )
-                attempt = self.__connection.execute(
-                    "UPDATE workflow_node_attempt SET disposition=?,completed_at=? WHERE workflow_node_attempt_id=? AND owner_token=? AND completed_at IS NULL",
-                    (attempt_disposition, completed_at, command.workflow_node_attempt_id, command.owner_token),
-                )
-                if node.rowcount != 1 or attempt.rowcount != 1:
-                    raise WorkflowPersistenceError(
-                        "WORKFLOW_LEASE_LOST",
-                        "commit_checkpoint",
-                        command.workflow_run_id,
-                    )
-                refs = [
-                    ("research_snapshot", "DataSnapshot", projection.research_snapshot_id, projection.disposition.value),
-                    ("research_projection", "ResearchProjection", projection.research_projection_id, projection.disposition.value),
-                ]
-                if command.workflow_snapshot_id is not None:
-                    refs.append(("workflow_snapshot", "DataSnapshot", command.workflow_snapshot_id, ReferenceDisposition.INPUT.value))
-                for role, ref_type, ref_id, disposition in refs:
-                    self.__connection.execute(
-                        "INSERT OR IGNORE INTO workflow_run_ref VALUES(?,?,?,?,?)",
-                        (command.workflow_run_id, role, ref_type, ref_id, disposition),
-                    )
-                self._fault("projection_checkpoint.before_commit")
-                self.__connection.commit()
-            except BaseException:
-                self.__connection.rollback()
-                raise
-        return ProjectionCheckpointResult(manifest_id, projection)
-
-    def _projection_plan(
-        self, command: FreezeProjection
-    ) -> tuple[PreparedProjection, bytes]:
-        projection = command.projection
-        payload = json.dumps({"manifest": projection.manifest, "estimates": projection.estimates, "research_inputs": projection.research_inputs.identity_payload(), "as_of_date": projection.as_of_date, "profile": projection.profile, "field_semantics": [item.__dict__ for item in projection.field_semantics], "diluted_share_identity": projection.diluted_share_identity, "net_debt_bridge_identity": projection.net_debt_bridge_identity, "source_manifest_validation_result": projection.source_manifest_validation_result, "source_manifest_path": projection.source_manifest_path}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        projection_hash = hashlib.sha256(payload).hexdigest()
-        existing = self.__connection.execute("SELECT research_projection_id,research_snapshot_id,projection_artifact_id FROM research_input_projection WHERE projection_hash=?", (projection_hash,)).fetchone()
-        if existing:
-            return (
-                PreparedProjection(
-                    str(existing[0]),
-                    str(existing[1]),
-                    str(existing[2]),
-                    ReferenceDisposition.REUSED,
-                ),
-                payload,
-            )
-        artifact_id = f"artifact_{canonical_hash({'sha256': projection_hash, 'media': 'application/json', 'schema': 'ResearchProjection@1'})[:24]}"
-        version_id = f"version_{projection_hash[:24]}"
-        snapshot_id = f"snapshot_{canonical_hash({'purpose': 'research', 'cutoff': projection.as_of_date, 'member': version_id, 'policy': 'research_input_policy@1'})[:24]}"
-        return (
-            PreparedProjection(
-                f"projection_{projection_hash[:24]}",
-                snapshot_id,
-                artifact_id,
-                ReferenceDisposition.CREATED,
-            ),
-            payload,
-        )
-
-    def _register_projection_plan(
-        self,
-        command: FreezeProjection,
-        projection_plan: PreparedProjection,
-        payload: bytes,
-        published: DurableObject,
-    ) -> None:
-        projection = command.projection
-        projection_hash = hashlib.sha256(payload).hexdigest()
-        attempt_id = f"attempt_{projection_hash[:24]}"
-        record_id = f"record_{canonical_hash({'dataset': 'research_input', 'security': command.security_id, 'as_of': projection.as_of_date})[:24]}"
-        version_id = f"version_{projection_hash[:24]}"
-        retrieved = _now()
-        source_ids = sorted(
-            str(source.get("source_id", ""))
-            for source in projection.manifest.get("sources", ())
-        )
-        source_identity = "frozen-research-projection:" + hashlib.sha256(
-            json.dumps(
-                source_ids,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
-        ).hexdigest()
-        published_at = max(item.published_at for item in projection.field_semantics)
-        available_at = max(item.available_at for item in projection.field_semantics)
-        source_retrieved_at = max(
-            item.retrieved_at for item in projection.field_semantics
-        )
-        availability_basis = (
-            "conservative_retrieval_time"
-            if any(
-                item.availability_basis == "conservative_retrieval_time"
-                for item in projection.field_semantics
-            )
-            else "publisher_timestamp"
-        )
-        registered_artifact_id = self._register_artifact(
-            published, "application/json", "ResearchProjection@1"
-        )
-        if registered_artifact_id != projection_plan.projection_artifact_id:
-            raise WorkflowPersistenceError(
-                "RESEARCH_PROJECTION_IDENTITY_COLLISION",
-                "commit_checkpoint",
-                projection_plan.research_projection_id,
-            )
-        query_policy_json = json.dumps(
-            {
-                "schema_version": "QueryPolicy@1",
-                "dataset": "research_input",
-                "as_of_date": projection.as_of_date,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        query_policy_identity = (
-            "query_policy_"
-            + hashlib.sha256(query_policy_json.encode()).hexdigest()[:24]
-        )
-        source_policy_json = json.dumps(
-            {
-                "schema_version": "SourcePolicy@1",
-                "source_identity": source_identity,
-                "authority": "imported",
-                "rights": "local_only",
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        source_policy_identity = (
-            "source_policy_"
-            + hashlib.sha256(source_policy_json.encode()).hexdigest()[:24]
-        )
-        rights_profile_id = (
-            "rights_"
-            + hashlib.sha256(source_identity.encode()).hexdigest()[:24]
-        )
-        self.__connection.execute(
-            "INSERT OR IGNORE INTO query_policy_record VALUES(?,?,?,?,?)",
-            (
-                query_policy_identity,
-                "QueryPolicy@1",
-                hashlib.sha256(query_policy_json.encode()).hexdigest(),
-                query_policy_json,
-                retrieved,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT OR IGNORE INTO source_policy_record VALUES(?,?,?,?,?)",
-            (
-                source_policy_identity,
-                "SourcePolicy@1",
-                hashlib.sha256(source_policy_json.encode()).hexdigest(),
-                source_policy_json,
-                retrieved,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT OR IGNORE INTO source_rights_profile VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                rights_profile_id,
-                "source",
-                "frozen_projection:projection@1",
-                source_identity,
-                "local-research-input@1",
-                1,
-                1,
-                1,
-                0,
-                0,
-                retrieved[:10],
-                published.sha256,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                attempt_id,
-                projection_plan.research_projection_id,
-                "frozen_projection",
-                "projection@1",
-                "research_input",
-                source_identity,
-                "imported",
-                "urn:local:frozen-research-projection",
-                json.dumps({"source_ids": source_ids}),
-                "{}",
-                "date",
-                "terms_unknown",
-                "complete",
-                "created",
-                published.sha256,
-                retrieved,
-                None,
-                None,
-                None,
-                "not_applicable",
-                query_policy_identity,
-                source_policy_identity,
-                rights_profile_id,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT OR IGNORE INTO normalized_record VALUES(?,?,?)",
-            (record_id, "research_input", f"{command.security_id}:{projection.as_of_date}"),
-        )
-        previous = self.__connection.execute(
-            "SELECT normalized_version_id,revision_no FROM normalized_version "
-            "WHERE normalized_record_id=? ORDER BY revision_no DESC LIMIT 1",
-            (record_id,),
-        ).fetchone()
-        revision = 1 if previous is None else previous["revision_no"] + 1
-        self.__connection.execute(
-            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                version_id,
-                record_id,
-                revision,
-                projection_hash,
-                attempt_id,
-                projection.as_of_date,
-                published_at,
-                "timestamp",
-                available_at,
-                availability_basis,
-                source_retrieved_at,
-                "warning",
-                previous["normalized_version_id"] if previous else None,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                projection_plan.research_snapshot_id,
-                command.security_id,
-                "research",
-                projection.as_of_date,
-                projection.as_of_date,
-                f"{projection.as_of_date}T23:59:59+00:00",
-                "Asia/Shanghai",
-                "not_applicable",
-                query_policy_identity,
-                source_policy_identity,
-                "research-freshness@1",
-                canonical_hash([version_id]),
-                "valid",
-                "warning",
-                1,
-                1,
-                0,
-                0,
-                0,
-                "frozen_research_projection",
-                retrieved,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT INTO data_snapshot_member VALUES(?,?,?,?)",
-            (
-                projection_plan.research_snapshot_id,
-                version_id,
-                "research_input_projection",
-                0,
-            ),
-        )
-        self.__connection.execute(
-            "INSERT INTO research_input_projection VALUES(?,?,?,?,?,?,?,?)",
-            (
-                projection_plan.research_projection_id,
-                command.security_id,
-                projection.as_of_date,
-                projection_plan.projection_artifact_id,
-                projection_hash,
-                command.projection_fingerprint,
-                "research_input_policy@1",
-                projection_plan.research_snapshot_id,
-            ),
+            payloads.append(payload)
+        return DecisionViewPayload(
+            manifest_id=str(rows[0]["manifest_id"]),
+            json_artifact_id=str(rows[0]["artifact_id"]),
+            html_artifact_id=str(rows[1]["artifact_id"]),
+            pdf_artifact_id=str(rows[2]["artifact_id"]),
+            json_bytes=payloads[0],
+            html_bytes=payloads[1],
+            pdf_bytes=payloads[2],
         )
 
     def _fail_execution(self, command: FailExecution) -> None:
@@ -2367,7 +1482,7 @@ class WorkflowLedger:
                 "FROM artifact_manifest_member "
                 "WHERE artifact_manifest_id=? "
                 "AND member_role IN "
-                "('decision_view_json','decision_view_html')",
+                "('decision_view_json','decision_view_html','decision_view_pdf')",
                 (decision_manifest[0],),
             )
         }
@@ -2380,7 +1495,20 @@ class WorkflowLedger:
                 (final_manifest[0],),
             )
         )
-        return ResearchWorkflowResult(workflow_run_id, record["research_run_id"], record["research_snapshot_id"], workflow_snapshot[0] if workflow_snapshot else None, decision_manifest[0], ReferenceDisposition(decision["disposition"]), decision["reason_code"], decision["stale_by_days"], presentation_artifacts["decision_view_json"], presentation_artifacts["decision_view_html"], artifact_record_ids)
+        return ResearchWorkflowResult(
+            workflow_run_id,
+            record["research_run_id"],
+            record["data_snapshot_id"],
+            workflow_snapshot[0] if workflow_snapshot else None,
+            final_manifest[0],
+            ReferenceDisposition(decision["disposition"]),
+            decision["reason_code"],
+            decision["stale_by_days"],
+            presentation_artifacts["decision_view_json"],
+            presentation_artifacts["decision_view_html"],
+            presentation_artifacts["decision_view_pdf"],
+            artifact_record_ids,
+        )
 
     def _history(self, workflow_run_id: str) -> WorkflowHistory:
         run = self.__connection.execute("SELECT * FROM workflow_run WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()
@@ -2389,7 +1517,14 @@ class WorkflowLedger:
         transitions = tuple(dict(row) for row in self.__connection.execute("SELECT sequence_no,from_status,to_status,reason_code,occurred_at FROM workflow_transition WHERE workflow_run_id=? ORDER BY sequence_no", (workflow_run_id,)))
         decision_row = self.__connection.execute("SELECT * FROM research_reuse_decision WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()
         decision = {} if decision_row is None else dict(decision_row)
-        final_manifest = next((ref["ref_id"] for ref in refs if ref["ref_role"] == "decision_view_manifest"), None)
+        final_manifest = next(
+            (
+                ref["ref_id"]
+                for ref in refs
+                if ref["ref_role"] == "final_manifest"
+            ),
+            None,
+        )
         return WorkflowHistory(workflow_run_id, run["status"], refs, attempts, transitions, decision, final_manifest)
 
     def _manifest(self, manifest_id: str) -> ArtifactManifestView:
@@ -2402,148 +1537,203 @@ class WorkflowLedger:
         ))
         return ArtifactManifestView(row["artifact_manifest_id"], row["manifest_role"], row["producer_type"], row["producer_id"], row["membership_hash"], members)
 
-    def _finalize_research_success(
-        self,
-        workflow_run_id: str,
-        owner_token: str,
-        run_node_id: str,
-        run_attempt_id: str,
-        final_node_id: str,
-        final_attempt_id: str,
-        disposition: ReferenceDisposition,
-        record: ResearchRecord,
-        run_members: tuple[tuple[str, str, str], ...],
-        projection_id: str,
-        workflow_snapshot_id: str | None,
-        reason_code: str,
-        stale_by_days: int,
-        candidate_member_ids: tuple[str, ...],
-        market_only_member_ids: tuple[str, ...],
-        terminal_status: str,
+    def _finalize_evaluation_success(
+        self, command: FinalizeEvaluationSuccess
     ) -> str:
         completed_at = _now()
-        with self.__writer_lock.acquire(f"workflow-complete:{workflow_run_id}"):
+        checkpoint = command.checkpoint
+        with self.__writer_lock.acquire(
+            f"workflow-complete:{command.workflow_run_id}"
+        ):
             self.__connection.execute("BEGIN IMMEDIATE")
             try:
                 self._assert_mutation_owner(
-                    workflow_run_id,
-                    final_node_id,
-                    final_attempt_id,
-                    owner_token,
+                    command.workflow_run_id,
+                    command.final_node_id,
+                    command.final_attempt_id,
+                    command.owner_token,
                     "complete",
                 )
-                completed_run = self.__connection.execute(
+                run_node = self.__connection.execute(
                     "SELECT n.checkpoint_manifest_id,n.status,a.completed_at "
                     "FROM workflow_node_run n JOIN workflow_node_attempt a "
                     "USING(workflow_node_run_id) WHERE n.workflow_run_id=? "
-                    "AND n.workflow_node_run_id=? AND a.workflow_node_attempt_id=?",
-                    (workflow_run_id, run_node_id, run_attempt_id),
+                    "AND n.workflow_node_run_id=? "
+                    "AND a.workflow_node_attempt_id=?",
+                    (
+                        command.workflow_run_id,
+                        command.evaluation_node_id,
+                        command.evaluation_attempt_id,
+                    ),
                 ).fetchone()
                 if (
-                    completed_run is None
-                    or completed_run["status"] != "succeeded"
-                    or completed_run["completed_at"] is None
-                    or completed_run["checkpoint_manifest_id"] is None
+                    run_node is None
+                    or run_node["status"] != "succeeded"
+                    or run_node["completed_at"] is None
+                    or run_node["checkpoint_manifest_id"]
+                    != checkpoint.manifest_id
                 ):
                     raise WorkflowPersistenceError(
-                        "WORKFLOW_CHECKPOINT_INVALID", "complete", workflow_run_id
+                        "WORKFLOW_CHECKPOINT_INVALID",
+                        "complete",
+                        command.workflow_run_id,
                     )
-                committed_members = tuple(
-                    (row["artifact_id"], row["member_role"], row["direction"])
-                    for row in self.__connection.execute(
-                        "SELECT artifact_id,member_role,direction FROM "
-                        "artifact_manifest_member WHERE artifact_manifest_id=? "
-                        "ORDER BY member_order",
-                        (completed_run["checkpoint_manifest_id"],),
-                    )
+                identity = [
+                    {
+                        "artifact_id": artifact_id,
+                        "role": role,
+                        "direction": direction,
+                    }
+                    for artifact_id, role, direction in checkpoint.members
+                ]
+                final_manifest = "manifest_" + canonical_hash(
+                    {
+                        "role": "workflow_final",
+                        "producer_type": "WorkflowRun",
+                        "producer_id": command.workflow_run_id,
+                        "members": identity,
+                    }
+                )[:24]
+                self.__connection.execute(
+                    "INSERT INTO artifact_manifest VALUES(?,?,?,?,?,?,?)",
+                    (
+                        final_manifest,
+                        "workflow_final",
+                        "WorkflowRun",
+                        command.workflow_run_id,
+                        canonical_hash(identity),
+                        completed_at,
+                        len(checkpoint.members),
+                    ),
                 )
-                if committed_members != run_members:
-                    raise WorkflowPersistenceError(
-                        "WORKFLOW_CHECKPOINT_INVALID", "complete", workflow_run_id
+                for index, member in enumerate(checkpoint.members):
+                    self.__connection.execute(
+                        "INSERT INTO artifact_manifest_member VALUES(?,?,?,?,?)",
+                        (final_manifest, index, *member),
                     )
-                refs_by_role = {
-                    row["ref_role"]: row["ref_id"]
-                    for row in self.__connection.execute(
-                        "SELECT ref_role,ref_id FROM workflow_run_ref "
-                        "WHERE workflow_run_id=?",
-                        (workflow_run_id,),
-                    )
-                }
-                if refs_by_role.get("research_projection") != projection_id or (
-                    workflow_snapshot_id is not None
-                    and refs_by_role.get("workflow_snapshot") != workflow_snapshot_id
-                ):
+                final_node = self.__connection.execute(
+                    "UPDATE workflow_node_run SET status='succeeded',"
+                    "checkpoint_manifest_id=? WHERE workflow_node_run_id=? "
+                    "AND owner_token=? AND status='running'",
+                    (
+                        final_manifest,
+                        command.final_node_id,
+                        command.owner_token,
+                    ),
+                )
+                final_attempt = self.__connection.execute(
+                    "UPDATE workflow_node_attempt SET disposition='succeeded',"
+                    "completed_at=? WHERE workflow_node_attempt_id=? "
+                    "AND owner_token=? AND completed_at IS NULL",
+                    (
+                        completed_at,
+                        command.final_attempt_id,
+                        command.owner_token,
+                    ),
+                )
+                if final_node.rowcount != 1 or final_attempt.rowcount != 1:
                     raise WorkflowPersistenceError(
-                        "WORKFLOW_REFERENCE_INVALID", "complete", workflow_run_id
+                        "WORKFLOW_LEASE_LOST",
+                        "complete",
+                        command.workflow_run_id,
                     )
                 member_by_role = {
-                    member_role: artifact_id
-                    for artifact_id, member_role, _ in committed_members
+                    role: artifact_id
+                    for artifact_id, role, _ in checkpoint.members
                 }
-                decision_members = (
-                    (member_by_role["decision_view_json"], "decision_view_json", "output"),
-                    (member_by_role["decision_view_html"], "decision_view_html", "output"),
-                )
-                identity = [
-                    {"artifact_id": artifact_id, "role": role, "direction": direction}
-                    for artifact_id, role, direction in committed_members
-                ]
-                final_manifest = f"manifest_{canonical_hash({'role': 'workflow_final', 'producer_type': 'WorkflowRun', 'producer_id': workflow_run_id, 'members': identity})[:24]}"
-                decision_identity = [
-                    {"artifact_id": artifact_id, "role": role, "direction": direction}
-                    for artifact_id, role, direction in decision_members
-                ]
-                decision_manifest = f"manifest_{canonical_hash({'role': 'workflow_decision_view@1', 'producer_type': 'WorkflowRun', 'producer_id': workflow_run_id, 'members': decision_identity})[:24]}"
-                persisted_record = self.__connection.execute(
-                    "SELECT * FROM research_run_record WHERE research_run_id=?",
-                    (record.research_run_id,),
-                ).fetchone()
-                if persisted_record is None:
-                    raise WorkflowPersistenceError(
-                        "RESEARCH_RUN_NOT_FOUND", "complete", workflow_run_id
-                    )
-                record = _research_record(persisted_record)
-                self.__connection.execute("INSERT OR IGNORE INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)", (final_manifest, "workflow_final", "WorkflowRun", workflow_run_id, canonical_hash(identity), completed_at, len(committed_members)))
-                for member_index, (artifact_id, member_role, direction) in enumerate(committed_members):
-                    self.__connection.execute("INSERT OR IGNORE INTO artifact_manifest_member VALUES(?,?,?,?,?)", (final_manifest, member_index, artifact_id, member_role, direction))
-                self.__connection.execute("INSERT INTO artifact_manifest(artifact_manifest_id,manifest_role,producer_type,producer_id,membership_hash,created_at,member_count) VALUES(?,?,?,?,?,?,?)", (decision_manifest, "workflow_decision_view@1", "WorkflowRun", workflow_run_id, canonical_hash(decision_identity), completed_at, 2))
-                for member_index, (artifact_id, member_role, direction) in enumerate(decision_members):
-                    self.__connection.execute("INSERT INTO artifact_manifest_member VALUES(?,?,?,?,?)", (decision_manifest, member_index, artifact_id, member_role, direction))
-                final_node = self.__connection.execute("UPDATE workflow_node_run SET status='succeeded',checkpoint_manifest_id=? WHERE workflow_node_run_id=? AND owner_token=? AND status='running'", (final_manifest, final_node_id, owner_token))
-                final_attempt = self.__connection.execute("UPDATE workflow_node_attempt SET disposition='succeeded',completed_at=? WHERE workflow_node_attempt_id=? AND owner_token=? AND completed_at IS NULL", (completed_at, final_attempt_id, owner_token))
-                if final_node.rowcount != 1 or final_attempt.rowcount != 1:
-                    raise WorkflowPersistenceError("WORKFLOW_LEASE_LOST", "complete", workflow_run_id)
-                typed_refs = tuple(
+                refs = [
                     (
-                        f"{artifact_member_role(row['artifact_kind'])}_artifact",
-                        "ResearchArtifact",
-                        row["artifact_record_id"],
-                        row["disposition"],
+                        "evaluation_plan",
+                        "ResearchEvaluationPlan",
+                        checkpoint.record.evaluation_plan_id,
+                        "input",
+                    ),
+                    (
+                        "research_snapshot",
+                        "DataSnapshot",
+                        command.data_snapshot_id,
+                        "input",
+                    ),
+                    (
+                        "research_run",
+                        "ResearchRun",
+                        checkpoint.record.research_run_id,
+                        checkpoint.disposition.value,
+                    ),
+                    (
+                        "research_json",
+                        "Artifact",
+                        member_by_role["research_run_json"],
+                        checkpoint.disposition.value,
+                    ),
+                    (
+                        "decision_view_manifest",
+                        "ArtifactManifest",
+                        checkpoint.decision_manifest_id,
+                        "created",
+                    ),
+                    (
+                        "final_manifest",
+                        "ArtifactManifest",
+                        final_manifest,
+                        "created",
+                    ),
+                ]
+                if command.workflow_snapshot_id is not None:
+                    refs.append(
+                        (
+                            "workflow_snapshot",
+                            "DataSnapshot",
+                            command.workflow_snapshot_id,
+                            "input",
+                        )
                     )
-                    for row in self.__connection.execute(
-                        "SELECT r.artifact_record_id,r.artifact_kind,u.disposition "
-                        "FROM workflow_run_artifact_use u JOIN research_artifact_record r USING(artifact_record_id) "
-                        "WHERE u.workflow_run_id=? ORDER BY r.rowid",
-                        (workflow_run_id,),
+                for ref in refs:
+                    self.__connection.execute(
+                        "INSERT INTO workflow_run_ref VALUES(?,?,?,?,?)",
+                        (command.workflow_run_id, *ref),
                     )
+                self.__connection.execute(
+                    "INSERT INTO research_reuse_decision VALUES(?,?,?,?,?,?,?)",
+                    (
+                        command.workflow_run_id,
+                        checkpoint.record.research_run_id,
+                        checkpoint.disposition.value,
+                        "ResearchEvaluationReusePolicy@1",
+                        (
+                            "IDENTICAL_EVALUATION_INPUT"
+                            if checkpoint.disposition
+                            is ReferenceDisposition.REUSED
+                            else "EVALUATION_INPUT_CHANGED_OR_NEW"
+                        ),
+                        checkpoint.record.original_cutoff_date,
+                        0,
+                    ),
                 )
-                refs = (
-                    ("research_run", "ResearchRun", record.research_run_id, disposition.value),
-                    ("research_json", "Artifact", record.canonical_json_artifact_id, disposition.value),
-                    ("research_source_identity_html", "Artifact", record.html_artifact_id, disposition.value),
-                    *typed_refs,
-                    ("decision_view_manifest", "ArtifactManifest", decision_manifest, "created"),
-                    ("final_manifest", "ArtifactManifest", final_manifest, "created"),
+                workflow = self.__connection.execute(
+                    "UPDATE workflow_run SET status=?,completed_at=? "
+                    "WHERE workflow_run_id=? AND owner_token=? "
+                    "AND status='running'",
+                    (
+                        command.terminal_status,
+                        completed_at,
+                        command.workflow_run_id,
+                        command.owner_token,
+                    ),
                 )
-                for ref_role, ref_type, ref_id, ref_disposition in refs:
-                    self.__connection.execute("INSERT INTO workflow_run_ref VALUES(?,?,?,?,?)", (workflow_run_id, ref_role, ref_type, ref_id, ref_disposition))
-                self.__connection.execute("INSERT INTO research_reuse_decision VALUES(?,?,?,?,?,?,?,?,?)", (workflow_run_id, record.research_run_id, disposition.value, "research_input_policy@1", reason_code, record.original_cutoff_date, stale_by_days, json.dumps(list(candidate_member_ids)), json.dumps(list(market_only_member_ids))))
-                sequence = self.__connection.execute("SELECT coalesce(max(sequence_no),0)+1 FROM workflow_transition WHERE workflow_run_id=?", (workflow_run_id,)).fetchone()[0]
-                workflow = self.__connection.execute("UPDATE workflow_run SET status=?,completed_at=? WHERE workflow_run_id=? AND owner_token=? AND status='running'", (terminal_status, completed_at, workflow_run_id, owner_token))
                 if workflow.rowcount != 1:
-                    raise WorkflowPersistenceError("WORKFLOW_LEASE_LOST", "complete", workflow_run_id)
-                self.__connection.execute("INSERT INTO workflow_transition VALUES(?,?,?,?,?,?,?)", (f"transition_{uuid.uuid4().hex}", workflow_run_id, sequence, "running", terminal_status, "WORKFLOW_COMPLETED", completed_at))
-                self._fault("workflow_complete.before_commit")
+                    raise WorkflowPersistenceError(
+                        "WORKFLOW_LEASE_LOST",
+                        "complete",
+                        command.workflow_run_id,
+                    )
+                self._transition(
+                    command.workflow_run_id,
+                    "running",
+                    command.terminal_status,
+                    "WORKFLOW_COMPLETED",
+                    completed_at,
+                )
                 self.__connection.commit()
             except BaseException:
                 self.__connection.rollback()

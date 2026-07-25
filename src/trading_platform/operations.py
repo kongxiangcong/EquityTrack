@@ -25,9 +25,6 @@ from trading_platform.application.workflow_ledger import (
 )
 from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
 from trading_platform.account_import import personal_source_privacy_errors
-from trading_platform.application.research_view_cutover import (
-    CanonicalResearchDecisionViewMaterializer,
-)
 
 
 class OperationError(RuntimeError):
@@ -83,10 +80,6 @@ class PlatformOperations:
             store = PlatformStore(self.data_root, self.migrations_root)
             try:
                 store.migrations.migrate(acquire_lock=False)
-                store.workflow_ledger.cutover_research_decision_views(
-                    CanonicalResearchDecisionViewMaterializer(),
-                    acquire_lock=False
-                )
                 report = store.doctor()
                 return {"status": report.status, "data_root_scope": hashlib.sha256(str(self.data_root).encode()).hexdigest(), "checks": report.checks, "errors": report.errors}
             finally: store.close()
@@ -147,10 +140,6 @@ class PlatformOperations:
             store = PlatformStore(self.data_root, self.migrations_root)
             try:
                 store.migrations.migrate(acquire_lock=False)
-                store.workflow_ledger.cutover_research_decision_views(
-                    CanonicalResearchDecisionViewMaterializer(),
-                    acquire_lock=False
-                )
                 report = store.doctor()
                 return {"status": report.status, "errors": report.errors, "backup_ref": backup.name if database.is_file() else None}
             finally: store.close()
@@ -192,7 +181,16 @@ class PlatformOperations:
     @staticmethod
     def dependency_inventory(repo_root: Path) -> dict[str, Any]:
         repo_root = repo_root.resolve()
-        required = (repo_root / "pyproject.toml", repo_root / "requirements.lock", repo_root / "requirements-build.lock", repo_root / "web/package-lock.json", repo_root / "web/THIRD_PARTY_NOTICES.md", repo_root / "web/dist/THIRD_PARTY_NOTICES.md", repo_root / "web/index.html")
+        required = (
+            repo_root / "pyproject.toml",
+            repo_root / "requirements.lock",
+            repo_root / "requirements-build.lock",
+            repo_root / "THIRD_PARTY_NOTICES.md",
+            repo_root / "web/package-lock.json",
+            repo_root / "web/THIRD_PARTY_NOTICES.md",
+            repo_root / "web/dist/THIRD_PARTY_NOTICES.md",
+            repo_root / "web/index.html",
+        )
         missing = [path.relative_to(repo_root).as_posix() for path in required if not path.is_file()]
         if missing: raise OperationError("DEPENDENCY_INVENTORY_INCOMPLETE", ",".join(missing))
         package_lock = json.loads((repo_root / "web/package-lock.json").read_text(encoding="utf-8"))

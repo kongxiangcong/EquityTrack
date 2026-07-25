@@ -30,7 +30,7 @@ results and does not receive a root object, container, or facade.
 
 ```text
 ResearchWorkflow.handle(StartResearchWorkflow(request))
-  -> frozen ResearchProjection and DataSnapshot
+  -> immutable ResearchWorkflowRequest@2 with frozen DataSnapshot and ResearchEvaluationPlan
   -> deterministic ResearchEngine
   -> ForecastGraphIdentity@2
   -> ScenarioValuationEngine

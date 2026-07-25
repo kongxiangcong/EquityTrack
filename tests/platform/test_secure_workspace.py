@@ -212,6 +212,7 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(
         "golden:benchmark",
         SecurityIdentity("security_benchmark", "SZSE", "000300", "CNY", "2010-01-01"),
     )
+    root.faults.record_official_filing_workflow_snapshot()
     original = root.research.handle(
         StartResearchWorkflow(research_request("golden:research:2026-07-07"))
     )
@@ -219,20 +220,9 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(
 
     root = sync_root(tmp_path)
     sync = root.data.sync(sync_request("golden:sync:2026-07-11"))
-    member_ids = tuple(
-        item.normalized_version_id
-        for item in root.data.snapshot_members(sync.snapshot_id)
-    )
     research = root.research.handle(
         StartResearchWorkflow(
-            research_request(
-                "golden:outer-workflow:2026-07-11",
-                requested_date="2026-07-11",
-                effective_session_date="2026-07-10",
-                workflow_snapshot_id=sync.snapshot_id,
-                candidate_member_ids=member_ids,
-                market_only_member_ids=member_ids,
-            )
+            research_request("golden:outer-workflow:2026-07-11")
         )
     )
     assert research.research_run_id == original.research_run_id
@@ -241,8 +231,8 @@ def test_connected_golden_journey_records_one_graph_on_one_data_root(
     assert research.html_artifact_id != original.html_artifact_id
     assert (
         research.disposition.value == "reused"
-        and research.reason_code == "ROUTINE_MARKET_ONLY_INPUTS"
-        and research.stale_by_days == 3
+        and research.reason_code == "IDENTICAL_EVALUATION_INPUT"
+        and research.stale_by_days == 0
     )
     annotation_input = replace(
         annotation_draft(),

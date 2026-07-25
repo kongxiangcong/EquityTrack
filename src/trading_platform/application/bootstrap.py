@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
 
-from equity_research import ResearchEngine
 from trading_platform.account import AccountOpeningService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.account_history import AccountHistoryImportService
@@ -27,7 +26,6 @@ from trading_platform.operations import OperationError
 from trading_platform.provider_config import ProviderRuntimeAdapter, load_sync_job
 from trading_platform.provider_qualification import ProviderQualificationService
 from trading_platform.credentials import CredentialAdapter
-from trading_platform.research import SnapshotToResearchRequestAssembler
 from trading_platform.workflows.research import ResearchWorkflow
 from trading_platform.verification import (
     ProjectVerification,
@@ -38,7 +36,7 @@ from .cli_tasks import DailyResearchCycle, DataSynchronization
 from .health import Health
 from .watchlist import Watchlist
 from .research_tasks import ResearchArchive, WorkflowInspection
-from .workflow_ledger import QualificationReceiptQuery, ResearchViewCutoverCompleteQuery, WorkflowLedgerPort
+from .workflow_ledger import QualificationReceiptQuery, WorkflowLedgerPort
 from .web_tasks import (
     ChartAnnotations,
     ChartWorkspace,
@@ -73,11 +71,6 @@ def _store(
         if len(files) != len(applied):
             raise OperationError(
                 "PLATFORM_MIGRATION_REQUIRED",
-                "Run the canonical migrate maintenance task first.",
-            )
-        if not _ledger(store).load(ResearchViewCutoverCompleteQuery()):
-            raise OperationError(
-                "RESEARCH_VIEW_CUTOVER_INCOMPLETE",
                 "Run the canonical migrate maintenance task first.",
             )
         yield store
@@ -196,8 +189,6 @@ def open_daily_research_cycle(
         )
         research = ResearchWorkflow(
             _ledger(store),
-            ResearchEngine(),
-            SnapshotToResearchRequestAssembler(),
             _repo_root(),
         )
         plans = PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
@@ -225,15 +216,12 @@ def open_research_workflow(
     data_root: Path,
     *,
     migrations_root: Path | None = None,
-    research_engine: ResearchEngine | None = None,
     fault_injector=None,
 ) -> Iterator[ResearchWorkflow]:
     with _store(data_root, migrations_root) as store:
         store.workflow_ledger.fault_injector = fault_injector
         yield ResearchWorkflow(
             _ledger(store),
-            research_engine or ResearchEngine(),
-            SnapshotToResearchRequestAssembler(),
             _repo_root(),
             fault_injector,
         )
@@ -316,12 +304,9 @@ def open_browser_acceptance_fixture(
             DataSyncService(repository, provider, query_policy, source_policy, rights),
             ResearchWorkflow(
                 ledger,
-                ResearchEngine(),
-                SnapshotToResearchRequestAssembler(),
                 repo_root,
             ),
             PlanService(SQLitePlanRepository(store.connection, store.writer_lock)),
-            repo_root,
         )
 
 

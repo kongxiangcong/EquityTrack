@@ -23,6 +23,7 @@ from tests.platform.test_research_workflow import _request as research_request
 
 def _root(path: Path):
     root = chart_root(path)
+    root.faults.record_official_filing_workflow_snapshot()
     research = root.research.handle(
         StartResearchWorkflow(research_request("plan:research"))
     )
