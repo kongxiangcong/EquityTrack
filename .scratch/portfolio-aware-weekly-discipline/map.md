@@ -29,11 +29,11 @@ Status: `open`
 - [决定收盘后评估与下一交易日窗口语义](issues/03-decide-daily-close-decision-window.md) — 只用截至 PIT cutoff 已完整可用的数据冻结当日快照；周末/节假日按版本化交易日历回退，但开放日数据缺失、停牌/涨跌停、T+1、复权或公司行动冲突必须显式阻断或降级，决不把日线信号回填成同收盘价成交。
 - [资格化 MarketRegime v2 的数据与最小组件](issues/05-qualify-market-regime-v2-data.md) — 最小目标包固定 A 股-only `930903.CSI` 中证 A 股指数的趋势/波动率，并按逐 session PIT 成分计算宽度/流动性且不合成黑箱分；runtime 仍以 typed `instrument_type=A_SHARE` fail closed。当前单证券 receipt 和 legal-empty constituent probe 不足以证明这些输入，planning disposition 为 `blocked_data_qualification`，行业轮动与资金流第一版 disabled。
 - [决定持仓研究与条件估值的计划门控](issues/06-decide-holding-research-readiness-gates.md) — 每个计划版本精确冻结 View/Run/Snapshot/readiness identity，研究 readiness 再按 company/Forecast/valuation/technical/events 逐维度、逐规则 fail closed；未请求/未实现为 `unknown -> unable`，已请求却缺 required artifact 或发生已知 gate failure 为 `blocked -> blocked`。当前 company/Forecast/valuation blocked，technical/events unknown，文本只能人工复核；独立价格、账户与历史能力不受连带阻断。
+- [决定组合风险政策与行为纪律边界](issues/04-decide-risk-policy-and-behavior-guardrails.md) — 冻结账户级敞口、现金、损失预算、回撤、流动性和事件硬门禁，并以不可变政策版本、冷静期、显式行动日志和不可绕过硬边界的限时例外保持用户控制与审计历史。
 
 ## Not yet specified
 
 - 在 Provider 资格和行业分类来源确定前，跨持仓相关性、行业集中度和风格暴露应采用何种最小可审计方法仍处于 fog。
-- 当前唯一 frontier 是 HITL [决定组合风险政策与行为纪律边界](issues/04-decide-risk-policy-and-behavior-guardrails.md)。必须由用户亲自选择风险偏好；Agent 不得代答。它关闭后才可进入任务优先驾驶舱原型与计划指标目录。
 
 ## Out of scope
 
