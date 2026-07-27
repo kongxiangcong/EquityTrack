@@ -14,14 +14,6 @@ from trading_platform.application.contracts import (
 from trading_platform.data.service import DataSyncService
 from trading_platform.data.providers import FixtureProvider
 from trading_platform.domain.data import CompletenessRequirement, FallbackMode, FixtureRights, QueryPolicy, SnapshotPurpose, SourceAuthority, SourceFailureDisposition, SourcePolicy, SourceRights, SourceRoute, SyncRequest
-from trading_platform.domain.plans import (
-    CreatePlanDraftCommand,
-    PlanCondition,
-    PlanConstant,
-    PlanDraftContent,
-    PlanReference,
-    PlanRule,
-)
 from trading_platform.domain.research_evaluation import (
     EvaluationDimension,
     EvaluationHorizon,
@@ -30,7 +22,6 @@ from trading_platform.domain.research_evaluation import (
     ResearchWorkflowRequest,
     StrategyValidationSelection,
 )
-from trading_platform.plans import PlanService
 from trading_platform.workflows.research import ResearchWorkflow
 
 from .watchlist import Watchlist
@@ -42,7 +33,6 @@ class BrowserAcceptanceFixtureResult:
     snapshot_id: str
     workflow_run_id: str
     research_run_id: str
-    plan_draft_id: str
 
 
 class BrowserAcceptanceFixture:
@@ -53,12 +43,10 @@ class BrowserAcceptanceFixture:
         watchlist: Watchlist,
         data: DataSyncService,
         research: ResearchWorkflow,
-        plans: PlanService,
     ) -> None:
         self._watchlist = watchlist
         self._data = data
         self._research = research
-        self._plans = plans
 
     def prepare(self) -> BrowserAcceptanceFixtureResult:
         security_id = "security_yihua"
@@ -116,61 +104,11 @@ class BrowserAcceptanceFixture:
                 )
             )
         )
-        plan = self._plans.create_draft(
-            CreatePlanDraftCommand(
-                "browser-acceptance:plan-draft",
-                PlanDraftContent(
-                    security_id=security_id,
-                    based_on_version_id=None,
-                    references=(
-                        PlanReference("ResearchRun", research.research_run_id),
-                        PlanReference(
-                            "Evidence",
-                            "browser-acceptance:fixture",
-                            "unresolved_external",
-                        ),
-                    ),
-                    data_snapshot_id=snapshot.snapshot_id,
-                    horizon_start="2026-07-11",
-                    horizon_end="2026-10-11",
-                    review_by="2026-08-11",
-                    rules=(
-                        PlanRule(
-                            "browser_acceptance_review",
-                            "entry_review",
-                            "prompt_review",
-                            "entry",
-                            PlanCondition(
-                                "leaf",
-                                "security.close_unadjusted",
-                                "lte",
-                                PlanConstant(
-                                    "decimal",
-                                    "82.33",
-                                    "CNY_per_share",
-                                    "CNY",
-                                ),
-                                "current_complete_session",
-                            ),
-                        ),
-                    ),
-                    max_planned_notional="10000",
-                    max_planned_loss="500",
-                    currency="CNY",
-                    market_gate_policy_version="market-gate@1",
-                    metric_catalog_version="metric-catalog@1",
-                    evaluator_policy_version="plan-evaluator@1",
-                    user_input_source="user_fixture_input",
-                    rationale="用户声明的验收规则，仅用于验证计划确认流程，不构成投资建议。",
-                ),
-            )
-        )
         return BrowserAcceptanceFixtureResult(
             security_id,
             snapshot.snapshot_id,
             research.workflow_run_id,
             research.research_run_id,
-            plan.draft_id,
         )
 
     @staticmethod

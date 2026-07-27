@@ -77,8 +77,7 @@ class AcceptanceEvidenceService:
     }
     SUITE_PLAN = {
         "domain": (
-            "tests/platform/test_market_evaluation.py",
-            "tests/platform/test_trade_plans.py",
+            "tests/platform/test_trade_plan_model_b.py",
         ),
         "provider_contract": ("tests/platform/test_data_sync_pit.py",),
         "persistence_migration": (

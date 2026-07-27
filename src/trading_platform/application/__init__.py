@@ -16,6 +16,14 @@ if TYPE_CHECKING:
         GetStrategyVersion,
         StrategyQueries,
     )
+    from .trade_plan_authoring import (
+        ActivateTradePlanVersion,
+        CreateTradePlanMaster,
+        GetActiveTradePlan,
+        GetTradePlanGraph,
+        SealTradePlanGraph,
+        TradePlanTasks,
+    )
     from .account_snapshots import (
         AccountSnapshotCommands,
         AccountSnapshotQueries,
@@ -75,7 +83,6 @@ if TYPE_CHECKING:
         ChartAnnotations,
         ChartWorkspace,
         DecisionWorkspace,
-        PlanConfirmation,
         UpdateAuthorizations,
         WorkspaceUpdateCommand,
     )
@@ -87,6 +94,12 @@ _EXPORT_MODULES = {
     "GetStrategyCatalog": ".strategy_catalog",
     "GetStrategyVersion": ".strategy_catalog",
     "StrategyQueries": ".strategy_catalog",
+    "ActivateTradePlanVersion": ".trade_plan_authoring",
+    "CreateTradePlanMaster": ".trade_plan_authoring",
+    "GetActiveTradePlan": ".trade_plan_authoring",
+    "GetTradePlanGraph": ".trade_plan_authoring",
+    "SealTradePlanGraph": ".trade_plan_authoring",
+    "TradePlanTasks": ".trade_plan_authoring",
     "AccountSnapshotCommands": ".account_snapshots",
     "AccountSnapshotQueries": ".account_snapshots",
     "ConfirmAccountSnapshot": ".account_snapshots",
@@ -105,7 +118,6 @@ _EXPORT_MODULES = {
     "SecurityIdentity": ".contracts",
     "StartResearchWorkflow": ".contracts",
     "DecisionWorkspace": ".web_tasks",
-    "PlanConfirmation": ".web_tasks",
     "UpdateAuthorizations": ".web_tasks",
     "WorkspaceUpdateCommand": ".web_tasks",
     "decode_market_snapshot_command": ".command_codecs",

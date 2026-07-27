@@ -72,10 +72,6 @@ class _ChartAnnotations:
         return ()
 
 
-class _TradePlan:
-    pass
-
-
 class _UpdateAuthorizations:
     pass
 
@@ -91,7 +87,6 @@ def test_web_annotation_route_invokes_one_typed_lifecycle_task(
         decision_workspace=_DecisionWorkspace(),
         chart_workspace=_ChartWorkspace(),
         chart_annotations=annotations,
-        trade_plan=_TradePlan(),
         update_authorizations=_UpdateAuthorizations(),
         web_root=web_root,
         security_id="security_yihua",
@@ -133,7 +128,7 @@ def test_web_annotation_route_invokes_one_typed_lifecycle_task(
     assert annotations.commands[0].operation == "create"
 
 
-def test_public_browser_fixture_prepares_decision_and_plan_journeys(
+def test_public_browser_fixture_prepares_decision_journey(
     tmp_path: Path,
 ) -> None:
     open_platform_operations(tmp_path).bootstrap()
@@ -150,10 +145,9 @@ def test_public_browser_fixture_prepares_decision_and_plan_journeys(
     with open_decision_workspace(tmp_path) as workspace:
         projected = workspace.build(prepared.security_id, prepared.snapshot_id)
 
-    assert prepared.plan_draft_id
     assert projected["research_views"][0]["schema_version"] == "ResearchDecisionView@2"
     assert projected["research_views"][0]["workflow_run_id"] == prepared.workflow_run_id
-    assert projected["plan_drafts"][0]["draft_id"] == prepared.plan_draft_id
+    assert projected["plan_drafts"] == []
 
 
 def test_browser_fixture_has_no_caller_authored_research_artifact_surface() -> None:

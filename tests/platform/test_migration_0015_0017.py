@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import sqlite3
 from pathlib import Path
@@ -371,7 +372,7 @@ def test_strategy_plan_0016_installs_full_cohort_schema_idempotently(
     store.close()
 
 
-def test_strategy_plan_0016_preflight_blocks_unmapped_active_legacy_plan(
+def test_active_legacy_plan_requires_explicit_sleeve_mapping(
     tmp_path: Path,
 ) -> None:
     data_root, _ = _legacy_root(tmp_path)
@@ -400,6 +401,234 @@ def test_strategy_plan_0016_preflight_blocks_unmapped_active_legacy_plan(
     after = tuple(blocked.connection.iterdump())
     blocked.close()
     assert after == before
+
+
+def test_legacy_plan_without_exact_account_owner_blocks_0016(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    prior.connection.execute(
+        "DELETE FROM plan_account_snapshot_reference "
+        "WHERE plan_version_id='plan_version_legacy'"
+    )
+    prior.connection.commit()
+    before = tuple(prior.connection.iterdump())
+    prior.close()
+
+    blocked = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        blocked.migrate()
+    assert failure.value.code == "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+    assert tuple(blocked.connection.iterdump()) == before
+    blocked.close()
+
+
+def test_duplicate_active_legacy_ownership_blocks_0016(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    prior.connection.execute(
+        "UPDATE trade_plan SET lifecycle_status='active' "
+        "WHERE plan_id='plan_legacy'"
+    )
+    prior.connection.execute(
+        "INSERT INTO trade_plan SELECT 'plan_legacy_2',security_id,"
+        "'active',transition_seq,created_at FROM trade_plan "
+        "WHERE plan_id='plan_legacy'"
+    )
+    prior.connection.execute(
+            "INSERT INTO trade_plan_version SELECT 'plan_version_legacy_2',"
+            "'plan_legacy_2',version_no,supersedes_version_id,security_id,"
+            "based_on_version_id,data_snapshot_id,horizon_start,"
+            "horizon_end,review_by,market_gate_policy_version,"
+            "metric_catalog_version,evaluator_policy_version,user_input_source,"
+            "content_json,'plan-content-legacy-2',confirmed_at,"
+        "'plan-confirm-legacy-2' FROM trade_plan_version "
+        "WHERE plan_version_id='plan_version_legacy'"
+    )
+    prior.connection.execute(
+        "INSERT INTO plan_account_snapshot_reference SELECT "
+        "'plan_version_legacy_2',snapshot_type,snapshot_id,account_id,"
+        "snapshot_as_of,reconciliation_status,context_json,"
+        "'context-hash-legacy-2' FROM plan_account_snapshot_reference "
+        "WHERE plan_version_id='plan_version_legacy'"
+    )
+    prior.connection.commit()
+    before = tuple(prior.connection.iterdump())
+    prior.close()
+
+    sleeve = {
+        "sleeve_id": "legacy_core",
+        "sleeve_kind": "core",
+        "quantity_budget_state": "unknown",
+        "quantity_budget_value": None,
+        "core_floor_state": "known",
+        "core_floor_value": "0",
+        "max_notional_state": "unknown",
+        "max_notional_value": None,
+        "max_loss_state": "unknown",
+        "max_loss_value": None,
+    }
+    mapping = {
+        "schema_version": "LegacySleeveMapping@1",
+        "approved_by": "user:synthetic-migration-reviewer",
+        "approved_at": "2026-07-27T00:00:00+08:00",
+        "plans": [
+            {
+                "plan_id": plan_id,
+                "strategy_version_id": (
+                    "strategy_version_trend_hold_break_exit_1"
+                ),
+                "sleeves": [sleeve],
+                "rule_scopes": {},
+            }
+            for plan_id in ("plan_legacy", "plan_legacy_2")
+        ],
+    }
+    mapping_dir = data_root / "migration-inputs"
+    mapping_dir.mkdir()
+    (mapping_dir / "0016-legacy-sleeve-mapping.json").write_text(
+        json.dumps(
+            mapping,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        blocked.migrate()
+    assert failure.value.code == "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+    assert tuple(blocked.connection.iterdump()) == before
+    blocked.close()
+
+
+def test_inactive_legacy_plan_content_is_byte_preserved_by_0016(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    original = '{"说明":"保留空格", "nested":{"value":"001.00"}}'
+    prior.connection.execute("DROP TRIGGER trade_plan_version_no_update")
+    prior.connection.execute(
+        "UPDATE trade_plan_version SET content_json=?,content_hash=? "
+        "WHERE plan_version_id='plan_version_legacy'",
+        (original, "byte-preserved-content-hash"),
+    )
+    prior.connection.commit()
+    prior.close()
+
+    upgraded = PlatformStore(data_root, ROOT / "migrations")
+    upgraded.migrate()
+    migrated = upgraded.connection.execute(
+        "SELECT content_json,content_hash,legacy_read_only "
+        "FROM trade_plan_version "
+        "WHERE plan_version_id='plan_version_legacy'"
+    ).fetchone()
+    assert tuple(migrated) == (
+        original,
+        "byte-preserved-content-hash",
+        1,
+    )
+    upgraded.close()
+
+
+def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    prior.connection.execute(
+        "UPDATE trade_plan SET lifecycle_status='active' "
+        "WHERE plan_id='plan_legacy'"
+    )
+    original_content = prior.connection.execute(
+        "SELECT content_json FROM trade_plan_version "
+        "WHERE plan_version_id='plan_version_legacy'"
+    ).fetchone()[0]
+    prior.connection.commit()
+    prior.close()
+    mapping = {
+        "schema_version": "LegacySleeveMapping@1",
+        "approved_by": "user:synthetic-migration-reviewer",
+        "approved_at": "2026-07-27T00:00:00+08:00",
+        "plans": [
+            {
+                "plan_id": "plan_legacy",
+                "strategy_version_id": (
+                    "strategy_version_trend_hold_break_exit_1"
+                ),
+                "sleeves": [
+                    {
+                        "sleeve_id": "legacy_core",
+                        "sleeve_kind": "core",
+                        "quantity_budget_state": "unknown",
+                        "quantity_budget_value": None,
+                        "core_floor_state": "known",
+                        "core_floor_value": "0",
+                        "max_notional_state": "unknown",
+                        "max_notional_value": None,
+                        "max_loss_state": "unknown",
+                        "max_loss_value": None,
+                    }
+                ],
+                "rule_scopes": {},
+            }
+        ],
+    }
+    mapping_path = data_root / "migration-inputs"
+    mapping_path.mkdir()
+    artifact = mapping_path / "0016-legacy-sleeve-mapping.json"
+    artifact.write_text(
+        json.dumps(
+            mapping,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    upgraded = PlatformStore(data_root, ROOT / "migrations")
+    upgraded.migrate()
+    assert tuple(
+        upgraded.connection.execute(
+            "SELECT account_id,security_id,lifecycle_status,legacy_read_only "
+            "FROM trade_plan_master WHERE plan_id='plan_legacy'"
+        ).fetchone()
+    ) == ("account_legacy", "security_legacy", "active", 0)
+    assert upgraded.connection.execute(
+        "SELECT content_json FROM trade_plan_version "
+        "WHERE plan_version_id='plan_version_legacy'"
+    ).fetchone()[0] == original_content
+    assert tuple(
+        upgraded.connection.execute(
+            "SELECT sleeve_kind,core_floor_state,core_floor_value "
+            "FROM trade_plan_sleeve "
+            "WHERE plan_version_id='plan_version_legacy'"
+        ).fetchone()
+    ) == ("core", "known", "0")
+    assert upgraded.connection.execute(
+        "SELECT count(*) FROM plan_activation "
+        "WHERE plan_id='plan_legacy' AND ended_at IS NULL"
+    ).fetchone()[0] == 1
+    assert upgraded.connection.execute(
+        "SELECT mapping_artifact_hash "
+        "FROM strategy_plan_migration_manifest"
+    ).fetchone()[0] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    upgraded.close()
 
 
 def test_strategy_plan_0016_rolls_back_and_replays_after_injected_failure(

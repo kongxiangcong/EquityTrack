@@ -328,28 +328,91 @@ CREATE TABLE strategy_plan_migration_manifest (
 );
 
 INSERT INTO trade_plan_master
-SELECT p.plan_id,r.account_id,p.security_id,NULL,'legacy_read_only',
-       p.transition_seq,p.created_at,1
+SELECT p.plan_id,r.account_id,p.security_id,m.strategy_version_id,
+       CASE WHEN m.plan_id IS NULL THEN 'legacy_read_only' ELSE 'active' END,
+       p.transition_seq + CASE WHEN m.plan_id IS NULL THEN 0 ELSE 1 END,
+       p.created_at,CASE WHEN m.plan_id IS NULL THEN 1 ELSE 0 END
 FROM trade_plan_legacy_0016 p
 JOIN (
   SELECT v.plan_id,min(r.account_id) AS account_id
   FROM trade_plan_version_legacy_0016 v
   JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
   GROUP BY v.plan_id
-) r USING(plan_id);
+) r USING(plan_id)
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id);
+
+INSERT INTO trade_plan_draft
+SELECT
+  'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  m.plan_id,r.account_id,p.security_id,m.strategy_version_id,NULL,1,'confirmed',
+  '{}',v.content_json,v.content_hash,v.confirmed_at,v.confirmed_at,
+  meta.approved_by,'migration','system:migration-0016'
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_legacy_0016 p USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
+JOIN migration_0016_mapping_meta meta
+GROUP BY m.plan_id;
+
+INSERT INTO plan_confirmation_challenge
+SELECT
+  'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  'PlanConfirmationChallenge@1',m.plan_id,
+  'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  1,v.content_hash,
+  '{"migration":"0016","legacy_mapping":"explicit"}',
+  canonical_sha256('0016-diff:' || m.plan_id || ':' || v.content_hash),
+  '["confirm_and_enable"]',
+  meta.approved_by,'migration','system:migration-0016',
+  meta.approved_at,meta.approved_at,meta.approved_at,
+  'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  canonical_sha256('0016-challenge:' || m.plan_id || ':' || v.content_hash || ':' || meta.artifact_hash)
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_mapping_meta meta
+GROUP BY m.plan_id;
+
+INSERT INTO user_approval_receipt
+SELECT
+  'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  'UserApprovalReceipt@1',
+  'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  m.plan_id,
+  'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  1,v.content_hash,
+  canonical_sha256('0016-diff:' || m.plan_id || ':' || v.content_hash),
+  'confirm_and_enable',
+  meta.approved_by,'migration','system:migration-0016',
+  'migration-0016:approve:' || m.plan_id,meta.approved_at,
+  canonical_sha256('0016-receipt:' || m.plan_id || ':' || v.content_hash || ':' || meta.artifact_hash)
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_mapping_meta meta
+GROUP BY m.plan_id;
 
 INSERT INTO trade_plan_version
 SELECT v.plan_version_id,v.plan_id,v.version_no,v.supersedes_version_id,
-       NULL,NULL,r.snapshot_id,v.data_snapshot_id,v.horizon_start,v.horizon_end,
+       m.strategy_version_id,NULL,r.snapshot_id,v.data_snapshot_id,
+       v.horizon_start,v.horizon_end,
        v.review_by,v.market_gate_policy_version,v.metric_catalog_version,
-       v.evaluator_policy_version,'legacy_read_only',
-       coalesce(c.ast_version,'plan-condition-ast@1'),
+       v.evaluator_policy_version,
+       CASE WHEN m.plan_id IS NULL THEN 'legacy_read_only' ELSE 'trade-plan-conflict@1' END,
+       CASE WHEN m.plan_id IS NULL THEN coalesce(c.ast_version,'plan-condition-ast@1') ELSE 'plan-rule-ast@2' END,
        v.content_json,v.content_hash,
-       canonical_sha256('0016-legacy-graph:' || v.plan_version_id || ':' || v.content_hash),
-       1,v.confirmed_at,NULL,1
+       canonical_sha256(
+         '0016-graph:' || v.plan_version_id || ':' || v.content_hash || ':'
+         || coalesce(meta.artifact_hash,'legacy-read-only')
+       ),
+       1,v.confirmed_at,
+       CASE WHEN m.plan_id IS NULL THEN NULL
+            ELSE 'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24)
+       END,
+       CASE WHEN m.plan_id IS NULL THEN 1 ELSE 0 END
 FROM trade_plan_version_legacy_0016 v
 JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
 LEFT JOIN plan_rule_condition_legacy_0016 c USING(plan_version_id)
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id)
+LEFT JOIN migration_0016_mapping_meta meta
 GROUP BY v.plan_version_id;
 
 INSERT INTO trade_plan_sleeve
@@ -361,14 +424,44 @@ SELECT v.plan_version_id,'legacy_unsleeved','legacy_unsleeved',
        k.max_planned_loss_decimal,NULL,
        canonical_sha256('0016-legacy-sleeve:' || v.plan_version_id || ':' || v.content_hash)
 FROM trade_plan_version_legacy_0016 v
-LEFT JOIN plan_risk_constraint_legacy_0016 k USING(plan_version_id);
+LEFT JOIN plan_risk_constraint_legacy_0016 k USING(plan_version_id)
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id)
+WHERE m.plan_id IS NULL;
+
+INSERT INTO trade_plan_sleeve
+SELECT
+  v.plan_version_id,
+  json_extract(s.value,'$.sleeve_id'),
+  json_extract(s.value,'$.sleeve_kind'),
+  json_extract(s.value,'$.quantity_budget_state'),
+  json_extract(s.value,'$.quantity_budget_value'),
+  json_extract(s.value,'$.core_floor_state'),
+  json_extract(s.value,'$.core_floor_value'),
+  json_extract(s.value,'$.max_notional_state'),
+  json_extract(s.value,'$.max_notional_value'),
+  json_extract(s.value,'$.max_loss_state'),
+  json_extract(s.value,'$.max_loss_value'),
+  NULL,
+  canonical_sha256(
+    '0016-mapped-sleeve:' || v.plan_version_id || ':' || s.value
+  )
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN json_each(m.sleeves_json) s;
 
 INSERT INTO trade_plan_rule
-SELECT r.plan_version_id,r.rule_no,r.rule_id,'legacy_read_only',
-       r.rule_kind,'legacy_unsleeved',c.ast_version,c.condition_json,NULL,
+SELECT r.plan_version_id,r.rule_no,r.rule_id,
+       CASE WHEN m.plan_id IS NULL THEN 'legacy_read_only' ELSE 'hard' END,
+       r.rule_kind,
+       CASE WHEN m.plan_id IS NULL THEN 'legacy_unsleeved'
+            ELSE json_extract(m.rule_scopes_json,'$.' || r.rule_id) END,
+       CASE WHEN m.plan_id IS NULL THEN c.ast_version ELSE 'plan-rule-ast@2' END,
+       c.condition_json,NULL,
        canonical_sha256('0016-legacy-rule:' || r.plan_version_id || ':' || r.rule_id || ':' || c.condition_hash)
 FROM plan_rule_legacy_0016 r
-JOIN plan_rule_condition_legacy_0016 c USING(plan_version_id,rule_no);
+JOIN plan_rule_condition_legacy_0016 c USING(plan_version_id,rule_no)
+JOIN trade_plan_version_legacy_0016 v USING(plan_version_id)
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id);
 
 INSERT INTO trade_plan_evidence_reference
 SELECT plan_version_id,ref_no,ref_type,ref_id,resolution_status,
@@ -386,13 +479,36 @@ INSERT INTO plan_account_snapshot_reference
 SELECT * FROM plan_account_snapshot_reference_legacy_0016;
 
 INSERT INTO plan_activation
-SELECT activation_id,plan_id,plan_version_id,
-       'legacy-activation:' || activation_id,started_at,
-       CASE WHEN ended_at IS NULL THEN NULL ELSE 'legacy-end:' || activation_id END,
-       ended_at,
-       CASE WHEN ended_at IS NULL THEN NULL ELSE 'legacy_ended' END,
-       NULL,activation_invocation_id
-FROM plan_activation_legacy_0016;
+SELECT a.activation_id,a.plan_id,a.plan_version_id,
+       'legacy-activation:' || a.activation_id,a.started_at,
+       CASE WHEN a.ended_at IS NULL THEN NULL ELSE 'legacy-end:' || a.activation_id END,
+       a.ended_at,
+       CASE WHEN a.ended_at IS NULL THEN NULL ELSE 'legacy_ended' END,
+       CASE
+         WHEN a.ended_at IS NULL AND m.plan_id IS NOT NULL
+         THEN 'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24)
+         ELSE NULL
+       END,
+       a.activation_invocation_id
+FROM plan_activation_legacy_0016 a
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id);
+
+INSERT INTO plan_activation
+SELECT
+  'plan_activation_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  m.plan_id,v.plan_version_id,
+  'application_event_migration_activation_' || substr(canonical_sha256(m.plan_id),1,24),
+  meta.approved_at,NULL,NULL,NULL,
+  'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  'migration-0016:activate:' || m.plan_id
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_mapping_meta meta
+WHERE NOT EXISTS(
+  SELECT 1 FROM plan_activation_legacy_0016 a
+  WHERE a.plan_id=m.plan_id AND a.ended_at IS NULL
+)
+GROUP BY m.plan_id;
 
 INSERT INTO trade_plan_transition
 SELECT
@@ -402,16 +518,29 @@ SELECT
   canonical_sha256('0016-transition:' || plan_id || ':' || transition_seq || ':' || coalesce(plan_version_id,''))
 FROM trade_plan_transition_legacy_0016;
 
+INSERT INTO trade_plan_transition
+SELECT
+  'trade_plan_transition_migration_' || substr(canonical_sha256(m.plan_id),1,24),
+  m.plan_id,p.transition_seq+1,p.lifecycle_status,'active',v.plan_version_id,
+  'explicit_legacy_mapping_activated',
+  'migration-0016:activate:' || m.plan_id,meta.approved_at,
+  canonical_sha256('0016-mapped-transition:' || m.plan_id || ':' || meta.artifact_hash)
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_legacy_0016 p USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_mapping_meta meta
+GROUP BY m.plan_id;
+
 INSERT INTO strategy_plan_migration_manifest
 SELECT
   'strategy_plan_migration_manifest_0016',
   (SELECT count(*) FROM trade_plan_legacy_0016),
   (SELECT count(*) FROM trade_plan_version_legacy_0016),
-  canonical_sha256('0016:no-active-legacy-mappings'),
+  (SELECT artifact_hash FROM migration_0016_mapping_meta),
   canonical_sha256(
     '0016:' || (SELECT count(*) FROM trade_plan_legacy_0016) || ':'
     || (SELECT count(*) FROM trade_plan_version_legacy_0016) || ':'
-    || canonical_sha256('0016:no-active-legacy-mappings')
+    || (SELECT artifact_hash FROM migration_0016_mapping_meta)
   ),
   '2026-07-27T00:00:00+08:00';
 
@@ -426,6 +555,8 @@ DROP TABLE plan_rule_legacy_0016;
 DROP TABLE trade_plan_draft_legacy_0016;
 DROP TABLE trade_plan_version_legacy_0016;
 DROP TABLE trade_plan_legacy_0016;
+DROP TABLE migration_0016_legacy_mapping;
+DROP TABLE migration_0016_mapping_meta;
 
 CREATE TRIGGER investment_thesis_version_no_update BEFORE UPDATE ON investment_thesis_version
 BEGIN SELECT RAISE(ABORT,'INVESTMENT_THESIS_VERSION_IMMUTABLE'); END;
@@ -450,7 +581,30 @@ CREATE TRIGGER trade_plan_draft_closed_no_delete BEFORE DELETE ON trade_plan_dra
 WHEN OLD.status<>'open'
 BEGIN SELECT RAISE(ABORT,'TRADE_PLAN_DRAFT_CLOSED'); END;
 CREATE TRIGGER trade_plan_version_sealed_update BEFORE UPDATE ON trade_plan_version
-WHEN OLD.graph_sealed=1 OR NEW.graph_sealed<>1
+WHEN OLD.graph_sealed=1 OR NEW.graph_sealed<>1 OR NOT (
+  OLD.plan_version_id IS NEW.plan_version_id
+  AND OLD.plan_id IS NEW.plan_id
+  AND OLD.version_no IS NEW.version_no
+  AND OLD.supersedes_version_id IS NEW.supersedes_version_id
+  AND OLD.strategy_version_id IS NEW.strategy_version_id
+  AND OLD.investment_thesis_version_id IS NEW.investment_thesis_version_id
+  AND OLD.account_snapshot_version_id IS NEW.account_snapshot_version_id
+  AND OLD.data_snapshot_id IS NEW.data_snapshot_id
+  AND OLD.horizon_start IS NEW.horizon_start
+  AND OLD.horizon_end IS NEW.horizon_end
+  AND OLD.review_by IS NEW.review_by
+  AND OLD.risk_policy_version_id IS NEW.risk_policy_version_id
+  AND OLD.metric_catalog_version IS NEW.metric_catalog_version
+  AND OLD.evaluator_policy_version IS NEW.evaluator_policy_version
+  AND OLD.conflict_policy_version IS NEW.conflict_policy_version
+  AND OLD.ast_version IS NEW.ast_version
+  AND OLD.content_json IS NEW.content_json
+  AND OLD.content_hash IS NEW.content_hash
+  AND OLD.graph_seal_hash IS NEW.graph_seal_hash
+  AND OLD.confirmed_at IS NEW.confirmed_at
+  AND OLD.user_approval_receipt_id IS NEW.user_approval_receipt_id
+  AND OLD.legacy_read_only IS NEW.legacy_read_only
+)
 BEGIN SELECT RAISE(ABORT,'TRADE_PLAN_GRAPH_IMMUTABLE'); END;
 CREATE TRIGGER trade_plan_version_no_delete BEFORE DELETE ON trade_plan_version
 BEGIN SELECT RAISE(ABORT,'TRADE_PLAN_GRAPH_IMMUTABLE'); END;

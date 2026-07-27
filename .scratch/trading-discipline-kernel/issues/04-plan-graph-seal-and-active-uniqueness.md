@@ -1,6 +1,6 @@
 # 04 — Plan graph seal and active uniqueness
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 03
@@ -42,3 +42,45 @@ Sleeve rule semantics, AST@2, Skill challenges, manual review, or Web views.
 ## One-way cutover
 
 Delete the old `get_active_for_security` semantics, `user_fixture_input` runtime discriminator, and mutable child path. Do not add a legacy query fallback or synthesize sleeve classification.
+
+## Claim record
+
+- External seams: the complete plan authoring/activation application task,
+  SQLite transaction and graph-seal adapter, explicit
+  `LegacySleeveMapping@1` preflight artifact, plan evaluation/history foreign
+  keys, and callers in Web tasks, workspace, market evaluation, tests, and
+  synthetic fixtures.
+- Deep-module ownership: `domain/plans.py` owns draft/version/graph,
+  activation, seal, and lifecycle invariants; `application/trade_plan_authoring.py`
+  owns complete plan tasks; `SQLiteTradePlanRepository` owns atomic graph
+  persistence, storage uniqueness, immutable reconstruction, and activation
+  transitions; migration 0016 owns lossless legacy conversion and mapping
+  enforcement.
+- Old paths to replace: `PlanService`, `SQLitePlanRepository`,
+  `get_active_for_security`, security-only ownership, latest-row selection,
+  plan-ID-only confirmation, mutable child insertion, and
+  `user_fixture_input` as a runtime discriminator.
+- Superseded artifacts to delete: the old plan command/view aggregate,
+  private-seam tests and fixtures, old repository methods, old confirmation
+  forwarding calls, retired SQL column reads, and any legacy mapping guess.
+  Historical legacy content survives only as sealed
+  `legacy_unsleeved` reconstruction or an explicitly user-approved mapping.
+
+## Resolution
+
+- The named trade-plan task now owns master creation, atomic full-graph
+  sealing, activation, and active/graph queries. Domain objects own graph
+  identity and lifecycle invariants; SQLite owns approval verification,
+  immutable reconstruction, transactional sealing, activation history, and
+  storage-enforced account/security uniqueness.
+- Migration 0016 fails closed for missing ownership, duplicate active
+  ownership, absent or non-canonical user-approved sleeve mappings, and
+  mutable/incomplete legacy graphs. Inactive legacy content bytes remain
+  read-only; explicit mappings preserve ownership and install exactly one
+  open activation.
+- The former PlanService, security-latest lookup, Web confirmation endpoint,
+  runtime `user_fixture_input` discriminator, and retired private-seam tests
+  were deleted. Ticket 07 will add the locked Skill confirmation flow rather
+  than restoring a browser mutation route.
+- Gate evidence is recorded in
+  `evidence/04-plan-graph-seal-and-active-uniqueness.md`.

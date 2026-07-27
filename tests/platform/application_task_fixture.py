@@ -14,6 +14,7 @@ from trading_platform.application.account_state import (
     AccountStateQueries,
     EstimatedAccountWorkspace,
 )
+from trading_platform.application.trade_plan_authoring import TradePlanTasks
 from trading_platform.application.research_tasks import (
     ForecastReview,
     ResearchArchive,
@@ -38,12 +39,11 @@ from trading_platform.domain.data import (
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.market import SQLiteMarketRepository
-from trading_platform.persistence.plans import SQLitePlanRepository
+from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.persistence.account_snapshots import (
     SQLiteAccountSnapshotProjection,
 )
 from trading_platform.persistence.workspace import WorkspaceService
-from trading_platform.plans import PlanService
 from trading_platform.operations import PlatformOperations
 from trading_platform.workflows.research import (
     ResearchWorkflow,
@@ -264,22 +264,24 @@ class PlatformTaskFixture:
             ledger, research_engine_identity(repo_root)
         )
         self.chart = ChartService(store.connection, store.writer_lock)
-        self.plans = PlanService(
-            SQLitePlanRepository(store.connection, store.writer_lock)
+        plan_repository = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
         )
+        self.plans = TradePlanTasks(plan_repository)
         self.market = MarketEvaluationService(
             SQLiteMarketRepository(store.connection, store.writer_lock),
-            self.plans,
+            plan_repository,
+        )
+        self.update_authorizations = WorkspaceService(
+            store.connection,
+            ledger,
+            store.writer_lock,
         )
         self.workspace = EstimatedAccountWorkspace(
             AccountStateQueries(
                 SQLiteAccountSnapshotProjection(store.connection)
             ),
-            WorkspaceService(
-                store.connection,
-                ledger,
-                store.writer_lock,
-            ),
+            self.update_authorizations,
         )
         self.accounts = AccountOpeningService(
             data_root, repo_root, migrations_root or repo_root / "migrations"

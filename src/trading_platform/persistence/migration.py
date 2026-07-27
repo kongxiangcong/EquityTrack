@@ -152,15 +152,201 @@ class MigrationRunner:
         if inconsistent_security is not None:
             block("A legacy plan has inconsistent security ownership.")
 
-        unmapped_active = self.connection.execute(
-            "SELECT plan_id FROM trade_plan "
-            "WHERE lifecycle_status='active' LIMIT 1"
-        ).fetchone()
-        if unmapped_active is not None:
+        active_plan_ids = {
+            row["plan_id"]
+            for row in self.connection.execute(
+                "SELECT plan_id FROM trade_plan "
+                "WHERE lifecycle_status='active'"
+            )
+        }
+        mapping_file = (
+            self.data_root
+            / "migration-inputs"
+            / "0016-legacy-sleeve-mapping.json"
+        )
+        if mapping_file.is_file():
+            raw_mapping = mapping_file.read_bytes()
+            try:
+                mapping = json.loads(raw_mapping)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise PersistenceError(
+                    "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
+                    "The legacy sleeve mapping artifact is invalid JSON.",
+                ) from error
+            canonical_mapping = json.dumps(
+                mapping,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if canonical_mapping != raw_mapping:
+                block("The legacy sleeve mapping artifact is not canonical.")
+        else:
+            mapping = {
+                "schema_version": "LegacySleeveMapping@1",
+                "approved_by": "not_required:no_active_legacy_plan",
+                "approved_at": "2026-07-27T00:00:00+08:00",
+                "plans": [],
+            }
+            raw_mapping = json.dumps(
+                mapping,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        if (
+            not isinstance(mapping, dict)
+            or mapping.get("schema_version") != "LegacySleeveMapping@1"
+            or not isinstance(mapping.get("plans"), list)
+        ):
+            block("The legacy sleeve mapping contract is invalid.")
+        approved_by = mapping.get("approved_by")
+        approved_at = mapping.get("approved_at")
+        try:
+            approval_instant = datetime.fromisoformat(str(approved_at))
+        except ValueError as error:
+            raise PersistenceError(
+                "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
+                "The legacy sleeve mapping lacks an approval instant.",
+            ) from error
+        if (
+            active_plan_ids
+            and (
+                not isinstance(approved_by, str)
+                or not approved_by.startswith("user:")
+                or approval_instant.tzinfo is None
+            )
+        ):
+            block("The legacy sleeve mapping lacks explicit user approval.")
+
+        parsed_mappings: dict[str, tuple[str, str, str]] = {}
+        for item in mapping["plans"]:
+            if not isinstance(item, dict):
+                block("A legacy sleeve mapping entry is invalid.")
+            plan_id = item.get("plan_id")
+            strategy_version_id = item.get("strategy_version_id")
+            sleeves = item.get("sleeves")
+            rule_scopes = item.get("rule_scopes")
+            if (
+                not isinstance(plan_id, str)
+                or plan_id in parsed_mappings
+                or strategy_version_id
+                not in {
+                    "strategy_version_trend_hold_break_exit_1",
+                    "strategy_version_core_plus_grid_1",
+                }
+                or not isinstance(sleeves, list)
+                or not isinstance(rule_scopes, dict)
+            ):
+                block("A legacy sleeve mapping entry is invalid.")
+            kinds = [sleeve.get("sleeve_kind") for sleeve in sleeves if isinstance(sleeve, dict)]
+            if (
+                len(kinds) != len(sleeves)
+                or kinds.count("core") != 1
+                or any(kind not in {"core", "grid"} for kind in kinds)
+                or len(kinds) != len(set(kinds))
+                or (
+                    strategy_version_id
+                    == "strategy_version_trend_hold_break_exit_1"
+                    and kinds != ["core"]
+                )
+            ):
+                block("A legacy sleeve mapping violates the strategy contract.")
+            for sleeve in sleeves:
+                for state_key, value_key in (
+                    ("quantity_budget_state", "quantity_budget_value"),
+                    ("core_floor_state", "core_floor_value"),
+                    ("max_notional_state", "max_notional_value"),
+                    ("max_loss_state", "max_loss_value"),
+                ):
+                    state = sleeve.get(state_key)
+                    value = sleeve.get(value_key)
+                    if state not in {"known", "unknown", "not_applicable"}:
+                        block("A legacy sleeve mapping has an invalid value state.")
+                    if state == "known":
+                        try:
+                            number = Decimal(str(value))
+                        except (InvalidOperation, TypeError) as error:
+                            raise PersistenceError(
+                                "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
+                                "A mapped sleeve value is not an exact decimal.",
+                            ) from error
+                        if not number.is_finite() or number < 0:
+                            block("A mapped sleeve value is invalid.")
+                    elif value is not None:
+                        block("An unknown mapped sleeve value must remain null.")
+            expected_rules = {
+                row["rule_id"]
+                for row in self.connection.execute(
+                    "SELECT rule_id FROM plan_rule WHERE plan_version_id IN ("
+                    "SELECT plan_version_id FROM trade_plan_version "
+                    "WHERE plan_id=?)",
+                    (plan_id,),
+                )
+            }
+            if (
+                set(rule_scopes) != expected_rules
+                or any(scope not in kinds for scope in rule_scopes.values())
+            ):
+                block("A legacy rule lacks one explicit sleeve scope.")
+            parsed_mappings[plan_id] = (
+                str(strategy_version_id),
+                json.dumps(
+                    sleeves,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    rule_scopes,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+        if set(parsed_mappings) != active_plan_ids:
             block(
                 "An active legacy plan lacks an explicit user-approved "
                 "LegacySleeveMapping@1 artifact."
             )
+
+        duplicate_active = self.connection.execute(
+            "SELECT r.account_id,p.security_id,count(*) "
+            "FROM trade_plan p JOIN ("
+            "SELECT v.plan_id,min(a.account_id) AS account_id "
+            "FROM trade_plan_version v "
+            "JOIN plan_account_snapshot_reference a USING(plan_version_id) "
+            "GROUP BY v.plan_id"
+            ") r USING(plan_id) "
+            "WHERE p.lifecycle_status='active' "
+            "GROUP BY r.account_id,p.security_id HAVING count(*)>1 LIMIT 1"
+        ).fetchone()
+        if duplicate_active is not None:
+            block("Multiple active legacy plans share one account/security owner.")
+
+        artifact_hash = hashlib.sha256(raw_mapping).hexdigest()
+        self.connection.execute(
+            "CREATE TEMP TABLE migration_0016_mapping_meta("
+            "artifact_hash TEXT NOT NULL,approved_by TEXT NOT NULL,"
+            "approved_at TEXT NOT NULL)"
+        )
+        self.connection.execute(
+            "INSERT INTO migration_0016_mapping_meta VALUES(?,?,?)",
+            (artifact_hash, str(approved_by), str(approved_at)),
+        )
+        self.connection.execute(
+            "CREATE TEMP TABLE migration_0016_legacy_mapping("
+            "plan_id TEXT PRIMARY KEY,strategy_version_id TEXT NOT NULL,"
+            "sleeves_json TEXT NOT NULL,rule_scopes_json TEXT NOT NULL)"
+        )
+        self.connection.executemany(
+            "INSERT INTO migration_0016_legacy_mapping VALUES(?,?,?,?)",
+            (
+                (plan_id, strategy, sleeves, scopes)
+                for plan_id, (strategy, sleeves, scopes)
+                in parsed_mappings.items()
+            ),
+        )
 
         inconsistent_activation = self.connection.execute(
             "SELECT a.activation_id FROM plan_activation a "

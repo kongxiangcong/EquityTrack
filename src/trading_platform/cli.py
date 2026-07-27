@@ -31,7 +31,6 @@ from trading_platform.application import (
     open_chart_annotations,
     open_chart_workspace,
     open_decision_workspace,
-    open_trade_plan,
     open_update_authorizations,
     open_workflow_inspection,
     open_workflow_runtime,
@@ -367,14 +366,12 @@ def main(argv: list[str] | None = None) -> int:
                 open_decision_workspace(args.data_root) as decision_workspace,
                 open_chart_workspace(args.data_root) as chart_workspace,
                 open_chart_annotations(args.data_root) as chart_annotations,
-                open_trade_plan(args.data_root) as trade_plan,
                 open_update_authorizations(args.data_root) as update_authorizations,
             ):
                 server = LocalChartWorkspaceServer(
                     decision_workspace=decision_workspace,
                     chart_workspace=chart_workspace,
                     chart_annotations=chart_annotations,
-                    trade_plan=trade_plan,
                     update_authorizations=update_authorizations,
                     web_root=args.web_root,
                     security_id=args.security_id,

@@ -45,7 +45,12 @@ class WorkspaceService:
         )
         workflows = [dict(item) for item in workflow_evidence.workflows]
         evaluations = self._all(
-            "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,e.outcome,e.completeness,e.created_at,e.evaluator_version,e.evaluation_policy_version FROM plan_evaluation e JOIN trade_plan_version p ON p.plan_version_id=e.plan_version_id WHERE p.security_id=? ORDER BY e.created_at",
+            "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,e.outcome,"
+            "e.completeness,e.created_at,e.evaluator_version,"
+            "e.evaluation_policy_version FROM plan_evaluation e "
+            "JOIN trade_plan_version v ON v.plan_version_id=e.plan_version_id "
+            "JOIN trade_plan_master p ON p.plan_id=v.plan_id "
+            "WHERE p.security_id=? ORDER BY e.created_at",
             (security_id,),
         )
         for evaluation in evaluations:
@@ -135,7 +140,13 @@ class WorkspaceService:
             ),
             "forecast_reviews": self._forecast_reviews(security_id),
             "changes": self._all(
-                "SELECT p.plan_id,p.lifecycle_status,a.plan_version_id AS active_version_id,a.started_at AS updated_at FROM trade_plan p LEFT JOIN plan_activation a ON a.plan_id=p.plan_id AND a.ended_at IS NULL WHERE p.security_id=? ORDER BY coalesce(a.started_at,p.created_at) DESC",
+                "SELECT p.plan_id,p.lifecycle_status,"
+                "a.plan_version_id AS active_version_id,"
+                "a.activated_at AS updated_at "
+                "FROM trade_plan_master p LEFT JOIN plan_activation a "
+                "ON a.plan_id=p.plan_id AND a.ended_at IS NULL "
+                "WHERE p.security_id=? "
+                "ORDER BY coalesce(a.activated_at,p.created_at) DESC",
                 (security_id,),
             ),
             "update_authorizations": self._all(
@@ -162,7 +173,17 @@ class WorkspaceService:
                     (security_id,),
                 ),
                 "plans": self._all(
-                    "SELECT v.plan_version_id,v.plan_id,v.version_no,v.confirmed_at AS created_at,v.user_input_source,v.content_json,r.snapshot_type,r.snapshot_id AS account_snapshot_id,r.snapshot_as_of,r.reconciliation_status FROM trade_plan_version v LEFT JOIN plan_account_snapshot_reference r USING(plan_version_id) WHERE v.security_id=? ORDER BY v.confirmed_at,v.version_no",
+                    "SELECT v.plan_version_id,v.plan_id,v.version_no,"
+                    "v.confirmed_at AS created_at,v.strategy_version_id,"
+                    "v.graph_seal_hash,v.user_approval_receipt_id,"
+                    "v.content_json,r.snapshot_type,"
+                    "r.snapshot_id AS account_snapshot_id,r.snapshot_as_of,"
+                    "r.reconciliation_status "
+                    "FROM trade_plan_version v "
+                    "JOIN trade_plan_master p USING(plan_id) "
+                    "LEFT JOIN plan_account_snapshot_reference r "
+                    "USING(plan_version_id) WHERE p.security_id=? "
+                    "ORDER BY v.confirmed_at,v.version_no",
                     (security_id,),
                 ),
                 "account_imports": history_imports,

@@ -13,14 +13,11 @@ from trading_platform.application import (
     ChartAnnotations,
     ChartWorkspace,
     DecisionWorkspace,
-    PlanConfirmation,
     UpdateAuthorizations,
     WorkspaceUpdateCommand,
 )
 from trading_platform.chart import AnnotationError
 from trading_platform.domain.chart import AnnotationAnchor, AnnotationLifecycleCommand
-from trading_platform.domain.plans import ConfirmPlanDraftCommand
-from trading_platform.plans import PlanError
 
 
 class LocalChartWorkspaceServer:
@@ -30,7 +27,6 @@ class LocalChartWorkspaceServer:
         decision_workspace: DecisionWorkspace,
         chart_workspace: ChartWorkspace,
         chart_annotations: ChartAnnotations,
-        trade_plan: PlanConfirmation,
         update_authorizations: UpdateAuthorizations,
         web_root: Path,
         security_id: str,
@@ -39,7 +35,6 @@ class LocalChartWorkspaceServer:
         self.decision_workspace = decision_workspace
         self.chart_workspace = chart_workspace
         self.chart_annotations = chart_annotations
-        self.trade_plan = trade_plan
         self.update_authorizations = update_authorizations
         self.web_root = web_root.resolve()
         self.security_id = security_id
@@ -126,7 +121,6 @@ class LocalChartWorkspaceServer:
                     not in {
                         "/api/annotations",
                         "/api/update-authorizations",
-                        "/api/plan-confirmations",
                     }
                     or self.headers.get("X-CSRF-Token") != owner.csrf_token
                     or self.headers.get_content_type() != "application/json"
@@ -161,25 +155,6 @@ class LocalChartWorkspaceServer:
                         except ValueError as error:
                             return self._json({"error_code": str(error)}, 409)
                         return self._json(authorization, 201)
-                    if path == "/api/plan-confirmations":
-                        try:
-                            confirmed = owner.trade_plan.confirm_draft(
-                                ConfirmPlanDraftCommand(
-                                    invocation_id,
-                                    str(payload["draft_id"]),
-                                    int(payload["expected_revision"]),
-                                    str(
-                                        payload.get(
-                                            "activation_intent", "keep_inactive"
-                                        )
-                                    ),
-                                )
-                            )
-                        except PlanError as error:
-                            return self._json({"error_code": error.code}, 422)
-                        except (KeyError, TypeError, ValueError):
-                            return self.send_error(400)
-                        return self._json(asdict(confirmed), 201)
                     operation = payload.get("operation", "create")
                     if operation not in {"create", "revise", "delete", "restore"}:
                         return self.send_error(400)

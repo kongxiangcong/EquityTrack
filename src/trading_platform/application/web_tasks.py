@@ -8,10 +8,6 @@ from trading_platform.domain.chart import (
     AnnotationVersion,
     ChartSeries,
 )
-from trading_platform.domain.plans import (
-    ConfirmPlanDraftCommand,
-    TradePlanVersionView,
-)
 
 
 @dataclass(frozen=True)
@@ -36,12 +32,6 @@ class ChartAnnotations(Protocol):
     def list_history(self, security_id: str) -> tuple[AnnotationVersion, ...]: ...
 
 
-class PlanConfirmation(Protocol):
-    def confirm_draft(
-        self, command: ConfirmPlanDraftCommand
-    ) -> TradePlanVersionView: ...
-
-
 class UpdateAuthorizations(Protocol):
     def authorize(self, command: WorkspaceUpdateCommand) -> Mapping[str, Any]: ...
 
@@ -50,7 +40,6 @@ __all__ = [
     "ChartAnnotations",
     "ChartWorkspace",
     "DecisionWorkspace",
-    "PlanConfirmation",
     "UpdateAuthorizations",
     "WorkspaceUpdateCommand",
 ]

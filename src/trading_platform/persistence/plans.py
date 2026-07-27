@@ -2,759 +2,701 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
-from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Mapping
 
 from trading_platform.domain.plans import (
-    ActivatePlanVersionCommand,
-    ActivePlanView,
-    AdjustedPriceEvidence,
-    ChangePlanLifecycleCommand,
-    ConfirmPlanDraftCommand,
-    CreatePlanDraftCommand,
-    DiscardPlanDraftCommand,
-    PlanCondition,
-    PlanConstant,
-    PlanDraftContent,
-    PlanReference,
-    PlanRule,
-    TradePlanDraftView,
-    TradePlanVersionView,
-    UpdatePlanDraftCommand,
+    ActiveTradePlan,
+    PlanActivation,
     PlanValidationError,
-    validate_plan_content,
+    TradePlanGraph,
+    TradePlanMaster,
+    TradePlanMasterId,
+    TradePlanVersion,
 )
 from trading_platform.identity import canonical_hash
-from trading_platform.persistence.locking import DataRootWriterLock
 
-
-PlanError = PlanValidationError
+from .locking import DataRootWriterLock
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class SQLitePlanRepository:
+class SQLiteTradePlanRepository:
+    """Owns atomic Model B graph sealing, activation, and exact reconstruction."""
 
     def __init__(
-        self, connection: sqlite3.Connection, writer_lock: DataRootWriterLock
+        self,
+        connection: sqlite3.Connection,
+        writer_lock: DataRootWriterLock,
     ) -> None:
-        self.connection = connection
-        self.writer_lock = writer_lock
+        self._connection = connection
+        self._writer_lock = writer_lock
 
-    def create_draft(self, command: CreatePlanDraftCommand) -> TradePlanDraftView:
-        self._validate_content(command.content)
-        fingerprint = self._fingerprint("create_plan_draft", command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            replay = self._draft_receipt(
-                command.invocation_id, "create_plan_draft", fingerprint
-            )
-            if replay is not None:
-                return replay
-            plan_id = command.plan_id
-            if plan_id is not None:
-                plan = self._plan_row(plan_id)
-                if plan["security_id"] != command.content.security_id:
-                    raise PlanError("PLAN_SECURITY_CONFLICT")
-                if plan["lifecycle_status"] == "ended":
-                    plan_id = None
-            draft_id = f"plan_draft_{uuid.uuid4().hex}"
-            content_json, content_hash = self._serialize(command.content)
-            now = _now()
+    def create_master(self, master: TradePlanMaster) -> TradePlanMaster:
+        master.validate()
+        values = (
+            master.plan_id.value,
+            master.plan_id.account_id,
+            master.plan_id.security_id,
+            master.strategy_version_id,
+            master.lifecycle_status,
+            master.transition_seq,
+            master.created_at,
+            0,
+        )
+        with self._writer_lock.acquire(
+            f"trade-plan-master:{master.plan_id.value}"
+        ):
+            existing = self._connection.execute(
+                "SELECT * FROM trade_plan_master WHERE plan_id=?",
+                (master.plan_id.value,),
+            ).fetchone()
+            if existing is not None:
+                if tuple(existing) != values:
+                    raise PlanValidationError("PLAN_MASTER_IDENTITY_CONFLICT")
+                return master
             try:
-                with self.connection:
-                    self.connection.execute(
-                        "INSERT INTO trade_plan_draft VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            draft_id,
-                            plan_id,
-                            command.content.security_id,
-                            command.content.based_on_version_id,
-                            1,
-                            "open",
-                            content_json,
-                            content_hash,
-                            now,
-                            now,
-                        ),
-                    )
-                    self._insert_receipt(
-                        command.invocation_id,
-                        "create_plan_draft",
-                        fingerprint,
-                        "TradePlanDraft",
-                        draft_id,
+                with self._connection:
+                    self._connection.execute(
+                        "INSERT INTO trade_plan_master VALUES(?,?,?,?,?,?,?,?)",
+                        values,
                     )
             except sqlite3.IntegrityError as error:
-                raise PlanError("PLAN_OPEN_DRAFT_EXISTS") from error
-            return self.get_draft(draft_id)
+                raise PlanValidationError("PLAN_MASTER_STORAGE_CONFLICT") from error
+        return self.get_master(master.plan_id.value)
 
-    def update_draft(self, command: UpdatePlanDraftCommand) -> TradePlanDraftView:
-        self._validate_content(command.content)
-        fingerprint = self._fingerprint("update_plan_draft", command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            replay = self._draft_receipt(
-                command.invocation_id, "update_plan_draft", fingerprint
-            )
-            if replay is not None:
-                return replay
-            current = self.get_draft(command.draft_id)
-            if (
-                current.status != "open"
-                or current.revision != command.expected_revision
-            ):
-                raise PlanError("PLAN_DRAFT_REVISION_CONFLICT")
-            if (
-                current.content.security_id != command.content.security_id
-                or current.plan_id != command.plan_id
-            ):
-                raise PlanError("PLAN_DRAFT_IDENTITY_CONFLICT")
-            content_json, content_hash = self._serialize(command.content)
-            with self.connection:
-                changed = self.connection.execute(
-                    "UPDATE trade_plan_draft SET revision=revision+1,content_json=?,content_hash=?,updated_at=? WHERE draft_id=? AND status='open' AND revision=?",
-                    (
-                        content_json,
-                        content_hash,
-                        _now(),
-                        command.draft_id,
-                        command.expected_revision,
-                    ),
-                ).rowcount
-                if changed != 1:
-                    raise PlanError("PLAN_DRAFT_REVISION_CONFLICT")
-                self._insert_receipt(
-                    command.invocation_id,
-                    "update_plan_draft",
-                    fingerprint,
-                    "TradePlanDraft",
-                    command.draft_id,
-                )
-            return self.get_draft(command.draft_id)
-
-    def discard_draft(self, command: DiscardPlanDraftCommand) -> TradePlanDraftView:
-        fingerprint = self._fingerprint("discard_plan_draft", command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            replay = self._draft_receipt(
-                command.invocation_id, "discard_plan_draft", fingerprint
-            )
-            if replay is not None:
-                return replay
-            current = self.get_draft(command.draft_id)
-            if (
-                current.status != "open"
-                or current.revision != command.expected_revision
-            ):
-                raise PlanError("PLAN_DRAFT_REVISION_CONFLICT")
-            with self.connection:
-                self.connection.execute(
-                    "UPDATE trade_plan_draft SET status='discarded',updated_at=? WHERE draft_id=?",
-                    (_now(), command.draft_id),
-                )
-                self._insert_receipt(
-                    command.invocation_id,
-                    "discard_plan_draft",
-                    fingerprint,
-                    "TradePlanDraft",
-                    command.draft_id,
-                )
-            return self.get_draft(command.draft_id)
-
-    def confirm_draft(self, command: ConfirmPlanDraftCommand) -> TradePlanVersionView:
-        if command.activation_mode not in {"activate", "inactive"}:
-            raise PlanError("PLAN_CONFIRMATION_INVALID")
-        fingerprint = self._fingerprint("confirm_plan_draft", command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            replay = self._version_receipt(
-                command.invocation_id, "confirm_plan_draft", fingerprint
-            )
-            if replay is not None:
-                return replay
-            draft = self.get_draft(command.draft_id)
-            if draft.status != "open" or draft.revision != command.expected_revision:
-                raise PlanError("PLAN_DRAFT_REVISION_CONFLICT")
-            self._validate_content(draft.content)
-            plan_id = draft.plan_id
-            plan = self._plan_row(plan_id) if plan_id else None
-            if plan is not None and plan["lifecycle_status"] == "ended":
-                plan = None
-                plan_id = None
-            if plan is None:
-                plan_id = f"trade_plan_{uuid.uuid4().hex}"
-                version_no, supersedes = 1, None
-            else:
-                latest = self.connection.execute(
-                    "SELECT * FROM trade_plan_version WHERE plan_id=? ORDER BY version_no DESC LIMIT 1",
-                    (plan_id,),
-                ).fetchone()
-                version_no, supersedes = (
-                    latest["version_no"] + 1,
-                    latest["plan_version_id"],
-                )
-                if draft.content.based_on_version_id != supersedes:
-                    raise PlanError("PLAN_BASELINE_CONFLICT")
-            version_id = f"trade_plan_version_{uuid.uuid4().hex}"
-            now = _now()
+    def seal_version(self, graph: TradePlanGraph) -> TradePlanGraph:
+        graph.validate()
+        version = graph.version
+        with self._writer_lock.acquire(
+            f"trade-plan-version:{version.plan_id}"
+        ):
+            existing = self._connection.execute(
+                "SELECT graph_seal_hash FROM trade_plan_version "
+                "WHERE plan_version_id=?",
+                (version.plan_version_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["graph_seal_hash"] != version.graph_seal_hash:
+                    raise PlanValidationError(
+                        "PLAN_VERSION_IDENTITY_CONFLICT"
+                    )
+                return self.get_graph(version.plan_version_id)
+            self._validate_seal_authority(graph)
             try:
-                with self.connection:
-                    if plan is None:
-                        self.connection.execute(
-                            "INSERT INTO trade_plan VALUES(?,?,?,?,?)",
-                            (plan_id, draft.content.security_id, "inactive", 0, now),
+                with self._connection:
+                    self._insert_version(version)
+                    self._insert_graph_children(graph)
+                    changed = self._connection.execute(
+                        "UPDATE trade_plan_version SET graph_sealed=1 "
+                        "WHERE plan_version_id=? AND graph_sealed=0",
+                        (version.plan_version_id,),
+                    ).rowcount
+                    if changed != 1:
+                        raise PlanValidationError(
+                            "PLAN_GRAPH_SEAL_CONFLICT"
                         )
-                    self.connection.execute(
-                        "INSERT INTO trade_plan_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            version_id,
-                            plan_id,
-                            version_no,
-                            supersedes,
-                            draft.content.security_id,
-                            draft.content.based_on_version_id,
-                            draft.content.data_snapshot_id,
-                            draft.content.horizon_start,
-                            draft.content.horizon_end,
-                            draft.content.review_by,
-                            draft.content.market_gate_policy_version,
-                            draft.content.metric_catalog_version,
-                            draft.content.evaluator_policy_version,
-                            draft.content.user_input_source,
-                            self._serialize(draft.content)[0],
-                            draft.content_hash,
+                    self._connection.execute(
+                        "UPDATE trade_plan_draft "
+                        "SET status='confirmed',updated_at=? "
+                        "WHERE draft_id=("
+                        "SELECT draft_id FROM user_approval_receipt "
+                        "WHERE user_approval_receipt_id=?"
+                        ") AND status='open'",
+                        (_now(), version.user_approval_receipt_id),
+                    )
+            except sqlite3.IntegrityError as error:
+                raise PlanValidationError(
+                    "PLAN_GRAPH_STORAGE_CONFLICT"
+                ) from error
+        return self.get_graph(version.plan_version_id)
+
+    def activate_version(
+        self,
+        *,
+        plan_id: str,
+        plan_version_id: str,
+        user_approval_receipt_id: str,
+        command_invocation_id: str,
+    ) -> ActiveTradePlan:
+        if not command_invocation_id:
+            raise PlanValidationError("COMMAND_INVOCATION_ID_REQUIRED")
+        with self._writer_lock.acquire(
+            f"trade-plan-activation:{plan_id}"
+        ):
+            replay = self._connection.execute(
+                "SELECT plan_id FROM plan_activation "
+                "WHERE command_invocation_id=?",
+                (command_invocation_id,),
+            ).fetchone()
+            if replay is not None:
+                if replay["plan_id"] != plan_id:
+                    raise PlanValidationError("INVOCATION_CONFLICT")
+                return self.get_active_master_by_plan(plan_id)
+            version = self.get_version(plan_version_id)
+            if version.plan_id != plan_id:
+                raise PlanValidationError("PLAN_VERSION_OWNERSHIP_CONFLICT")
+            receipt = self._approval_receipt(user_approval_receipt_id)
+            if (
+                receipt["plan_id"] != plan_id
+                or receipt["expected_content_hash"] != version.content_hash
+                or receipt["activation_intent"] != "confirm_and_enable"
+                or user_approval_receipt_id
+                != version.user_approval_receipt_id
+            ):
+                raise PlanValidationError("PLAN_ACTIVATION_AUTHORITY_INVALID")
+            now = _now()
+            event_id = (
+                "application_event_"
+                + canonical_hash(
+                    {
+                        "event_type": "PlanActivated",
+                        "plan_id": plan_id,
+                        "plan_version_id": plan_version_id,
+                        "command_invocation_id": command_invocation_id,
+                    }
+                )[:24]
+            )
+            activation_id = (
+                "plan_activation_"
+                + canonical_hash(
+                    {
+                        "plan_id": plan_id,
+                        "plan_version_id": plan_version_id,
+                        "command_invocation_id": command_invocation_id,
+                    }
+                )[:24]
+            )
+            try:
+                with self._connection:
+                    current = self._connection.execute(
+                        "SELECT activation_id FROM plan_activation "
+                        "WHERE plan_id=? AND ended_at IS NULL",
+                        (plan_id,),
+                    ).fetchone()
+                    if current is not None:
+                        ended_event_id = (
+                            "application_event_"
+                            + canonical_hash(
+                                {
+                                    "event_type": "PlanActivationEnded",
+                                    "activation_id": current["activation_id"],
+                                    "next_plan_version_id": plan_version_id,
+                                }
+                            )[:24]
+                        )
+                        self._insert_event(
+                            ended_event_id,
+                            "PlanActivationEnded",
+                            "PlanActivation",
+                            current["activation_id"],
+                            {
+                                "next_plan_version_id": plan_version_id,
+                                "reason": "superseded_by_new_version",
+                            },
                             now,
-                            command.invocation_id,
+                        )
+                        self._connection.execute(
+                            "UPDATE plan_activation "
+                            "SET ended_event_id=?,ended_at=?,end_reason=? "
+                            "WHERE activation_id=? AND ended_at IS NULL",
+                            (
+                                ended_event_id,
+                                now,
+                                "superseded_by_new_version",
+                                current["activation_id"],
+                            ),
+                        )
+                    self._connection.execute(
+                        "UPDATE trade_plan_master "
+                        "SET lifecycle_status='active',transition_seq=transition_seq+1 "
+                        "WHERE plan_id=? AND lifecycle_status<>'ended' "
+                        "AND legacy_read_only=0",
+                        (plan_id,),
+                    )
+                    master = self._master_row(plan_id)
+                    if master["lifecycle_status"] != "active":
+                        raise PlanValidationError("PLAN_MASTER_NOT_ACTIVATABLE")
+                    self._insert_event(
+                        event_id,
+                        "PlanActivated",
+                        "TradePlanMaster",
+                        plan_id,
+                        {"plan_version_id": plan_version_id},
+                        now,
+                    )
+                    self._connection.execute(
+                        "INSERT INTO plan_activation "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            activation_id,
+                            plan_id,
+                            plan_version_id,
+                            event_id,
+                            now,
+                            None,
+                            None,
+                            None,
+                            user_approval_receipt_id,
+                            command_invocation_id,
                         ),
                     )
-                    for index, rule in enumerate(draft.content.rules):
-                        condition_json = json.dumps(
-                            asdict(rule.condition),
+                    transition_seq = master["transition_seq"]
+                    transition_hash = canonical_hash(
+                        {
+                            "plan_id": plan_id,
+                            "transition_seq": transition_seq,
+                            "to_status": "active",
+                            "plan_version_id": plan_version_id,
+                            "command_invocation_id": command_invocation_id,
+                        }
+                    )
+                    self._connection.execute(
+                        "INSERT INTO trade_plan_transition "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            f"trade_plan_transition_{transition_hash[:24]}",
+                            plan_id,
+                            transition_seq,
+                            "inactive" if transition_seq == 1 else "active",
+                            "active",
+                            plan_version_id,
+                            "version_activated",
+                            command_invocation_id,
+                            now,
+                            transition_hash,
+                        ),
+                    )
+            except sqlite3.IntegrityError as error:
+                if "trade_plan_master.account_id" in str(error):
+                    raise PlanValidationError(
+                        "ACTIVE_MASTER_OWNERSHIP_CONFLICT"
+                    ) from error
+                raise PlanValidationError(
+                    "PLAN_ACTIVATION_STORAGE_CONFLICT"
+                ) from error
+        return self.get_active_master_by_plan(plan_id)
+
+    def get_master(self, plan_id: str) -> TradePlanMaster:
+        row = self._master_row(plan_id)
+        if row["legacy_read_only"]:
+            raise PlanValidationError("LEGACY_PLAN_READ_ONLY")
+        master = TradePlanMaster(
+            plan_id=TradePlanMasterId(
+                account_id=row["account_id"],
+                security_id=row["security_id"],
+                value=row["plan_id"],
+            ),
+            strategy_version_id=row["strategy_version_id"],
+            lifecycle_status=row["lifecycle_status"],
+            transition_seq=row["transition_seq"],
+            created_at=row["created_at"],
+        )
+        master.validate()
+        return master
+
+    def get_version(self, plan_version_id: str) -> TradePlanVersion:
+        row = self._connection.execute(
+            "SELECT * FROM trade_plan_version WHERE plan_version_id=?",
+            (plan_version_id,),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("PLAN_VERSION_NOT_FOUND")
+        if row["legacy_read_only"]:
+            raise PlanValidationError("LEGACY_PLAN_READ_ONLY")
+        version = TradePlanVersion(
+            plan_version_id=row["plan_version_id"],
+            plan_id=row["plan_id"],
+            version_no=row["version_no"],
+            supersedes_version_id=row["supersedes_version_id"],
+            strategy_version_id=row["strategy_version_id"],
+            investment_thesis_version_id=row[
+                "investment_thesis_version_id"
+            ],
+            account_snapshot_version_id=row[
+                "account_snapshot_version_id"
+            ],
+            data_snapshot_id=row["data_snapshot_id"],
+            horizon_start=row["horizon_start"],
+            horizon_end=row["horizon_end"],
+            review_by=row["review_by"],
+            risk_policy_version_id=row["risk_policy_version_id"],
+            metric_catalog_version=row["metric_catalog_version"],
+            evaluator_policy_version=row["evaluator_policy_version"],
+            conflict_policy_version=row["conflict_policy_version"],
+            ast_version=row["ast_version"],
+            content=json.loads(row["content_json"]),
+            content_hash=row["content_hash"],
+            graph_seal_hash=row["graph_seal_hash"],
+            confirmed_at=row["confirmed_at"],
+            user_approval_receipt_id=row["user_approval_receipt_id"],
+        )
+        version.validate()
+        return version
+
+    def get_graph(self, plan_version_id: str) -> TradePlanGraph:
+        version = self.get_version(plan_version_id)
+        graph = TradePlanGraph(
+            version=version,
+            sleeves=tuple(
+                self._decode_child(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM trade_plan_sleeve "
+                    "WHERE plan_version_id=? ORDER BY sleeve_id",
+                    (plan_version_id,),
+                )
+            ),
+            rules=tuple(
+                self._decode_rule(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM trade_plan_rule "
+                    "WHERE plan_version_id=? ORDER BY rule_order",
+                    (plan_version_id,),
+                )
+            ),
+            evidence_references=tuple(
+                self._decode_reference(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM trade_plan_evidence_reference "
+                    "WHERE plan_version_id=? ORDER BY ref_order",
+                    (plan_version_id,),
+                )
+            ),
+            adjusted_price_evidence=tuple(
+                self._decode_adjusted(row)
+                for row in self._connection.execute(
+                    "SELECT * FROM trade_plan_adjusted_price_evidence "
+                    "WHERE plan_version_id=? "
+                    "ORDER BY rule_id,condition_path",
+                    (plan_version_id,),
+                )
+            ),
+        )
+        graph.validate()
+        return graph
+
+    def get_active_master(
+        self, account_id: str, security_id: str
+    ) -> ActiveTradePlan:
+        row = self._connection.execute(
+            "SELECT plan_id FROM trade_plan_master "
+            "WHERE account_id=? AND security_id=? "
+            "AND lifecycle_status='active'",
+            (account_id, security_id),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("ACTIVE_PLAN_NOT_FOUND")
+        return self.get_active_master_by_plan(row["plan_id"])
+
+    def get_active_master_by_plan(self, plan_id: str) -> ActiveTradePlan:
+        master = self.get_master(plan_id)
+        row = self._connection.execute(
+            "SELECT * FROM plan_activation "
+            "WHERE plan_id=? AND ended_at IS NULL",
+            (plan_id,),
+        ).fetchone()
+        if row is None:
+            return ActiveTradePlan(master, None, None)
+        activation = PlanActivation(
+            activation_id=row["activation_id"],
+            plan_id=row["plan_id"],
+            plan_version_id=row["plan_version_id"],
+            activated_event_id=row["activated_event_id"],
+            activated_at=row["activated_at"],
+            ended_event_id=row["ended_event_id"],
+            ended_at=row["ended_at"],
+            end_reason=row["end_reason"],
+            user_approval_receipt_id=row["user_approval_receipt_id"],
+            command_invocation_id=row["command_invocation_id"],
+        )
+        return ActiveTradePlan(
+            master,
+            activation,
+            self.get_version(activation.plan_version_id),
+        )
+
+    def list_activations(self, plan_id: str) -> tuple[PlanActivation, ...]:
+        return tuple(
+            PlanActivation(
+                activation_id=row["activation_id"],
+                plan_id=row["plan_id"],
+                plan_version_id=row["plan_version_id"],
+                activated_event_id=row["activated_event_id"],
+                activated_at=row["activated_at"],
+                ended_event_id=row["ended_event_id"],
+                ended_at=row["ended_at"],
+                end_reason=row["end_reason"],
+                user_approval_receipt_id=row["user_approval_receipt_id"],
+                command_invocation_id=row["command_invocation_id"],
+            )
+            for row in self._connection.execute(
+                "SELECT * FROM plan_activation WHERE plan_id=? "
+                "ORDER BY activated_at,activation_id",
+                (plan_id,),
+            )
+        )
+
+    def _validate_seal_authority(self, graph: TradePlanGraph) -> None:
+        version = graph.version
+        master = self._master_row(version.plan_id)
+        if (
+            master["legacy_read_only"]
+            or master["strategy_version_id"] != version.strategy_version_id
+        ):
+            raise PlanValidationError("PLAN_STRATEGY_OWNERSHIP_CONFLICT")
+        snapshot = self._connection.execute(
+            "SELECT account_id FROM account_snapshot_version "
+            "WHERE account_snapshot_version_id=?",
+            (version.account_snapshot_version_id,),
+        ).fetchone()
+        if snapshot is None or snapshot["account_id"] != master["account_id"]:
+            raise PlanValidationError("PLAN_ACCOUNT_SNAPSHOT_INVALID")
+        receipt = self._approval_receipt(
+            version.user_approval_receipt_id
+        )
+        if (
+            receipt["plan_id"] != version.plan_id
+            or receipt["expected_content_hash"] != version.content_hash
+        ):
+            raise PlanValidationError("PLAN_CONFIRMATION_AUTHORITY_INVALID")
+        latest = self._connection.execute(
+            "SELECT plan_version_id,version_no FROM trade_plan_version "
+            "WHERE plan_id=? ORDER BY version_no DESC LIMIT 1",
+            (version.plan_id,),
+        ).fetchone()
+        if latest is None:
+            if version.version_no != 1 or version.supersedes_version_id is not None:
+                raise PlanValidationError("PLAN_VERSION_SEQUENCE_INVALID")
+        elif (
+            version.version_no != latest["version_no"] + 1
+            or version.supersedes_version_id != latest["plan_version_id"]
+        ):
+            raise PlanValidationError("PLAN_VERSION_SEQUENCE_INVALID")
+
+    def _insert_version(self, version: TradePlanVersion) -> None:
+        self._connection.execute(
+            "INSERT INTO trade_plan_version "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                version.plan_version_id,
+                version.plan_id,
+                version.version_no,
+                version.supersedes_version_id,
+                version.strategy_version_id,
+                version.investment_thesis_version_id,
+                version.account_snapshot_version_id,
+                version.data_snapshot_id,
+                version.horizon_start,
+                version.horizon_end,
+                version.review_by,
+                version.risk_policy_version_id,
+                version.metric_catalog_version,
+                version.evaluator_policy_version,
+                version.conflict_policy_version,
+                version.ast_version,
+                json.dumps(
+                    version.content,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                version.content_hash,
+                version.graph_seal_hash,
+                0,
+                version.confirmed_at,
+                version.user_approval_receipt_id,
+                0,
+            ),
+        )
+
+    def _insert_graph_children(self, graph: TradePlanGraph) -> None:
+        plan_version_id = graph.version.plan_version_id
+        for sleeve in graph.sleeves:
+            self._connection.execute(
+                "INSERT INTO trade_plan_sleeve VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    plan_version_id,
+                    sleeve["sleeve_id"],
+                    sleeve["sleeve_kind"],
+                    sleeve["quantity_budget_state"],
+                    sleeve.get("quantity_budget_value"),
+                    sleeve["core_floor_state"],
+                    sleeve.get("core_floor_value"),
+                    sleeve["max_notional_state"],
+                    sleeve.get("max_notional_value"),
+                    sleeve["max_loss_state"],
+                    sleeve.get("max_loss_value"),
+                    sleeve.get("grid_constraint_id"),
+                    sleeve["content_hash"],
+                ),
+            )
+        for position, rule in enumerate(graph.rules):
+            self._connection.execute(
+                "INSERT INTO trade_plan_rule VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    plan_version_id,
+                    position,
+                    rule["rule_id"],
+                    rule["rule_class"],
+                    rule["priority"],
+                    rule["scope"],
+                    rule["ast_version"],
+                    json.dumps(
+                        rule["condition"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    (
+                        json.dumps(
+                            rule["candidate_intent"],
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
                         )
-                        self.connection.execute(
-                            "INSERT INTO plan_rule VALUES(?,?,?,?,?,?,?)",
-                            (
-                                version_id,
-                                index,
-                                rule.rule_id,
-                                rule.rule_kind,
-                                rule.effect,
-                                rule.applies_to,
-                                rule.input_applicability,
-                            ),
-                        )
-                        self.connection.execute(
-                            "INSERT INTO plan_rule_condition VALUES(?,?,?,?,?)",
-                            (
-                                version_id,
-                                index,
-                                rule.condition.ast_version,
-                                condition_json,
-                                canonical_hash(asdict(rule.condition)),
-                            ),
-                        )
-                    for index, reference in enumerate(draft.content.references):
-                        self.connection.execute(
-                            "INSERT INTO plan_version_reference VALUES(?,?,?,?,?)",
-                            (
-                                version_id,
-                                index,
-                                reference.ref_type,
-                                reference.ref_id,
-                                reference.resolution_status,
-                            ),
-                        )
-                    for evidence in draft.content.adjusted_price_evidence:
-                        self.connection.execute(
-                            "INSERT INTO plan_adjusted_price_evidence VALUES(?,?,?,?,?,?,?,?,?)",
-                            (
-                                version_id,
-                                evidence.rule_id,
-                                json.dumps(evidence.condition_path),
-                                evidence.data_snapshot_id,
-                                evidence.factor_set_id,
-                                evidence.adjusted_price_decimal,
-                                evidence.canonical_unadjusted_price_decimal,
-                                evidence.factor_decimal,
-                                evidence.algorithm_version,
-                            ),
-                        )
-                    account_context = self._account_context(draft.content)
-                    if account_context:
-                        self.connection.execute(
-                            "INSERT INTO plan_account_snapshot_reference VALUES(?,?,?,?,?,?,?,?)",
-                            (version_id, *account_context),
-                        )
-                    self.connection.execute(
-                        "INSERT INTO plan_risk_constraint VALUES(?,?,?,?,?)",
-                        (
-                            version_id,
-                            draft.content.currency,
-                            draft.content.max_planned_notional,
-                            draft.content.max_planned_loss,
-                            "verified" if account_context else "not_applicable",
-                        ),
-                    )
-                    self.connection.execute(
-                        "UPDATE trade_plan_draft SET status='confirmed',plan_id=?,updated_at=? WHERE draft_id=?",
-                        (plan_id, now, draft.draft_id),
-                    )
-                    self._transition(
-                        plan_id,
-                        version_id,
-                        "confirmed",
-                        command.invocation_id,
-                        now,
-                        status="inactive",
-                    )
-                    if command.activation_mode == "activate":
-                        self._activate_locked(
-                            plan_id, version_id, command.invocation_id, now
-                        )
-                    self._insert_receipt(
-                        command.invocation_id,
-                        "confirm_plan_draft",
-                        fingerprint,
-                        "TradePlanVersion",
-                        version_id,
-                    )
-            except sqlite3.IntegrityError as error:
-                raise PlanError("PLAN_CONFIRMATION_ATOMIC_FAILURE") from error
-            return self.get_version(version_id)
-
-    def activate_version(
-        self, command: ActivatePlanVersionCommand
-    ) -> TradePlanVersionView:
-        fingerprint = self._fingerprint("activate_plan_version", command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            replay = self._version_receipt(
-                command.invocation_id, "activate_plan_version", fingerprint
+                        if rule.get("candidate_intent") is not None
+                        else None
+                    ),
+                    rule["content_hash"],
+                ),
             )
-            if replay is not None:
-                return replay
-            plan = self._plan_row(command.plan_id)
-            if plan["lifecycle_status"] == "ended":
-                raise PlanError("PLAN_ENDED_TERMINAL")
-            if plan["transition_seq"] != command.expected_transition_seq:
-                raise PlanError("PLAN_TRANSITION_CONFLICT")
-            version = self.get_version(command.plan_version_id)
-            if version.plan_id != command.plan_id:
-                raise PlanError("PLAN_VERSION_CONFLICT")
-            with self.connection:
-                self._activate_locked(
-                    command.plan_id,
-                    command.plan_version_id,
-                    command.invocation_id,
-                    _now(),
-                )
-                self._insert_receipt(
-                    command.invocation_id,
-                    "activate_plan_version",
-                    fingerprint,
-                    "TradePlanVersion",
-                    command.plan_version_id,
-                )
-            return self.get_version(command.plan_version_id)
-
-    def deactivate(self, command: ChangePlanLifecycleCommand) -> ActivePlanView:
-        return self._change_lifecycle(command, "inactive", "deactivated")
-
-    def end(self, command: ChangePlanLifecycleCommand) -> ActivePlanView:
-        return self._change_lifecycle(command, "ended", command.reason or "user_ended")
-
-    def _change_lifecycle(
-        self, command: ChangePlanLifecycleCommand, status: str, reason: str
-    ) -> ActivePlanView:
-        name = "end_plan" if status == "ended" else "deactivate_plan"
-        fingerprint = self._fingerprint(name, command)
-        with self.writer_lock.acquire(f"plan-invocation:{command.invocation_id}"):
-            receipt = self.connection.execute(
-                "SELECT * FROM command_receipt WHERE invocation_id=?",
-                (command.invocation_id,),
-            ).fetchone()
-            if receipt is not None:
-                if (
-                    receipt["command_name"] != name
-                    or receipt["request_hash"] != fingerprint
-                ):
-                    raise PlanError("INVOCATION_CONFLICT")
-                return self.get_lifecycle(command.plan_id)
-            plan = self._plan_row(command.plan_id)
-            if plan["lifecycle_status"] == "ended":
-                raise PlanError("PLAN_ENDED_TERMINAL")
-            if plan["transition_seq"] != command.expected_transition_seq:
-                raise PlanError("PLAN_TRANSITION_CONFLICT")
-            now = _now()
-            active = self.connection.execute(
-                "SELECT plan_version_id FROM plan_activation WHERE plan_id=? AND ended_at IS NULL",
-                (command.plan_id,),
-            ).fetchone()
-            with self.connection:
-                if active:
-                    self.connection.execute(
-                        "UPDATE plan_activation SET ended_at=? WHERE plan_id=? AND ended_at IS NULL",
-                        (now, command.plan_id),
-                    )
-                self._transition(
-                    command.plan_id,
-                    active[0] if active else None,
-                    reason,
-                    command.invocation_id,
-                    now,
-                    status=status,
-                )
-                self._insert_receipt(
-                    command.invocation_id,
-                    name,
-                    fingerprint,
-                    "TradePlan",
-                    command.plan_id,
-                )
-            return self.get_lifecycle(command.plan_id)
-
-    def get_draft(self, draft_id: str) -> TradePlanDraftView:
-        row = self.connection.execute(
-            "SELECT * FROM trade_plan_draft WHERE draft_id=?", (draft_id,)
-        ).fetchone()
-        if row is None:
-            raise PlanError("PLAN_DRAFT_NOT_FOUND")
-        return TradePlanDraftView(
-            row["draft_id"],
-            row["plan_id"],
-            row["revision"],
-            row["status"],
-            self._deserialize(row["content_json"]),
-            row["content_hash"],
-            row["created_at"],
-            row["updated_at"],
-        )
-
-    def get_version(self, version_id: str) -> TradePlanVersionView:
-        row = self.connection.execute(
-            "SELECT v.*,p.lifecycle_status FROM trade_plan_version v JOIN trade_plan p USING(plan_id) WHERE plan_version_id=?",
-            (version_id,),
-        ).fetchone()
-        if row is None:
-            raise PlanError("PLAN_VERSION_NOT_FOUND")
-        active = self.connection.execute(
-            "SELECT 1 FROM plan_activation WHERE plan_version_id=? AND ended_at IS NULL",
-            (version_id,),
-        ).fetchone()
-        lifecycle = (
-            "active"
-            if active
-            else (
-                row["lifecycle_status"]
-                if row["lifecycle_status"] == "ended"
-                else "inactive"
+        for position, reference in enumerate(graph.evidence_references):
+            self._connection.execute(
+                "INSERT INTO trade_plan_evidence_reference "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    plan_version_id,
+                    position,
+                    reference["ref_type"],
+                    reference["ref_id"],
+                    reference["resolution_status"],
+                    reference["content_hash"],
+                ),
             )
+        for evidence in graph.adjusted_price_evidence:
+            self._connection.execute(
+                "INSERT INTO trade_plan_adjusted_price_evidence "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    plan_version_id,
+                    evidence["rule_id"],
+                    json.dumps(evidence["condition_path"]),
+                    evidence["data_snapshot_id"],
+                    evidence["factor_set_id"],
+                    evidence["adjusted_price_decimal"],
+                    evidence["canonical_unadjusted_price_decimal"],
+                    evidence["factor_decimal"],
+                    evidence["algorithm_version"],
+                    evidence["content_hash"],
+                ),
+            )
+
+    def _insert_event(
+        self,
+        event_id: str,
+        event_type: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        payload: Mapping[str, object],
+        occurred_at: str,
+    ) -> None:
+        content_hash = canonical_hash(
+            {
+                "event_type": event_type,
+                "aggregate_type": aggregate_type,
+                "aggregate_id": aggregate_id,
+                "payload": payload,
+                "occurred_at": occurred_at,
+            }
         )
-        return TradePlanVersionView(
-            row["plan_id"],
-            row["plan_version_id"],
-            row["version_no"],
-            row["supersedes_version_id"],
-            lifecycle,
-            self._deserialize(row["content_json"]),
-            row["content_hash"],
-            row["confirmed_at"],
-            row["confirmation_invocation_id"],
+        self._connection.execute(
+            "INSERT INTO application_event VALUES(?,?,?,?,?,?,?)",
+            (
+                event_id,
+                event_type,
+                aggregate_type,
+                aggregate_id,
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                occurred_at,
+                content_hash,
+            ),
         )
 
-    def get_active_for_security(self, security_id: str) -> ActivePlanView:
-        row = self.connection.execute(
-            "SELECT * FROM trade_plan WHERE security_id=? AND lifecycle_status!='ended' ORDER BY created_at DESC LIMIT 1",
-            (security_id,),
+    def _approval_receipt(self, receipt_id: str) -> sqlite3.Row:
+        row = self._connection.execute(
+            "SELECT * FROM user_approval_receipt "
+            "WHERE user_approval_receipt_id=?",
+            (receipt_id,),
         ).fetchone()
         if row is None:
-            raise PlanError("PLAN_NOT_FOUND")
-        active = self.connection.execute(
-            "SELECT plan_version_id FROM plan_activation WHERE plan_id=? AND ended_at IS NULL",
-            (row["plan_id"],),
-        ).fetchone()
-        return ActivePlanView(
-            row["plan_id"],
-            row["lifecycle_status"],
-            self.get_version(active[0]) if active else None,
-        )
+            raise PlanValidationError("USER_APPROVAL_RECEIPT_NOT_FOUND")
+        return row
 
-    def get_lifecycle(self, plan_id: str) -> ActivePlanView:
-        row = self._plan_row(plan_id)
-        active = self.connection.execute(
-            "SELECT plan_version_id FROM plan_activation WHERE plan_id=? AND ended_at IS NULL",
+    def _master_row(self, plan_id: str) -> sqlite3.Row:
+        row = self._connection.execute(
+            "SELECT * FROM trade_plan_master WHERE plan_id=?",
             (plan_id,),
         ).fetchone()
-        return ActivePlanView(
-            plan_id,
-            row["lifecycle_status"],
-            self.get_version(active[0]) if active else None,
-        )
-
-    def _activate_locked(
-        self, plan_id: str, version_id: str, invocation_id: str, now: str
-    ) -> None:
-        plan = self._plan_row(plan_id)
-        if plan["lifecycle_status"] == "ended":
-            raise PlanError("PLAN_ENDED_TERMINAL")
-        self.connection.execute(
-            "UPDATE plan_activation SET ended_at=? WHERE plan_id=? AND ended_at IS NULL",
-            (now, plan_id),
-        )
-        self.connection.execute(
-            "INSERT INTO plan_activation VALUES(?,?,?,?,?,?)",
-            (
-                f"activation_{uuid.uuid4().hex}",
-                plan_id,
-                version_id,
-                now,
-                None,
-                invocation_id,
-            ),
-        )
-        self._transition(
-            plan_id, version_id, "activated", invocation_id, now, status="active"
-        )
-
-    def _transition(
-        self,
-        plan_id: str,
-        version_id: str | None,
-        reason: str,
-        invocation_id: str,
-        now: str,
-        status: str,
-    ) -> None:
-        plan = self._plan_row(plan_id)
-        sequence = plan["transition_seq"] + 1
-        self.connection.execute(
-            "INSERT INTO trade_plan_transition VALUES(?,?,?,?,?,?,?,?)",
-            (
-                plan_id,
-                sequence,
-                plan["lifecycle_status"],
-                status,
-                version_id,
-                reason,
-                invocation_id,
-                now,
-            ),
-        )
-        self.connection.execute(
-            "UPDATE trade_plan SET lifecycle_status=?,transition_seq=? WHERE plan_id=?",
-            (status, sequence, plan_id),
-        )
-
-    def validate_content(self, content: PlanDraftContent) -> None:
-        security = self.connection.execute(
-            "SELECT currency FROM security WHERE security_id=?", (content.security_id,)
-        ).fetchone()
-        snapshot = self.connection.execute(
-            "SELECT scope_id FROM data_snapshot WHERE data_snapshot_id=?",
-            (content.data_snapshot_id,),
-        ).fetchone()
-        resolved_research_ids = {
-            row[0]
-            for row in self.connection.execute(
-                "SELECT research_run_id FROM research_run_record"
-            )
-        }
-        factor_sets = {
-            row[0]: (row[1], row[2], row[3], row[4])
-            for row in self.connection.execute(
-                "SELECT factor_set_id,data_snapshot_id,mapping_status,source_ref,algorithm_version FROM price_factor_set"
-            )
-        }
-        account_context = self._account_context(content)
-        validate_plan_content(
-            content,
-            security_currency=security[0] if security else None,
-            snapshot_scope=snapshot[0] if snapshot else None,
-            resolved_research_ids=resolved_research_ids,
-            factor_sets=factor_sets,
-            account_metrics_supported=(
-                account_context is not None
-                and json.loads(account_context[5]).get("metrics_supported") is True
-            ),
-        )
-
-    _validate_content = validate_content
-
-    def _account_context(self, content: PlanDraftContent):
-        if content.account_snapshot_id is None:
-            return None
-        row = self.connection.execute(
-            "SELECT 'AccountSnapshotVersion' AS snapshot_type,"
-            "v.account_snapshot_version_id AS snapshot_id,v.account_id,"
-            "v.as_of_at AS snapshot_as_of,'confirmed' AS reconciliation_status "
-            "FROM account_snapshot_version v "
-            "WHERE v.account_snapshot_version_id=?",
-            (content.account_snapshot_id,),
-        ).fetchone()
-        if row is None or row["reconciliation_status"] == "blocked":
-            raise PlanError("PLAN_ACCOUNT_SNAPSHOT_INVALID")
-        account = self.connection.execute(
-            "SELECT base_currency FROM account WHERE account_id=?", (row["account_id"],)
-        ).fetchone()
-        if account is None or account[0] != content.currency:
-            raise PlanError("PLAN_ACCOUNT_SNAPSHOT_INVALID")
-        position = self.connection.execute(
-            "SELECT total_quantity,available_quantity_state,"
-            "available_quantity_value,cost_state,cost_value "
-            "FROM account_snapshot_position "
-            "WHERE account_snapshot_version_id=? AND security_id=?",
-            (row["snapshot_id"], content.security_id),
-        ).fetchone()
-        cash = self.connection.execute(
-            "SELECT nav_state,nav_value FROM account_snapshot_cash "
-            "WHERE account_snapshot_version_id=?",
-            (row["snapshot_id"],),
-        ).fetchone()
-        values = {
-            "metrics_supported": True,
-            "position_status": "position" if position else "not_held",
-            "position_quantity": position[0] if position else "0",
-            "position_available": (
-                position[2]
-                if position and position[1] == "known"
-                else None
-            ),
-            "position_cost_basis": (
-                position[4] if position and position[3] == "known" else None
-            ),
-            "portfolio_net_asset_value": (
-                cash[1] if cash and cash[0] == "known" else None
-            ),
-            "currency": content.currency,
-        }
-        context_json = json.dumps(values, sort_keys=True, separators=(",", ":"))
-        context_hash = canonical_hash({"snapshot": dict(row), "values": values})
-        return (
-            row["snapshot_type"],
-            row["snapshot_id"],
-            row["account_id"],
-            row["snapshot_as_of"],
-            row["reconciliation_status"],
-            context_json,
-            context_hash,
-        )
-
-    def get_account_operands(self, plan_version_id: str) -> dict[str, str]:
-        row = self.connection.execute(
-            "SELECT context_json FROM plan_account_snapshot_reference WHERE plan_version_id=?",
-            (plan_version_id,),
-        ).fetchone()
-        return {} if row is None else json.loads(row[0])
-
-    def _plan_row(self, plan_id: str | None) -> sqlite3.Row:
-        row = (
-            None
-            if plan_id is None
-            else self.connection.execute(
-                "SELECT * FROM trade_plan WHERE plan_id=?", (plan_id,)
-            ).fetchone()
-        )
         if row is None:
-            raise PlanError("PLAN_NOT_FOUND")
+            raise PlanValidationError("PLAN_MASTER_NOT_FOUND")
         return row
 
     @staticmethod
-    def _serialize(content: PlanDraftContent) -> tuple[str, str]:
-        payload = asdict(content)
-        return json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ), canonical_hash(payload)
+    def _decode_child(row: sqlite3.Row) -> Mapping[str, object]:
+        return {
+            key: row[key]
+            for key in row.keys()
+            if key != "plan_version_id"
+        }
 
     @staticmethod
-    def _deserialize(value: str) -> PlanDraftContent:
-        payload = json.loads(value)
+    def _decode_rule(row: sqlite3.Row) -> Mapping[str, object]:
+        return {
+            "rule_id": row["rule_id"],
+            "rule_class": row["rule_class"],
+            "priority": row["priority"],
+            "scope": row["scope"],
+            "ast_version": row["ast_version"],
+            "condition": json.loads(row["condition_json"]),
+            "candidate_intent": (
+                json.loads(row["candidate_intent_json"])
+                if row["candidate_intent_json"] is not None
+                else None
+            ),
+            "content_hash": row["content_hash"],
+        }
 
-        def condition(item: dict[str, object]) -> PlanCondition:
-            constant = (
-                PlanConstant(**item["constant"]) if item.get("constant") else None
-            )
-            children = tuple(condition(child) for child in item.get("children", []))
-            return PlanCondition(
-                node_kind=item["node_kind"],
-                metric_ref=item.get("metric_ref"),
-                operator=item.get("operator"),
-                constant=constant,
-                observation=item.get("observation"),
-                children=children,
-                ast_version=item.get("ast_version", "plan-condition-ast@1"),
-            )
+    @staticmethod
+    def _decode_reference(row: sqlite3.Row) -> Mapping[str, object]:
+        return {
+            "ref_type": row["ref_type"],
+            "ref_id": row["ref_id"],
+            "resolution_status": row["resolution_status"],
+            "content_hash": row["content_hash"],
+        }
 
-        rules = tuple(
-            PlanRule(
-                item["rule_id"],
-                item["rule_kind"],
-                item["effect"],
-                item["applies_to"],
-                condition(item["condition"]),
-                item.get("input_applicability", "applicable"),
-            )
-            for item in payload.pop("rules")
-        )
-        evidence = tuple(
-            AdjustedPriceEvidence(**item)
-            for item in payload.pop("adjusted_price_evidence")
-        )
-        references = tuple(PlanReference(**item) for item in payload.pop("references"))
-        return PlanDraftContent(
-            rules=rules,
-            references=references,
-            adjusted_price_evidence=evidence,
-            **payload,
-        )
+    @staticmethod
+    def _decode_adjusted(row: sqlite3.Row) -> Mapping[str, object]:
+        return {
+            "rule_id": row["rule_id"],
+            "condition_path": tuple(json.loads(row["condition_path"])),
+            "data_snapshot_id": row["data_snapshot_id"],
+            "factor_set_id": row["factor_set_id"],
+            "adjusted_price_decimal": row["adjusted_price_decimal"],
+            "canonical_unadjusted_price_decimal": row[
+                "canonical_unadjusted_price_decimal"
+            ],
+            "factor_decimal": row["factor_decimal"],
+            "algorithm_version": row["algorithm_version"],
+            "content_hash": row["content_hash"],
+        }
 
-    def _fingerprint(self, name: str, command: PlanCommand) -> str:
-        payload = asdict(command)
-        payload.pop("invocation_id")
-        return canonical_hash({"command": name, "request": payload})
 
-    def _insert_receipt(
-        self,
-        invocation_id: str,
-        name: str,
-        fingerprint: str,
-        result_type: str,
-        result_id: str,
-    ) -> None:
-        self.connection.execute(
-            "INSERT INTO command_receipt VALUES(?,?,?,?,?)",
-            (invocation_id, name, fingerprint, result_type, result_id),
-        )
-
-    def _draft_receipt(
-        self, invocation_id: str, name: str, fingerprint: str
-    ) -> TradePlanDraftView | None:
-        row = self.connection.execute(
-            "SELECT * FROM command_receipt WHERE invocation_id=?", (invocation_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        if (
-            row["command_name"] != name
-            or row["request_hash"] != fingerprint
-            or row["result_type"] != "TradePlanDraft"
-        ):
-            raise PlanError("INVOCATION_CONFLICT")
-        return self.get_draft(row["result_id"])
-
-    def _version_receipt(
-        self, invocation_id: str, name: str, fingerprint: str
-    ) -> TradePlanVersionView | None:
-        row = self.connection.execute(
-            "SELECT * FROM command_receipt WHERE invocation_id=?", (invocation_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        if (
-            row["command_name"] != name
-            or row["request_hash"] != fingerprint
-            or row["result_type"] != "TradePlanVersion"
-        ):
-            raise PlanError("INVOCATION_CONFLICT")
-        return self.get_version(row["result_id"])
+__all__ = ["SQLiteTradePlanRepository"]

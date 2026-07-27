@@ -9,7 +9,10 @@ const motionCss=readFileSync(new URL("../src/motion.css",import.meta.url),"utf8"
 const researchCss=readFileSync(new URL("../src/research-view.css",import.meta.url),"utf8")
 
 test("workspace is task-first, progressively discloses provenance, and exposes frozen history",()=>{
-  for(const marker of ["当前任务","计划确认","完整历史","数据详情与引用","user_fixture_input","不构成个性化投资建议"]) assert.ok(html.includes(marker))
+  for(const marker of ["当前任务","计划确认","完整历史","数据详情与引用","计划版本绑定精确策略","不构成个性化投资建议"]) assert.ok(html.includes(marker))
+  assert.ok(!html.includes("user_fixture_input"))
+  assert.ok(!app.includes("plan-confirmations"))
+  assert.ok(!app.includes("confirmPlan"))
   for(const kind of ["WorkflowRun","DataSnapshot","ResearchRun","ChartAnnotationVersion","TradePlanVersion","MarketSnapshot","PlanEvaluation","ArtifactManifest"]) assert.ok(app.includes(kind))
 })
 

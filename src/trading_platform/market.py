@@ -10,14 +10,12 @@ from trading_platform.domain.market import (
     MarketError,
     MarketSnapshotView,
     PlanEvaluationView,
-    evaluate_rules,
 )
 from trading_platform.domain.plans import (
-    ActivePlanView,
+    ActiveTradePlan,
     PlanValidationError,
-    TradePlanVersionView,
+    TradePlanVersion,
 )
-from trading_platform.identity import canonical_hash
 
 
 class MarketRepository(Protocol):
@@ -32,9 +30,9 @@ class MarketRepository(Protocol):
 
 
 class PlanLookup(Protocol):
-    def get_version(self, version_id: str) -> TradePlanVersionView: ...
-    def get_lifecycle(self, plan_id: str) -> ActivePlanView: ...
-    def get_account_operands(self, plan_version_id: str) -> dict[str, str]: ...
+    def get_version(self, version_id: str) -> TradePlanVersion: ...
+
+    def get_active_master_by_plan(self, plan_id: str) -> ActiveTradePlan: ...
 
 
 class MarketEvaluationService:
@@ -52,46 +50,13 @@ class MarketEvaluationService:
             version = self.plans.get_version(command.plan_version_id)
         except PlanValidationError as error:
             raise MarketError("PLAN_VERSION_NOT_ACTIVE") from error
-        lifecycle = self.plans.get_lifecycle(version.plan_id)
+        lifecycle = self.plans.get_active_master_by_plan(version.plan_id)
         if (
-            lifecycle.active_version is None
-            or lifecycle.active_version.plan_version_id != command.plan_version_id
+            lifecycle.version is None
+            or lifecycle.version.plan_version_id != command.plan_version_id
         ):
             raise MarketError("PLAN_VERSION_NOT_ACTIVE")
-        if (
-            command.evaluator_version != version.content.evaluator_policy_version
-            or command.evaluation_policy_version
-            not in {"evaluation-policy@1", "evaluation-policy@2"}
-        ):
-            raise MarketError("EVALUATOR_OR_POLICY_UNAVAILABLE")
-        market = self.repository.get_market_snapshot(command.market_snapshot_id)
-        if market.security_id != version.content.security_id:
-            raise MarketError("SNAPSHOT_SCOPE_MISMATCH")
-        status, outcome, completeness, results = evaluate_rules(
-            version.content,
-            market,
-            self.plans.get_account_operands(version.plan_version_id),
-        )
-        identity = canonical_hash(
-            {
-                "plan_version_id": command.plan_version_id,
-                "market_snapshot_id": command.market_snapshot_id,
-                "evaluator_version": command.evaluator_version,
-                "evaluation_policy_version": command.evaluation_policy_version,
-            }
-        )
-        evaluation = PlanEvaluationView(
-            f"plan_evaluation_{identity[:24]}",
-            command.plan_version_id,
-            command.market_snapshot_id,
-            command.evaluator_version,
-            command.evaluation_policy_version,
-            status,
-            outcome,
-            completeness,
-            results,
-        )
-        return self.repository.save_plan_evaluation(evaluation)
+        raise MarketError("PLAN_AST_V2_EVALUATOR_UNAVAILABLE")
 
     def get_market_snapshot(self, market_snapshot_id: str) -> MarketSnapshotView:
         return self.repository.get_market_snapshot(market_snapshot_id)

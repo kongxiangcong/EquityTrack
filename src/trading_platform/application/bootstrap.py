@@ -21,10 +21,9 @@ from trading_platform.persistence.account_snapshots import (
     SQLiteAccountSnapshotRepository,
 )
 from trading_platform.persistence.market import SQLiteMarketRepository
-from trading_platform.persistence.plans import SQLitePlanRepository
+from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.persistence.presence import RuntimePresence
 from trading_platform.persistence.workspace import WorkspaceService
-from trading_platform.plans import PlanService
 from trading_platform.operations import PlatformOperations
 from trading_platform.operations import OperationError
 from trading_platform.provider_config import ProviderRuntimeAdapter, load_sync_job
@@ -45,13 +44,13 @@ from .web_tasks import (
     ChartAnnotations,
     ChartWorkspace,
     DecisionWorkspace,
-    PlanConfirmation,
     UpdateAuthorizations,
 )
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
 from .account_state import AccountStateQueries, EstimatedAccountWorkspace
 from .strategy_catalog import StrategyQueries
+from .trade_plan_authoring import TradePlanTasks
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -201,7 +200,9 @@ def open_daily_research_cycle(
             _ledger(store),
             _repo_root(),
         )
-        plans = PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
+        plans = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
+        )
         market = MarketEvaluationService(
             SQLiteMarketRepository(store.connection, store.writer_lock), plans
         )
@@ -287,9 +288,11 @@ def open_chart_annotations(
 @contextmanager
 def open_trade_plan(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[PlanConfirmation]:
+) -> Iterator[TradePlanTasks]:
     with _store(data_root, migrations_root) as store:
-        yield PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
+        yield TradePlanTasks(
+            SQLiteTradePlanRepository(store.connection, store.writer_lock)
+        )
 
 
 @contextmanager
@@ -323,7 +326,6 @@ def open_browser_acceptance_fixture(
                 ledger,
                 repo_root,
             ),
-            PlanService(SQLitePlanRepository(store.connection, store.writer_lock)),
         )
 
 
@@ -332,7 +334,9 @@ def open_market(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[MarketEvaluationService]:
     with _store(data_root, migrations_root) as store:
-        plans = PlanService(SQLitePlanRepository(store.connection, store.writer_lock))
+        plans = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
+        )
         yield MarketEvaluationService(
             SQLiteMarketRepository(store.connection, store.writer_lock), plans
         )

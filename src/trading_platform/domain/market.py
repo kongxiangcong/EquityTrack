@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import Enum
-from typing import Mapping
-
-from trading_platform.domain.plans import PlanCondition, PlanDraftContent, PlanRule
+from typing import Any, Mapping
 
 
 class MarketError(ValueError):
@@ -584,7 +582,7 @@ def _blocked(
 
 
 def evaluate_rules(
-    content: PlanDraftContent,
+    content: Any,
     market: MarketSnapshotView,
     account_operands: Mapping[str, str] | None = None,
 ) -> tuple[
@@ -648,7 +646,7 @@ def evaluate_rules(
 
 
 def _evaluate_rule(
-    rule: PlanRule,
+    rule: Any,
     components: Mapping[str, MarketComponentView],
     observed_at: str,
     account_operands: Mapping[str, str],
@@ -686,7 +684,7 @@ def _evaluate_rule(
 
 
 def _evaluate_condition(
-    condition: PlanCondition,
+    condition: Any,
     components: Mapping[str, MarketComponentView],
     account_operands: Mapping[str, str],
 ) -> tuple[str, tuple[tuple[str, str], ...], tuple[str, ...], ReasonCode | None]:
