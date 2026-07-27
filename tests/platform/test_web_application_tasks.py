@@ -1,125 +1,51 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from trading_platform.application import (
+    open_application_commands,
     open_browser_acceptance_fixture,
     open_read_models,
     open_platform_operations,
 )
-from trading_platform.domain.chart import (
-    AnnotationDraft,
-    AnnotationLifecycleCommand,
-    AnnotationVersion,
-    ChartBar,
-    ChartSeries,
-)
+from tests.platform.test_plan_change_proposals import _proposal_authority
 from trading_platform.web_server import LocalChartWorkspaceServer
 from trading_platform.application.browser_acceptance import BrowserAcceptanceFixture
 
 
-class _ChartWorkspace:
-    def get_series(self, security_id: str, snapshot_id: str) -> ChartSeries:
-        return ChartSeries(
-            security_id,
-            "1d",
-            "none",
-            snapshot_id,
-            None,
-            "2026-07-10",
-            "valid",
-            (ChartBar("2026-07-10T15:00:00+08:00", "80", "84", "79", "82", "1"),),
-        )
-
-
-class _ChartAnnotations:
-    def __init__(self) -> None:
-        self.commands: list[AnnotationLifecycleCommand] = []
-
-    def apply(self, command: AnnotationLifecycleCommand) -> AnnotationVersion:
-        self.commands.append(command)
-        draft = AnnotationDraft(
-            command.security_id,
-            "1d",
-            "none",
-            command.data_snapshot_id,
-            None,
-            command.kind or "horizontal_line",
-            command.style or "accent",
-            command.author_id,
-            command.anchors,
-        )
-        return AnnotationVersion(
-            "annotation_fixture",
-            "annotation_version_fixture",
-            1,
-            None,
-            "active",
-            draft,
-            "2026-07-10T00:00:00+00:00",
-            "fixture-hash",
-        )
-
-    def list_history(self, security_id: str) -> tuple[AnnotationVersion, ...]:
-        del security_id
-        return ()
-
-
-class _UpdateAuthorizations:
-    pass
-
-
-def test_web_annotation_route_invokes_one_typed_lifecycle_task(
+def test_web_read_route_serializes_the_application_dto(
     tmp_path: Path,
 ) -> None:
-    web_root = tmp_path / "web"
-    web_root.mkdir()
-    (web_root / "index.html").write_text("<html><head></head></html>", encoding="utf-8")
-    annotations = _ChartAnnotations()
-    server = LocalChartWorkspaceServer(
-        chart_workspace=_ChartWorkspace(),
-        chart_annotations=annotations,
-        update_authorizations=_UpdateAuthorizations(),
-        web_root=web_root,
-        security_id="security_yihua",
-        snapshot_id="snapshot_chart",
-    )
-    base = server.start()
-    try:
-        html = urlopen(base).read().decode("utf-8")
-        token = html.split('name="csrf-token" content="', 1)[1].split('"', 1)[0]
-        payload = json.dumps(
-            {
-                "kind": "horizontal_line",
-                "style": "accent",
-                "anchors": [
-                    {
-                        "market_timestamp": "2026-07-10T15:00:00+08:00",
-                        "exact_price_decimal": "82.3300",
-                    }
-                ],
-            }
-        ).encode()
-        request = Request(
-            base + "/api/annotations",
-            data=payload,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Origin": base,
-                "X-CSRF-Token": token,
-                "X-Invocation-Id": "web:create",
-            },
+    data_root, _, _ = _proposal_authority(tmp_path, "web-route")
+    with ExitStack() as stack:
+        reads = stack.enter_context(open_read_models(data_root))
+        commands = stack.enter_context(open_application_commands(data_root))
+        server = LocalChartWorkspaceServer(
+            read_models=reads,
+            application_commands=commands,
+            web_root=Path(__file__).parents[2] / "web/dist",
+            account_id="account_local",
+            security_id="security_600000",
         )
-        created = json.loads(urlopen(request).read())
-    finally:
-        server.close()
-
-    assert created["version_no"] == 1
-    assert len(annotations.commands) == 1
-    assert annotations.commands[0].operation == "create"
+        base = server.start()
+        stack.callback(server.close)
+        portfolio = json.loads(
+            urlopen(base + "/api/read-models/portfolio@1").read()
+        )
+        holding = json.loads(
+            urlopen(base + "/api/read-models/holding@1").read()
+        )
+    assert portfolio["schema_version"] == "PortfolioWorkspaceView@1"
+    assert set(portfolio) >= {
+        "projection_id",
+        "source_ids",
+        "generated_at",
+        "content_hash",
+    }
+    assert holding["schema_version"] == "HoldingWorkspaceView@1"
 
 
 def test_public_browser_fixture_prepares_decision_journey(

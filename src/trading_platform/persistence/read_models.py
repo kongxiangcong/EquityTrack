@@ -511,12 +511,29 @@ class SQLiteReadModelProjection:
             "AND status='open' ORDER BY revision DESC LIMIT 1",
             (account_id,),
         )
+        draft_content = (
+            json.loads(draft["content_json"])
+            if draft is not None
+            else None
+        )
         capabilities = (
             self._all(
                 "SELECT capability_key,state,reason_code,"
                 "required_field_refs_json FROM account_snapshot_capability "
                 "WHERE account_snapshot_version_id=? "
                 "ORDER BY capability_key",
+                (version["account_snapshot_version_id"],),
+            )
+            if version is not None
+            else ()
+        )
+        confirmed_positions = (
+            self._all(
+                "SELECT security_id,total_quantity,"
+                "available_quantity_state,available_quantity_value,"
+                "cost_state,cost_value,market_value_state,"
+                "market_value_value FROM account_snapshot_position "
+                "WHERE account_snapshot_version_id=? ORDER BY security_id",
                 (version["account_snapshot_version_id"],),
             )
             if version is not None
@@ -563,25 +580,40 @@ class SQLiteReadModelProjection:
                     "fees_state": version["fees_state"],
                     "fees_value": version["fees_value"],
                     "currency": version["currency"],
+                    "positions": confirmed_positions,
                 }
                 if version is not None
                 else None
             ),
             "current_draft": (
                 {
-                    "draft_id": draft["draft_id"],
-                    "revision": draft["revision"],
-                    "status": draft["status"],
-                    "as_of_at": draft["as_of_at"],
-                    "as_of_precision": draft["as_of_precision"],
-                    "cash_state": draft["cash_state"],
-                    "cash_value": draft["cash_value"],
-                    "nav_state": draft["nav_state"],
-                    "nav_value": draft["nav_value"],
-                    "fees_state": draft["fees_state"],
-                    "fees_value": draft["fees_value"],
+                    key: draft_content[key]
+                    for key in (
+                        "draft_id",
+                        "account_id",
+                        "revision",
+                        "status",
+                        "source_kind",
+                        "redacted_source_ref",
+                        "as_of_at",
+                        "as_of_precision",
+                        "timezone",
+                        "session_semantics",
+                        "currency",
+                        "cash_state",
+                        "cash_value",
+                        "nav_state",
+                        "nav_value",
+                        "fees_state",
+                        "fees_value",
+                        "positions",
+                        "previous_snapshot_version_id",
+                        "revises_snapshot_version_id",
+                        "corrects_snapshot_version_id",
+                        "correction_reason",
+                    )
                 }
-                if draft is not None
+                if draft_content is not None
                 else None
             ),
             "field_lineage": (

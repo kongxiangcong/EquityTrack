@@ -21,7 +21,7 @@ python -m trading_platform.cli application-command --data-root <root> --envelope
 python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
-python -m trading_platform.cli serve --data-root <root> --web-root web/dist --security-id <id> --snapshot-id <id>
+python -m trading_platform.cli serve --data-root <root> --web-root web/dist --account-id <id> --security-id <id>
 python -m trading_platform.cli backup --data-root <root> --archive <outside-root.zip>
 python -m trading_platform.cli restore --archive <backup.zip> --target-root <new-root>
 python -m trading_platform.cli test --repo-root .

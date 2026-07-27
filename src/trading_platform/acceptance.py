@@ -770,11 +770,29 @@ class AcceptanceEvidenceService:
         verifier = evidence.get("verifier") if isinstance(evidence, Mapping) else None
         browser = evidence.get("browser") if isinstance(evidence, Mapping) else None
         initial = evidence.get("initial") if isinstance(evidence, Mapping) else None
-        decision = evidence.get("decision") if isinstance(evidence, Mapping) else None
-        headers = decision.get("headers") if isinstance(decision, Mapping) else None
-        created = evidence.get("created") if isinstance(evidence, Mapping) else None
-        plan = evidence.get("plan_confirmation") if isinstance(evidence, Mapping) else None
-        focus = evidence.get("keyboard_focus") if isinstance(evidence, Mapping) else None
+        routes = (
+            evidence.get("routes_and_headers")
+            if isinstance(evidence, Mapping)
+            else None
+        )
+        headers = (
+            routes.get("headers") if isinstance(routes, Mapping) else None
+        )
+        screenshots = (
+            evidence.get("screenshots")
+            if isinstance(evidence, Mapping)
+            else None
+        )
+        plan = (
+            evidence.get("plan_progressive_disclosure")
+            if isinstance(evidence, Mapping)
+            else None
+        )
+        editor = (
+            evidence.get("account_editor")
+            if isinstance(evidence, Mapping)
+            else None
+        )
         expected_source_hash = _sha256(
             self.repo_root / "scripts/verify_issue05_browser.py"
         )
@@ -790,8 +808,51 @@ class AcceptanceEvidenceService:
             ).encode("utf-8")
         ).hexdigest()
         product = browser.get("product", "") if isinstance(browser, Mapping) else ""
-        reload_ledger = evidence.get("reload_ledger", "")
-        restart_ledger = evidence.get("restart_ledger", "")
+        expected_navigation = ["总览", "组合", "复核", "研究"]
+        expected_groups = [
+            "account-summary",
+            "task-summary",
+            "change-summary",
+            "plan-summary",
+            "exception-summary",
+        ]
+        expected_home_keys = sorted(
+            [
+                "account_state_summary",
+                "unresolved_decision_tasks",
+                "material_changes_since_last_review",
+                "holding_active_plan_summaries",
+                "discipline_exception_summary",
+            ]
+        )
+        expected_retired = {
+            "/api/workspace",
+            "/daily",
+            "/api/daily",
+            "/api/chart-series",
+            "/api/annotations",
+            "/api/update-authorizations",
+        }
+
+        def screenshot_valid(name: str) -> bool:
+            if not isinstance(screenshots, Mapping):
+                return False
+            item = screenshots.get(name)
+            if not isinstance(item, Mapping):
+                return False
+            filename = item.get("name")
+            if (
+                not isinstance(filename, str)
+                or filename != f"{name}.png"
+            ):
+                return False
+            target = path.parent / "browser-cdp-screenshots" / filename
+            return (
+                target.is_file()
+                and item.get("size") == target.stat().st_size
+                and item.get("sha256") == _sha256(target)
+            )
+
         valid = (
             evidence.get("schema_version") == "BrowserAcceptanceEvidence@1"
             and evidence.get("status") == "passed"
@@ -804,36 +865,52 @@ class AcceptanceEvidenceService:
             and ("Chrome/" in product or "Edg/" in product)
             and bool(browser.get("protocol_version"))
             and isinstance(initial, Mapping)
-            and isinstance(initial.get("canvas"), int)
-            and initial["canvas"] >= 1
-            and initial.get("ledger") == 0
+            and initial.get("navigation") == expected_navigation
+            and initial.get("homeGroups") == expected_groups
             and initial.get("external") == []
-            and isinstance(decision, Mapping)
-            and decision.get("schema") == "ResearchDecisionView@2"
-            and bool(decision.get("workflow"))
-            and isinstance(decision.get("report"), int)
-            and decision["report"] > 0
+            and all(
+                initial.get(name) is True
+                for name in (
+                    "unknownVisible",
+                    "skipLink",
+                    "mainFocusable",
+                    "oneH1",
+                    "dialogLabels",
+                )
+            )
+            and isinstance(routes, Mapping)
+            and routes.get("schema") == "PortfolioWorkspaceView@1"
+            and routes.get("homeKeys") == expected_home_keys
+            and isinstance(routes.get("retired"), Mapping)
+            and set(routes["retired"]) == expected_retired
+            and set(routes["retired"].values()) == {404}
             and isinstance(headers, Mapping)
             and "default-src 'self'" in headers.get("csp", "")
             and headers.get("nosniff") == "nosniff"
             and headers.get("referrer") == "no-referrer"
             and headers.get("opener") == "same-origin"
-            and isinstance(created, Mapping)
-            and created.get("ledger") == 1
-            and "v1" in created.get("status", "")
             and isinstance(plan, Mapping)
-            and plan == {"open": 0, "versions": 1}
-            and isinstance(focus, list)
-            and focus == ["end-price", "confirm"]
+            and all(plan.get(name) is True for name in (
+                "open",
+                "rules",
+                "diagnosticsClosed",
+            ))
+            and isinstance(editor, Mapping)
+            and editor.get("draftSaved") is True
+            and editor.get("confirmDisabled") is True
+            and "已确认 v2" in editor.get("summary", "")
+            and editor.get("detailsClosed") is True
             and all(
                 evidence.get(name) is True
-                for name in ("responsive", "reduced_motion", "recoverable_error")
+                for name in ("responsive", "reduced_motion")
             )
-            and reload_ledger == restart_ledger
             and all(
-                marker in reload_ledger
-                for marker in ("v1", "v2", "v3", "v4", "已删除")
+                screenshot_valid(name)
+                for name in ("overview", "portfolio", "review", "research")
             )
+            and "已确认 v2" in evidence.get("restart_state", "")
+            and evidence.get("console_errors") == []
+            and evidence.get("network_failures") == []
         )
         if not valid:
             raise ValueError("BROWSER_EVIDENCE_INVALID")

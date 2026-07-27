@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import shutil
@@ -12,7 +13,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import websocket
@@ -20,15 +21,10 @@ import websocket
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from tests.platform.test_plan_change_proposals import _proposal_authority
 from trading_platform.application import (
-    BrowserAcceptanceFixtureResult,
-    open_browser_acceptance_fixture,
-    open_chart_annotations,
-    open_chart_workspace,
-    open_decision_workspace,
-    open_platform_operations,
-    open_trade_plan,
-    open_update_authorizations,
+    open_application_commands,
+    open_read_models,
 )
 from trading_platform.web_server import LocalChartWorkspaceServer
 
@@ -41,11 +37,19 @@ class Cdp:
         self.next_id = 1
         self.events: list[dict[str, Any]] = []
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call(
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         identifier = self.next_id
         self.next_id += 1
         self.socket.send(
-            json.dumps({"id": identifier, "method": method, "params": params or {}})
+            json.dumps(
+                {
+                    "id": identifier,
+                    "method": method,
+                    "params": params or {},
+                }
+            )
         )
         while True:
             message = json.loads(self.socket.recv())
@@ -104,11 +108,17 @@ def _connect(port: int) -> Cdp:
     while time.time() < deadline:
         try:
             request = Request(
-                f"http://127.0.0.1:{port}/json/new?about:blank", method="PUT"
+                f"http://127.0.0.1:{port}/json/new?about:blank",
+                method="PUT",
             )
             page = json.loads(urlopen(request, timeout=1).read())
             return Cdp(page["webSocketDebuggerUrl"])
-        except (URLError, TimeoutError, KeyError, websocket.WebSocketException):
+        except (
+            URLError,
+            TimeoutError,
+            KeyError,
+            websocket.WebSocketException,
+        ):
             time.sleep(0.2)
     raise RuntimeError("CHROMIUM_CDP_UNAVAILABLE")
 
@@ -116,37 +126,50 @@ def _connect(port: int) -> Cdp:
 def _navigate(cdp: Cdp, url: str) -> None:
     cdp.call("Page.navigate", {"url": url})
     cdp.wait_for("document.readyState === 'complete'")
-    text = cdp.wait_for("document.querySelector('#banner')?.textContent")
-    deadline = time.time() + 10
-    while "正在读取" in text and time.time() < deadline:
-        time.sleep(0.1)
-        text = cdp.evaluate("document.querySelector('#banner')?.textContent")
-    if "冻结快照已载入" not in text:
-        raise RuntimeError(
-            json.dumps({"banner": text, "events": cdp.events[-10:]}, ensure_ascii=False)
-        )
+    cdp.wait_for(
+        "document.querySelector('#load-status')?.dataset.state === 'ready'"
+    )
 
 
 def _server(
-    stack: ExitStack,
-    data_root: Path,
-    prepared: BrowserAcceptanceFixtureResult,
+    stack: ExitStack, data_root: Path
 ) -> tuple[LocalChartWorkspaceServer, str]:
     server = LocalChartWorkspaceServer(
-        decision_workspace=stack.enter_context(open_decision_workspace(data_root)),
-        chart_workspace=stack.enter_context(open_chart_workspace(data_root)),
-        chart_annotations=stack.enter_context(open_chart_annotations(data_root)),
-        trade_plan=stack.enter_context(open_trade_plan(data_root)),
-        update_authorizations=stack.enter_context(
-            open_update_authorizations(data_root)
+        read_models=stack.enter_context(open_read_models(data_root)),
+        application_commands=stack.enter_context(
+            open_application_commands(data_root)
         ),
         web_root=ROOT / "web" / "dist",
-        security_id=prepared.security_id,
-        snapshot_id=prepared.snapshot_id,
+        account_id="account_local",
+        security_id="security_600000",
     )
     base_url = server.start()
     stack.callback(server.close)
     return server, base_url
+
+
+def _screenshot(cdp: Cdp, target: Path) -> dict[str, object]:
+    encoded = cdp.call(
+        "Page.captureScreenshot",
+        {"format": "png", "captureBeyondViewport": True},
+    )["data"]
+    payload = base64.b64decode(encoded)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return {
+        "name": target.name,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+
+
+def _page(cdp: Cdp, page: str) -> None:
+    cdp.evaluate(
+        f"document.querySelector('[data-page=\"{page}\"]').click()"
+    )
+    cdp.wait_for(
+        f"!document.querySelector('#page-{page}').hidden"
+    )
 
 
 def main() -> None:
@@ -154,17 +177,18 @@ def main() -> None:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--evidence-file", type=Path)
     args = parser.parse_args()
-    temp_root = Path(tempfile.mkdtemp(prefix="issue05-browser-"))
-    data_root = temp_root / "data"
-    open_platform_operations(data_root).bootstrap()
-    with open_browser_acceptance_fixture(
-        data_root,
-        ROOT / "tests" / "fixtures" / "platform_data" / "manifest.json",
-        ROOT,
-    ) as fixture:
-        prepared = fixture.prepare()
+    temp_root = Path(tempfile.mkdtemp(prefix="tdk-browser-"))
+    data_root, _, _ = _proposal_authority(
+        temp_root, "production-browser"
+    )
+    evidence_file = (
+        args.evidence_file.resolve()
+        if args.evidence_file is not None
+        else temp_root / "browser-cdp.json"
+    )
+    screenshot_root = evidence_file.parent / "browser-cdp-screenshots"
     server_stack = ExitStack()
-    _, base_url = _server(server_stack, data_root, prepared)
+    _, base_url = _server(server_stack, data_root)
     port = _free_port()
     browser = subprocess.Popen(
         [
@@ -191,152 +215,264 @@ def main() -> None:
     try:
         cdp = _connect(port)
         browser_version = cdp.call("Browser.getVersion")
-        cdp.call("Runtime.enable")
-        cdp.call("Page.enable")
+        for domain in ("Runtime", "Page", "Log", "Network"):
+            cdp.call(f"{domain}.enable")
         _navigate(cdp, base_url)
-        initial = cdp.evaluate(
-            "JSON.stringify({canvas:document.querySelectorAll('#chart canvas').length,ledger:document.querySelectorAll('#ledger li').length,external:[...performance.getEntriesByType('resource')].map(x=>x.name).filter(x=>typeof x==='string'&&!x.startsWith(location.origin))})"
-        )
-        initial_state = json.loads(initial)
-        if initial_state["canvas"] < 1 or initial_state["external"]:
-            raise AssertionError(initial_state)
 
-        workspace_and_headers = cdp.evaluate(
-            """(async()=>{const response=await fetch('/api/workspace');const model=await response.json();return JSON.stringify({schema:model.research_views?.[0]?.schema_version,workflow:model.research_views?.[0]?.workflow_run_id,report:document.querySelector('#report-viewer')?.srcdoc?.length??0,headers:{csp:response.headers.get('content-security-policy'),nosniff:response.headers.get('x-content-type-options'),referrer:response.headers.get('referrer-policy'),opener:response.headers.get('cross-origin-opener-policy')}})})()""",
-            await_promise=True,
-        )
-        decision = json.loads(workspace_and_headers)
-        if (
-            decision["schema"] != "ResearchDecisionView@2"
-            or decision["workflow"] != prepared.workflow_run_id
-            or decision["report"] <= 0
-            or "default-src 'self'" not in decision["headers"]["csp"]
-            or decision["headers"]["nosniff"] != "nosniff"
-            or decision["headers"]["referrer"] != "no-referrer"
-            or decision["headers"]["opener"] != "same-origin"
-        ):
-            raise AssertionError(decision)
-
-        cdp.evaluate("document.querySelector('#plan-list button').click()")
-        cdp.wait_for(
-            "document.querySelector('#plan-list')?.textContent.includes('已确认')"
-        )
-        plan_confirmation = json.loads(
+        initial = json.loads(
             cdp.evaluate(
-                """(async()=>{const model=await(await fetch('/api/workspace')).json();return JSON.stringify({open:model.plan_drafts.filter(x=>x.status==='open').length,versions:model.history.plans.length})})()""",
+                """JSON.stringify({
+                  navigation:[...document.querySelectorAll('.primary-nav [data-page]')].map(x=>x.textContent.trim()),
+                  homeGroups:['account-summary','task-summary','change-summary','plan-summary','exception-summary'].filter(id=>document.getElementById(id)),
+                  external:[...performance.getEntriesByType('resource')].map(x=>x.name).filter(x=>typeof x==='string'&&!x.startsWith(location.origin)),
+                  unknownVisible:document.querySelector('#page-overview').textContent.includes('未知（未按零处理）'),
+                  skipLink:Boolean(document.querySelector('.skip-link[href="#workspace-content"]')),
+                  mainFocusable:document.querySelector('#workspace-content')?.tabIndex===-1,
+                  oneH1:document.querySelectorAll('h1').length===1,
+                  dialogLabels:[...document.querySelectorAll('dialog')].every(x=>Boolean(x.getAttribute('aria-labelledby')))
+                })"""
+            )
+        )
+        if (
+            initial["navigation"] != ["总览", "组合", "复核", "研究"]
+            or initial["homeGroups"]
+            != [
+                "account-summary",
+                "task-summary",
+                "change-summary",
+                "plan-summary",
+                "exception-summary",
+            ]
+            or initial["external"]
+            or not all(
+                initial[name]
+                for name in (
+                    "unknownVisible",
+                    "skipLink",
+                    "mainFocusable",
+                    "oneH1",
+                    "dialogLabels",
+                )
+            )
+        ):
+            raise AssertionError(initial)
+
+        routes_and_headers = json.loads(
+            cdp.evaluate(
+                """(async()=>{
+                  const current=await fetch('/api/read-models/portfolio@1');
+                  const model=await current.json();
+                  return JSON.stringify({
+                    schema:model.schema_version,
+                    homeKeys:Object.keys(model).filter(x=>!['schema_version','projection_id','source_ids','generated_at','content_hash'].includes(x)).sort(),
+                    headers:{
+                      csp:current.headers.get('content-security-policy'),
+                      nosniff:current.headers.get('x-content-type-options'),
+                      referrer:current.headers.get('referrer-policy'),
+                      opener:current.headers.get('cross-origin-opener-policy')
+                    }
+                  });
+                })()""",
                 await_promise=True,
             )
         )
-        if plan_confirmation != {"open": 0, "versions": 1}:
-            raise AssertionError(plan_confirmation)
+        retired_routes = (
+            "/api/workspace",
+            "/daily",
+            "/api/daily",
+            "/api/chart-series",
+            "/api/annotations",
+            "/api/update-authorizations",
+        )
+        retired_status: dict[str, int] = {}
+        for route in retired_routes:
+            try:
+                urlopen(base_url + route)
+            except HTTPError as error:
+                retired_status[route] = error.code
+            else:
+                retired_status[route] = 200
+        routes_and_headers["retired"] = retired_status
+        expected_home = sorted(
+            [
+                "account_state_summary",
+                "unresolved_decision_tasks",
+                "material_changes_since_last_review",
+                "holding_active_plan_summaries",
+                "discipline_exception_summary",
+            ]
+        )
+        if (
+            routes_and_headers["schema"]
+            != "PortfolioWorkspaceView@1"
+            or routes_and_headers["homeKeys"] != expected_home
+            or set(routes_and_headers["retired"].values()) != {404}
+            or "default-src 'self'"
+            not in routes_and_headers["headers"]["csp"]
+            or routes_and_headers["headers"]["nosniff"] != "nosniff"
+            or routes_and_headers["headers"]["referrer"] != "no-referrer"
+            or routes_and_headers["headers"]["opener"] != "same-origin"
+        ):
+            raise AssertionError(routes_and_headers)
 
+        screenshots: dict[str, dict[str, object]] = {}
+        screenshots["overview"] = _screenshot(
+            cdp, screenshot_root / "overview.png"
+        )
+        for page in ("portfolio", "review", "research"):
+            _page(cdp, page)
+            if page == "review":
+                review_rendering = cdp.evaluate(
+                    "!document.querySelector('#page-review').textContent.includes('undefined') && document.querySelector('#page-review').textContent.includes('impact_assessment_')"
+                )
+                if not review_rendering:
+                    raise AssertionError(
+                        cdp.evaluate(
+                            "document.querySelector('#page-review').textContent"
+                        )
+                    )
+            screenshots[page] = _screenshot(
+                cdp, screenshot_root / f"{page}.png"
+            )
+
+        _page(cdp, "overview")
         cdp.evaluate(
-            "document.querySelector('#start-price').value='82.3300';document.querySelector('#start').focus()"
+            "document.querySelector('#plan-summary button').click()"
         )
-        enter = {
-            "key": "Enter",
-            "code": "Enter",
-            "windowsVirtualKeyCode": 13,
-            "nativeVirtualKeyCode": 13,
-        }
-        cdp.call("Input.dispatchKeyEvent", {"type": "rawKeyDown", **enter})
-        cdp.call(
-            "Input.dispatchKeyEvent",
-            {"type": "char", "text": "\r", "unmodifiedText": "\r", **enter},
-        )
-        cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", **enter})
-        focus_after_start = cdp.evaluate("document.activeElement.id")
-        focus_after_finish = cdp.evaluate(
-            "document.querySelector('#end-price').value='83.1250';document.querySelector('#finish').click();document.activeElement.id"
-        )
-        if (focus_after_start, focus_after_finish) != ("end-price", "confirm"):
-            raise AssertionError((focus_after_start, focus_after_finish))
-        cdp.evaluate("document.querySelector('#confirm').click()")
+        cdp.wait_for("document.querySelector('#plan-dialog').open")
         try:
             cdp.wait_for(
-                "document.querySelector('#save-status')?.textContent.includes('已持久化 v1')"
+                "Boolean(document.querySelector('#plan-detail-content details'))"
             )
         except TimeoutError as error:
             state = cdp.evaluate(
-                "JSON.stringify({status:document.querySelector('#save-status')?.textContent,ledger:document.querySelector('#ledger')?.textContent,confirmDisabled:document.querySelector('#confirm')?.disabled})"
+                "document.querySelector('#plan-detail-content').textContent"
             )
             raise RuntimeError(state) from error
-        created = cdp.evaluate(
-            "JSON.stringify({ledger:document.querySelectorAll('#ledger li').length,status:document.querySelector('#save-status').textContent})"
+        plan_disclosure = json.loads(
+            cdp.evaluate(
+                """JSON.stringify({
+                  open:document.querySelector('#plan-dialog').open,
+                  rules:document.querySelector('#plan-detail-content').textContent.includes('HardRule / ReviewRule'),
+                  diagnosticsClosed:!document.querySelector('#plan-detail-content details').open
+                })"""
+            )
         )
-        cdp.evaluate("document.querySelector('#revise').click()")
-        cdp.wait_for(
-            "document.querySelector('#save-status')?.textContent.includes('v2 修订')"
-        )
-        cdp.evaluate("document.querySelector('#delete').click()")
-        cdp.wait_for(
-            "document.querySelector('#save-status')?.textContent.includes('v3 删除')"
-        )
-        cdp.evaluate("document.querySelector('#restore').click()")
-        cdp.wait_for(
-            "document.querySelector('#save-status')?.textContent.includes('v4 恢复')"
-        )
-        cdp.wait_for("document.querySelectorAll('#ledger li').length === 4")
-        recoverable_error = cdp.evaluate(
-            "document.querySelector('#end-price').value='1e999';document.querySelector('#revise').click();true"
-        )
-        cdp.wait_for(
-            "document.querySelector('#save-status')?.textContent.includes('保存失败')"
-        )
-        recoverable_error = recoverable_error and cdp.evaluate(
-            "!document.querySelector('#revise').disabled && document.querySelectorAll('#ledger li').length===4"
-        )
-        if not recoverable_error:
-            raise AssertionError("mutation error was not recoverable")
+        if not all(plan_disclosure.values()):
+            raise AssertionError(plan_disclosure)
+        cdp.evaluate("document.querySelector('#plan-dialog').close()")
 
-        fullscreen = cdp.evaluate(
-            "const before=document.querySelectorAll('#ledger li').length;document.querySelector('#fullscreen').click();JSON.stringify({active:document.querySelector('.workspace').classList.contains('fullscreen'),sameLedger:before===document.querySelectorAll('#ledger li').length,canvas:document.querySelectorAll('#chart canvas').length})"
+        cdp.evaluate(
+            "document.querySelector('#open-account-editor').click()"
         )
-        if not all(json.loads(fullscreen).values()):
-            raise AssertionError(fullscreen)
-
-        cdp.call("Page.reload")
-        cdp.wait_for("document.readyState === 'complete'")
-        cdp.wait_for("document.querySelectorAll('#ledger li').length === 4")
-        after_reload = cdp.evaluate("document.querySelector('#ledger').textContent")
-        if "83.1250" not in after_reload:
-            raise AssertionError(after_reload)
+        cdp.wait_for("document.querySelector('#account-dialog').open")
+        cdp.evaluate(
+            """document.querySelector('[name="as_of_at"]').value='2026-07-27';
+               document.querySelector('#account-form').requestSubmit()"""
+        )
+        cdp.wait_for(
+            "document.querySelector('#account-form-status').textContent.includes('通过校验')"
+        )
+        cdp.evaluate("document.querySelector('#confirm-draft').click()")
+        cdp.wait_for(
+            "document.querySelector('#account-form-status').textContent.includes('已由用户明确确认')"
+        )
+        editor = json.loads(
+            cdp.evaluate(
+                """JSON.stringify({
+                  draftSaved:document.querySelector('#account-form-status').textContent.includes('已由用户明确确认'),
+                  confirmDisabled:document.querySelector('#confirm-draft').disabled,
+                  summary:document.querySelector('#account-editor-summary').textContent,
+                  detailsClosed:!document.querySelector('#account-dialog details').open
+                })"""
+            )
+        )
+        if (
+            not editor["draftSaved"]
+            or not editor["confirmDisabled"]
+            or "已确认 v2" not in editor["summary"]
+            or not editor["detailsClosed"]
+        ):
+            raise AssertionError(editor)
+        cdp.evaluate("document.querySelector('#account-dialog').close()")
 
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
-            {"width": 800, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+            {
+                "width": 620,
+                "height": 900,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+            },
         )
         responsive = cdp.evaluate(
-            "matchMedia('(max-width: 900px)').matches && getComputedStyle(document.querySelector('.workspace')).display === 'block'"
+            "matchMedia('(max-width: 720px)').matches && getComputedStyle(document.querySelector('.primary-nav')).gridTemplateColumns.split(' ').length===2"
         )
         cdp.call(
             "Emulation.setEmulatedMedia",
-            {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]},
+            {
+                "features": [
+                    {
+                        "name": "prefers-reduced-motion",
+                        "value": "reduce",
+                    }
+                ]
+            },
         )
         reduced_motion = cdp.evaluate(
-            "matchMedia('(prefers-reduced-motion: reduce)').matches && getComputedStyle(document.querySelector('#fullscreen')).transitionDuration === '0s'"
+            "matchMedia('(prefers-reduced-motion: reduce)').matches && parseFloat(getComputedStyle(document.querySelector('.primary-nav button')).transitionDuration||'0')<=0.001"
         )
         if not responsive or not reduced_motion:
             raise AssertionError((responsive, reduced_motion))
 
         server_stack.close()
         restarted_stack = ExitStack()
-        _, restarted_url = _server(restarted_stack, data_root, prepared)
+        _, restarted_url = _server(restarted_stack, data_root)
         _navigate(cdp, restarted_url)
-        cdp.wait_for("document.querySelectorAll('#ledger li').length === 4")
-        restart_state = cdp.evaluate("document.querySelector('#ledger').textContent")
-        errors = [
+        cdp.evaluate(
+            "document.querySelector('#open-account-editor').click()"
+        )
+        cdp.wait_for("document.querySelector('#account-dialog').open")
+        restart_state = cdp.evaluate(
+            "document.querySelector('#account-editor-summary').textContent"
+        )
+        if "已确认 v2" not in restart_state:
+            raise AssertionError(restart_state)
+
+        cdp.call("Runtime.evaluate", {"expression": "void 0"})
+        console_errors = [
             event
             for event in cdp.events
-            if event.get("method") in {"Runtime.exceptionThrown", "Log.entryAdded"}
+            if event.get("method") == "Runtime.exceptionThrown"
+            or (
+                event.get("method") == "Log.entryAdded"
+                and event.get("params", {})
+                .get("entry", {})
+                .get("level")
+                == "error"
+            )
         ]
-        if errors:
-            raise AssertionError(errors)
+        network_failures = [
+            event
+            for event in cdp.events
+            if event.get("method") == "Network.loadingFailed"
+            and not event.get("params", {}).get("canceled")
+        ]
+        if console_errors or network_failures:
+            raise AssertionError(
+                {
+                    "console_errors": console_errors,
+                    "network_failures": network_failures,
+                }
+            )
+
         result = {
             "schema_version": "BrowserAcceptanceEvidence@1",
             "verifier": {
                 "identity": "production-browser-cdp@1",
-                "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "source_sha256": hashlib.sha256(
+                    Path(__file__).read_bytes()
+                ).hexdigest(),
                 "command_identity": hashlib.sha256(
                     json.dumps(
                         [
@@ -346,29 +482,32 @@ def main() -> None:
                             "<redacted>",
                         ],
                         separators=(",", ":"),
-                    ).encode("utf-8")
+                    ).encode()
                 ).hexdigest(),
             },
             "browser": {
                 "product": browser_version.get("product"),
-                "protocol_version": browser_version.get("protocolVersion"),
+                "protocol_version": browser_version.get(
+                    "protocolVersion"
+                ),
             },
             "status": "passed",
-            "initial": initial_state,
-            "decision": decision,
-            "plan_confirmation": plan_confirmation,
-            "keyboard_focus": [focus_after_start, focus_after_finish],
-            "created": json.loads(created),
-            "reload_ledger": after_reload,
-            "restart_ledger": restart_state,
+            "initial": initial,
+            "routes_and_headers": routes_and_headers,
+            "screenshots": screenshots,
+            "plan_progressive_disclosure": plan_disclosure,
+            "account_editor": editor,
             "responsive": responsive,
             "reduced_motion": reduced_motion,
-            "recoverable_error": recoverable_error,
+            "restart_state": restart_state,
+            "console_errors": console_errors,
+            "network_failures": network_failures,
         }
-        rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
-        if args.evidence_file is not None:
-            args.evidence_file.parent.mkdir(parents=True, exist_ok=True)
-            args.evidence_file.write_text(rendered + "\n", encoding="utf-8")
+        rendered = json.dumps(
+            result, ensure_ascii=False, sort_keys=True
+        )
+        evidence_file.parent.mkdir(parents=True, exist_ok=True)
+        evidence_file.write_text(rendered + "\n", encoding="utf-8")
         print(rendered)
     finally:
         if cdp is not None:

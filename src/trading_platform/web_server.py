@@ -1,41 +1,45 @@
 from __future__ import annotations
 
 import json
-import re
+import mimetypes
 import secrets
 import threading
 from dataclasses import asdict
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from trading_platform.application import (
-    ChartAnnotations,
-    ChartWorkspace,
-    UpdateAuthorizations,
-    WorkspaceUpdateCommand,
+from trading_platform.application.command_envelope import (
+    ApplicationCommandEnvelopeV1,
+    CommandEnvelopeError,
+    InteractionChannel,
 )
-from trading_platform.chart import AnnotationError
-from trading_platform.domain.chart import AnnotationAnchor, AnnotationLifecycleCommand
+from trading_platform.application.commands import ApplicationCommandDispatcher
+from trading_platform.application.read_model_codecs import encode_read_model
+from trading_platform.application.read_models import (
+    ReadModelError,
+    ReadModelService,
+)
 
 
 class LocalChartWorkspaceServer:
+    """Serve the local discipline workspace through application task seams."""
+
     def __init__(
         self,
         *,
-        chart_workspace: ChartWorkspace,
-        chart_annotations: ChartAnnotations,
-        update_authorizations: UpdateAuthorizations,
+        read_models: ReadModelService,
+        application_commands: ApplicationCommandDispatcher,
         web_root: Path,
+        account_id: str,
         security_id: str,
-        snapshot_id: str,
     ) -> None:
-        self.chart_workspace = chart_workspace
-        self.chart_annotations = chart_annotations
-        self.update_authorizations = update_authorizations
+        self.read_models = read_models
+        self.application_commands = application_commands
         self.web_root = web_root.resolve()
+        self.account_id = account_id
         self.security_id = security_id
-        self.snapshot_id = snapshot_id
         self.csrf_token = secrets.token_urlsafe(32)
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -44,145 +48,183 @@ class LocalChartWorkspaceServer:
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            _READ_ROUTES = {
+                "/api/read-models/portfolio@1",
+                "/api/read-models/holding@1",
+                "/api/read-models/trade-plan-detail@1",
+                "/api/read-models/review@1",
+                "/api/read-models/research-index@1",
+                "/api/read-models/account-snapshot-editor@1",
+            }
+
             def do_GET(self) -> None:
                 if not self._host_allowed():
                     return self.send_error(421)
-                path = urlparse(self.path).path
-                if path == "/api/chart-series":
-                    self._json(
-                        asdict(
-                            owner.chart_workspace.get_series(
-                                owner.security_id, owner.snapshot_id
-                            )
-                        )
+                parsed = urlparse(self.path)
+                if parsed.path in self._READ_ROUTES:
+                    return self._read_model(parsed.path, parse_qs(parsed.query))
+                relative = (
+                    "index.html" if parsed.path == "/" else parsed.path.lstrip("/")
+                )
+                target = (owner.web_root / relative).resolve()
+                if (
+                    owner.web_root not in target.parents
+                    and target != owner.web_root
+                ):
+                    return self.send_error(404)
+                if not target.is_file():
+                    return self.send_error(404)
+                payload = target.read_bytes()
+                if target.name == "index.html":
+                    payload = payload.replace(
+                        b"<head>",
+                        (
+                            '<head><meta name="csrf-token" '
+                            f'content="{owner.csrf_token}">'
+                        ).encode(),
+                        1,
                     )
-                elif path == "/api/annotations":
-                    self._json(
-                        [
-                            asdict(item)
-                            for item in owner.chart_annotations.list_history(
-                                owner.security_id
-                            )
-                        ]
-                    )
-                else:
-                    relative = "index.html" if path == "/" else path.lstrip("/")
-                    target = (owner.web_root / relative).resolve()
-                    if (
-                        owner.web_root not in target.parents
-                        and target != owner.web_root
-                    ):
-                        return self.send_error(404)
-                    if not target.is_file():
-                        return self.send_error(404)
-                    payload = target.read_bytes()
-                    if target.name == "index.html":
-                        payload = payload.replace(
-                            b"<head>",
-                            f'<head><meta name="csrf-token" content="{owner.csrf_token}">'.encode(),
-                        )
-                    media = (
-                        "text/html"
-                        if target.suffix == ".html"
-                        else (
-                            "text/css"
-                            if target.suffix == ".css"
-                            else (
-                                "text/javascript"
-                                if target.suffix == ".js"
-                                else "text/plain"
-                            )
-                        )
-                    )
-                    self.send_response(200)
-                    self._security_headers()
-                    self.send_header("Content-Type", media)
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
+                media = mimetypes.guess_type(target.name)[0] or (
+                    "application/octet-stream"
+                )
+                self.send_response(200)
+                self._security_headers()
+                self.send_header("Content-Type", media)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
 
             def do_POST(self) -> None:
-                expected_origin = f"http://127.0.0.1:{owner._server.server_port}"
-                invocation_id = self.headers.get("X-Invocation-Id", "")
-                path = urlparse(self.path).path
+                expected_origin = (
+                    f"http://127.0.0.1:{owner._server.server_port}"
+                )
+                parsed = urlparse(self.path)
                 if (
                     not self._host_allowed()
                     or self.headers.get("Origin") != expected_origin
-                    or path
-                    not in {
-                        "/api/annotations",
-                        "/api/update-authorizations",
-                    }
+                    or parsed.path != "/api/application-commands"
                     or self.headers.get("X-CSRF-Token") != owner.csrf_token
                     or self.headers.get_content_type() != "application/json"
                 ):
                     return self.send_error(403)
-                if not re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", invocation_id):
-                    return self.send_error(400)
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
                     return self.send_error(400)
-                if length <= 0 or length > 32_768:
+                if length <= 0 or length > 65_536:
                     return self.send_error(413)
+                encoded = self.rfile.read(length)
                 try:
-                    payload = json.loads(self.rfile.read(length))
-                    if path == "/api/update-authorizations":
-                        requested = str(payload["requested_date"])
-                        effective = str(payload["effective_session_date"])
-                        if not re.fullmatch(
-                            r"\d{4}-\d{2}-\d{2}", requested
-                        ) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", effective):
-                            return self.send_error(400)
-                        try:
-                            authorization = owner.update_authorizations.authorize(
-                                WorkspaceUpdateCommand(
-                                    invocation_id,
-                                    owner.security_id,
-                                    requested,
-                                    effective,
-                                )
-                            )
-                        except ValueError as error:
-                            return self._json({"error_code": str(error)}, 409)
-                        return self._json(authorization, 201)
-                    operation = payload.get("operation", "create")
-                    if operation not in {"create", "revise", "delete", "restore"}:
-                        return self.send_error(400)
-                    anchors = tuple(
-                        AnnotationAnchor(
-                            item["market_timestamp"], item["exact_price_decimal"]
-                        )
-                        for item in payload.get("anchors", ())
+                    envelope = ApplicationCommandEnvelopeV1.from_bytes(encoded)
+                except CommandEnvelopeError as error:
+                    return self._json(
+                        {
+                            "schema_version": "ApplicationCommandFailure@1",
+                            "status": "failed",
+                            "code": error.code,
+                        },
+                        400,
                     )
-                    version = owner.chart_annotations.apply(
-                        AnnotationLifecycleCommand(
-                            invocation_id=invocation_id,
-                            operation=operation,
-                            security_id=owner.security_id,
-                            data_snapshot_id=owner.snapshot_id,
-                            author_id="local-user",
-                            annotation_id=payload.get("annotation_id"),
-                            expected_version_no=int(
-                                payload.get("expected_version_no", 0)
-                            ),
-                            kind=payload.get("kind"),
-                            style=payload.get("style"),
-                            anchors=anchors,
-                        )
+                if (
+                    envelope.interaction_channel is not InteractionChannel.WEB
+                    or envelope.transport_actor.identity
+                    != "adapter:web-local"
+                    or envelope.decision_actor.identity != "user:local-user"
+                    or not envelope.command_name.startswith(
+                        "account_snapshot."
                     )
-                except AnnotationError as error:
-                    if error.code == "ANNOTATION_NOT_FOUND":
-                        return self.send_error(404)
-                    return self._json({"error_code": error.code}, 422)
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                    return self.send_error(400)
-                self._json(asdict(version), 201)
+                ):
+                    return self._json(
+                        {
+                            "schema_version": "ApplicationCommandFailure@1",
+                            "status": "failed",
+                            "code": "WEB_COMMAND_CAPABILITY_DENIED",
+                        },
+                        403,
+                    )
+                result = owner.application_commands.dispatch(envelope)
+                status = 201 if result.status == "succeeded" else 422
+                return self._json(asdict(result), status)
 
-            def _json(self, value: object, status: int = 200) -> None:
-                payload = json.dumps(
-                    value, ensure_ascii=False, separators=(",", ":")
-                ).encode()
+            def _read_model(
+                self, path: str, query: dict[str, list[str]]
+            ) -> None:
+                generated_at = datetime.now(timezone.utc).isoformat()
+                try:
+                    if path == "/api/read-models/portfolio@1":
+                        self._require_no_query(query)
+                        view = owner.read_models.portfolio(
+                            owner.account_id, generated_at
+                        )
+                    elif path == "/api/read-models/holding@1":
+                        self._require_no_query(query)
+                        view = owner.read_models.holding(
+                            owner.account_id,
+                            owner.security_id,
+                            generated_at,
+                        )
+                    elif path == "/api/read-models/review@1":
+                        self._require_keys(query, {"review_run_id"})
+                        view = owner.read_models.review(
+                            owner.account_id,
+                            generated_at,
+                            self._single(query, "review_run_id", optional=True),
+                        )
+                    elif path == "/api/read-models/research-index@1":
+                        self._require_no_query(query)
+                        view = owner.read_models.research_index(
+                            generated_at, owner.security_id
+                        )
+                    elif path == (
+                        "/api/read-models/account-snapshot-editor@1"
+                    ):
+                        self._require_no_query(query)
+                        view = owner.read_models.account_editor(
+                            owner.account_id, generated_at
+                        )
+                    else:
+                        self._require_keys(query, {"plan_id"})
+                        plan_id = self._single(query, "plan_id")
+                        view = owner.read_models.plan_detail(
+                            plan_id, generated_at
+                        )
+                        identity = view.plan_identity
+                        if (
+                            identity["account_id"] != owner.account_id
+                            or identity["security_id"] != owner.security_id
+                        ):
+                            return self.send_error(404)
+                except (ReadModelError, ValueError, KeyError):
+                    return self.send_error(404)
+                self._encoded_json(encode_read_model(view))
+
+            @staticmethod
+            def _require_no_query(query: dict[str, list[str]]) -> None:
+                if query:
+                    raise ValueError("READ_MODEL_QUERY_NOT_ALLOWED")
+
+            @staticmethod
+            def _require_keys(
+                query: dict[str, list[str]], allowed: set[str]
+            ) -> None:
+                if set(query) - allowed:
+                    raise ValueError("READ_MODEL_QUERY_NOT_ALLOWED")
+
+            @staticmethod
+            def _single(
+                query: dict[str, list[str]],
+                key: str,
+                *,
+                optional: bool = False,
+            ) -> str | None:
+                values = query.get(key, [])
+                if not values and optional:
+                    return None
+                if len(values) != 1 or not values[0]:
+                    raise ValueError("READ_MODEL_QUERY_INVALID")
+                return values[0]
+
+            def _encoded_json(self, payload: bytes, status: int = 200) -> None:
                 self.send_response(status)
                 self._security_headers()
                 self.send_header("Cache-Control", "no-store")
@@ -190,6 +232,15 @@ class LocalChartWorkspaceServer:
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def _json(self, value: object, status: int = 200) -> None:
+                payload = json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                self._encoded_json(payload, status)
 
             def _host_allowed(self) -> bool:
                 port = owner._server.server_port
@@ -201,12 +252,20 @@ class LocalChartWorkspaceServer:
             def _security_headers(self) -> None:
                 self.send_header(
                     "Content-Security-Policy",
-                    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                    "default-src 'self'; script-src 'self'; "
+                    "style-src 'self'; img-src 'self' data:; "
+                    "connect-src 'self'; font-src 'self'; "
+                    "object-src 'none'; base-uri 'none'; form-action 'none'; "
+                    "frame-ancestors 'none'",
                 )
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
-                self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                self.send_header(
+                    "Cross-Origin-Opener-Policy", "same-origin"
+                )
+                self.send_header(
+                    "Cross-Origin-Resource-Policy", "same-origin"
+                )
                 self.send_header(
                     "Permissions-Policy",
                     "camera=(), microphone=(), geolocation=(), payment=()",
@@ -216,7 +275,9 @@ class LocalChartWorkspaceServer:
                 del format, args
 
         self._server = HTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True
+        )
         self._thread.start()
         return f"http://127.0.0.1:{self._server.server_port}"
 

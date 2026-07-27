@@ -1,3 +1,180 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>版本化 K 线工作台</title>  <script type="module" crossorigin src="/assets/index-DodMrJY9.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-BoYlYfM0.css">
-</head><body><main><header><div><p class="eyebrow">LOCAL RESEARCH WORKSPACE</p><h1>意华股份 <span>002897.SZ</span></h1></div><div class="header-actions"><button id="motion-toggle" type="button" aria-pressed="false">减少动态效果</button><button id="fullscreen" type="button" aria-label="切换全屏视图">全屏查看</button></div></header><section class="status" aria-label="图表数据状态"><strong>日 K · 未复权</strong><span id="session">有效交易日 —</span><span id="freshness">数据状态 —</span></section><section id="banner" class="banner" role="status" tabindex="-1">正在读取冻结快照…</section><nav class="task-nav" aria-label="工作区任务"><button type="button" data-target="research-view">公司推演</button><button type="button" data-target="current-task">当前任务</button><button type="button" data-target="plan-panel">计划确认</button><button type="button" data-target="history-panel">完整历史</button></nav><section id="research-view" class="decision-view" aria-labelledby="research-title" tabindex="-1"><header class="decision-header"><div><p class="eyebrow">DECISION-FIRST OUTLOOK</p><h2 id="research-title">公司未来推演与条件价值</h2><p id="research-meta">正在载入类型化 Forecast 与 Valuation…</p></div><label class="version-picker">历史研究版本<select id="research-version" aria-label="选择历史研究版本" disabled="disabled"></select></label></header><p id="research-empty" class="empty-state">当前没有可展示的类型化公司推演；旧研究历史仍可在下方查看。</p><div id="research-content" hidden><div class="story-grid"><article class="story-lead"><p class="eyebrow">FORECAST · 推演判断</p><h3>发生什么</h3><p id="story-what"></p></article><article><p class="eyebrow">JUDGMENT · 研究判断</p><h3>为什么重要</h3><p id="story-why"></p></article><article><p class="eyebrow">MODEL LOGIC · 计算传导</p><h3>如何传导</h3><ul id="story-transmission"></ul></article><article><p class="eyebrow">RISK · 反证</p><h3>有哪些反例</h3><ul id="story-counter"></ul></article><article><p class="eyebrow">REVIEW CONDITION · 复核条件</p><h3>什么会改变判断</h3><ul id="story-change"></ul></article></div><section class="decision-subsection" aria-labelledby="drivers-title"><div class="section-heading"><p class="eyebrow">FORECAST DRIVERS · 推演变量</p><h3 id="drivers-title">关键业务 Driver</h3></div><div id="driver-list" class="driver-grid"></div></section><section class="decision-subsection" aria-labelledby="scenarios-title"><div class="section-heading"><p class="eyebrow">FORECAST → VALUATION · 条件结果</p><h3 id="scenarios-title">压力 / 基准 / 改善</h3><p>每股数值仅表示给定经营路径与方法输入成立时的条件研究区间，不是已观察事实。</p></div><div id="scenario-list" class="scenario-grid"></div></section><section id="simulation-section" class="decision-subsection simulation-section" aria-labelledby="simulation-title" hidden><div class="section-heading"><p class="eyebrow">VALUATION SIMULATION · 条件分布</p><h3 id="simulation-title">校准后的每股价值分布</h3><p id="simulation-status"></p></div><div id="simulation-quantiles" class="quantile-grid"></div><div class="simulation-detail-grid"><article><h4>尾部结果</h4><p id="simulation-tail"></p></article><article><h4>关键变量贡献</h4><ul id="simulation-contributions"></ul></article><article><h4>模拟依据与收敛</h4><p id="simulation-basis"></p></article></div><details class="simulation-basis-disclosure"><summary>展开分布校准、依赖结构与降级依据</summary><h4>随机变量与点时校准</h4><ul id="simulation-assumptions"></ul><h4>依赖结构</h4><pre id="simulation-dependency"></pre><h4>确定性估值锚</h4><p id="simulation-fallback"></p><h4>诊断</h4><ul id="simulation-diagnostics"></ul></details></section><section id="market-path-section" class="decision-subsection market-path-section" aria-labelledby="market-path-title" hidden><div class="section-heading"><p class="eyebrow">MARKET PATH · 市场价格路径</p><h3 id="market-path-title">状态条件下的交易价格不确定性</h3><p id="market-path-interpretation"></p><p id="market-path-divergence"></p></div><div id="market-path-prices" class="quantile-grid"></div><div class="simulation-detail-grid"><article><h4>期限收益</h4><p id="market-path-returns"></p></article><article><h4>最大回撤</h4><p id="market-path-drawdown"></p></article><article><h4>阈值与尾部</h4><ul id="market-path-triggers"></ul></article></div><details class="simulation-basis-disclosure"><summary>展开区块样本、市场状态、成本与交易限制</summary><pre id="market-path-basis"></pre><ul id="market-path-diagnostics"></ul></details></section><section class="decision-subsection implied-section" aria-labelledby="implied-title"><div class="section-heading"><p class="eyebrow">VALUATION · 市场反推</p><h3 id="implied-title">当前价格隐含了什么</h3></div><div id="implied-list" class="implied-grid"></div></section><details class="audit-disclosure"><summary>展开来源、公式、参数、版本与诊断</summary><p>以下内容来自冻结的权威 JSON 与类型化 artifacts，不从报告 HTML 反向提取。</p><pre id="research-audit"></pre></details><details class="report-disclosure"><summary>打开隔离的完整研究视图</summary><iframe id="report-viewer" title="隔离的主动研究报告查看器" sandbox referrerpolicy="no-referrer" srcdoc="<p>选择历史中的类型化研究版本后将在此隔离区域显示。</p>"></iframe></details><p class="boundary" id="research-boundary"></p></div></section><section id="forecast-review-panel" class="task-card forecast-review-panel" aria-labelledby="forecast-review-title"><div><p class="eyebrow">FORECAST REVIEW · 预测复盘</p><h2 id="forecast-review-title">登记、到期复核与误差历史</h2><p>实际结果按 Evidence 与原 Forecast / Scenario / Simulation 对照；缺失、重述、口径变化和延迟披露不会被静默记为预测失败。单次命中不构成模型有效性证明。</p><ol id="forecast-registry"></ol></div><div id="forecast-review-history" class="version-list" aria-live="polite"></div></section><section id="current-task" class="task-card" aria-labelledby="task-title" tabindex="-1"><div><p class="eyebrow">当前任务</p><h2 id="task-title">检查本次数据变化与影响</h2><p id="task-summary">正在载入 requested/effective date 与规则状态…</p><button id="authorize-update" type="button">授权刷新冻结输入</button><span id="authorization-status" role="status">尚未授权新的更新</span></div><dl id="task-facts"></dl></section><section class="task-card" aria-labelledby="position-title"><div><p class="eyebrow">账户语境</p><h2 id="position-title">当前仓位与现金</h2><p id="position-status">正在载入本地账户快照…</p></div><div id="position-list" class="version-list"></div></section><section class="workspace"><div class="canvas"><div id="chart" aria-label="版本化 K 线和成交量图"></div><div class="draw-flow" aria-label="标注绘制步骤"><label>起点价格<input id="start-price" inputmode="decimal" aria-describedby="save-status"></label><button id="start" type="button">1 确认起点</button><label>终点价格<input id="end-price" inputmode="decimal" aria-describedby="save-status"></label><button id="finish" type="button" disabled="disabled">2 确认终点</button><button id="confirm" type="button" disabled="disabled">3 确认并持久化</button><span id="save-status" role="status">尚未绘制</span></div></div><details class="ledger-panel" open><summary>标注版本账本</summary><p>修改、删除和恢复都会追加版本，不覆盖历史。</p><div class="ledger-actions"><button id="revise" type="button" disabled="disabled">追加修订</button><button id="delete" type="button" disabled="disabled">追加删除版本</button><button id="restore" type="button" disabled="disabled">追加恢复版本</button></div><ol id="ledger"></ol></details></section><details><summary>数据详情与引用</summary><pre id="details"></pre></details><section id="plan-panel" class="task-card" aria-labelledby="plan-title"><div><p class="eyebrow">用户确认</p><h2 id="plan-title">计划版本与规则结果</h2><p>计划版本绑定精确策略、账户快照与图封印；确认挑战和用户确认通过 Skill 完成，平台不替代判断。</p></div><div id="plan-list" class="version-list" aria-live="polite"></div></section><section id="history-panel" class="history-panel" aria-labelledby="history-title"><div><p class="eyebrow">冻结历史</p><h2 id="history-title">版本时间线</h2><p>历史按当时 refs、operands、reasons、policy 与 artifacts 展示，不以当前政策重算。</p></div><ol id="timeline" class="timeline"></ol></section><p class="boundary" id="boundary">研究与规则结果用于用户判断，不构成个性化投资建议。</p><footer><a href="/THIRD_PARTY_NOTICES.md">第三方依赖与许可</a></footer></main></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="data:,">
+  <title>交易纪律工作台</title>
+  <script type="module" crossorigin src="/assets/index-B09eXuhg.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DFnvsgPV.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace-content">跳到主要内容</a>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">LOCAL DISCIPLINE KERNEL</p>
+      <h1>交易纪律工作台</h1>
+      <p id="account-caption">正在读取已确认账户事实…</p>
+    </div>
+    <button id="open-account-editor" class="secondary" type="button">
+      编辑账户快照
+    </button>
+  </header>
+
+  <nav class="primary-nav" aria-label="一级导航">
+    <button type="button" data-page="overview" aria-current="page">总览</button>
+    <button type="button" data-page="portfolio">组合</button>
+    <button type="button" data-page="review">复核</button>
+    <button type="button" data-page="research">研究</button>
+  </nav>
+
+  <div id="load-status" class="status-banner" role="status" aria-live="polite">
+    正在载入 versioned read models…
+  </div>
+
+  <main id="workspace-content" tabindex="-1">
+    <section id="page-overview" class="page" aria-labelledby="overview-title">
+      <div class="page-heading">
+        <p class="eyebrow">OVERVIEW</p>
+        <h2 id="overview-title">总览</h2>
+        <p>只显示会影响当前判断与处理顺序的信息。</p>
+      </div>
+      <div class="summary-grid">
+        <article>
+          <h3>账户状态</h3>
+          <div id="account-summary"></div>
+        </article>
+        <article>
+          <h3>未决任务</h3>
+          <ul id="task-summary"></ul>
+        </article>
+        <article>
+          <h3>重要变化</h3>
+          <ul id="change-summary"></ul>
+        </article>
+        <article>
+          <h3>持仓计划</h3>
+          <div id="plan-summary"></div>
+        </article>
+        <article>
+          <h3>纪律例外</h3>
+          <ul id="exception-summary"></ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="page-portfolio" class="page" aria-labelledby="portfolio-title" hidden>
+      <div class="page-heading">
+        <p class="eyebrow">PORTFOLIO</p>
+        <h2 id="portfolio-title">组合</h2>
+        <p>区分 confirmed 与 estimated；unknown 绝不按零解释。</p>
+      </div>
+      <div id="holding-content" class="content-stack"></div>
+    </section>
+
+    <section id="page-review" class="page" aria-labelledby="review-title" hidden>
+      <div class="page-heading">
+        <p class="eyebrow">MANUAL REVIEW</p>
+        <h2 id="review-title">复核</h2>
+        <p>展示所选完整交易日、冻结结果与需要通过 Skill 处理的事项。</p>
+      </div>
+      <div id="review-content" class="content-stack"></div>
+    </section>
+
+    <section id="page-research" class="page" aria-labelledby="research-title" hidden>
+      <div class="page-heading">
+        <p class="eyebrow">PERSISTED RESEARCH</p>
+        <h2 id="research-title">研究</h2>
+        <p>仅展示已持久化研究、变化、不确定性及其能力影响。</p>
+      </div>
+      <div id="research-content" class="content-stack"></div>
+    </section>
+  </main>
+
+  <dialog id="plan-dialog" aria-labelledby="plan-dialog-title">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">READ-ONLY PLAN</p>
+        <h2 id="plan-dialog-title">计划详情</h2>
+      </div>
+      <button type="button" data-close-dialog="plan-dialog" aria-label="关闭计划详情">关闭</button>
+    </div>
+    <div id="plan-detail-content"></div>
+  </dialog>
+
+  <dialog id="account-dialog" aria-labelledby="account-dialog-title">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">CONFIRMED ACCOUNT TRUTH</p>
+        <h2 id="account-dialog-title">账户快照编辑</h2>
+      </div>
+      <button type="button" data-close-dialog="account-dialog" aria-label="关闭账户编辑">关闭</button>
+    </div>
+    <div id="account-editor-summary"></div>
+    <form id="account-form">
+      <fieldset>
+        <legend>时间与来源</legend>
+        <label>截至日期 <input name="as_of_at" type="date" required></label>
+        <label>会话语义
+          <select name="session_semantics">
+            <option value="complete_session">完整交易日</option>
+            <option value="intraday">盘中</option>
+          </select>
+        </label>
+        <label>币种 <input name="currency" value="CNY" maxlength="3" required></label>
+        <label>脱敏来源 <input name="redacted_source_ref" value="web-local-entry" required></label>
+      </fieldset>
+      <fieldset>
+        <legend>现金、净值与费用</legend>
+        <div class="state-field" data-value-field="cash">
+          <label>现金状态
+            <select name="cash_state">
+              <option value="unknown">未知</option>
+              <option value="known">已知</option>
+              <option value="not_applicable">不适用</option>
+            </select>
+          </label>
+          <label>现金值 <input name="cash_value" inputmode="decimal"></label>
+        </div>
+        <div class="state-field" data-value-field="nav">
+          <label>净值状态
+            <select name="nav_state">
+              <option value="unknown">未知</option>
+              <option value="known">已知</option>
+              <option value="not_applicable">不适用</option>
+            </select>
+          </label>
+          <label>净值 <input name="nav_value" inputmode="decimal"></label>
+        </div>
+        <div class="state-field" data-value-field="fees">
+          <label>费用状态
+            <select name="fees_state">
+              <option value="unknown">未知</option>
+              <option value="known">已知</option>
+              <option value="not_applicable">不适用</option>
+            </select>
+          </label>
+          <label>费用 <input name="fees_value" inputmode="decimal"></label>
+        </div>
+      </fieldset>
+      <div class="form-actions">
+        <button id="save-draft" type="submit">保存草稿并校验</button>
+        <button id="confirm-draft" class="primary" type="button" disabled>
+          用户确认当前草稿
+        </button>
+      </div>
+      <p id="account-form-status" role="status" aria-live="polite"></p>
+    </form>
+    <details>
+      <summary>展开字段 lineage、canonical diff 与能力影响</summary>
+      <div id="account-editor-details"></div>
+    </details>
+  </dialog>
+
+  <footer>
+    <p>本地研究与纪律记录用于支持用户判断，不构成个性化投资建议。</p>
+    <a href="/THIRD_PARTY_NOTICES.md">第三方依赖与许可</a>
+  </footer>
+</body>
+</html>

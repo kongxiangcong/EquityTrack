@@ -1,1 +1,546 @@
-import{init as P,dispose as A}from"klinecharts";import{toKLineData as I,toOverlay as x}from"./chart-adapter.js";import{createMutationRunner as z}from"./mutation-runner.js";import{formatPercent as y,formatQuantity as q,methodSummary as M,persistedResearchHtml as F,researchViewLabel as V,selectResearchView as N}from"./research-view.js";import{renderForecastReviewWorkspace as U}from"./forecast-review-view.js";import"./motion.css";import"./research-view.css";const L=document.querySelector('meta[name="csrf-token"]')?.content??"",b=globalThis.chartGateway??{async series(){return(await fetch("/api/chart-series",{headers:{Accept:"application/json"}})).json()},async history(){return(await fetch("/api/annotations",{headers:{Accept:"application/json"}})).json()},async workspace(){const e=await fetch("/api/workspace",{headers:{Accept:"application/json"}});if(!e.ok)throw new Error(`HTTP_${e.status}`);return e.json()},async authorize(e,n){const s=await fetch("/api/update-authorizations",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":L,"X-Invocation-Id":n},body:JSON.stringify(e)});if(!s.ok)throw new Error((await s.json().catch(()=>({}))).error_code??`HTTP_${s.status}`);return s.json()},async command(e,n){let s;try{s=await fetch("/api/annotations",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":L,"X-Invocation-Id":n},body:JSON.stringify(e)})}catch(a){const d=new Error("COMMAND_RESULT_UNKNOWN");throw d.resultUnknown=!0,d.cause=a,d}if(!s.ok)throw new Error((await s.json().catch(()=>({}))).error_code??`HTTP_${s.status}`);try{return await s.json()}catch(a){const d=new Error("COMMAND_RESULT_UNKNOWN");throw d.resultUnknown=!0,d.cause=a,d}}},w=z((e,n)=>b.command(e,n));let p,h,$=[],O=[],T,j=[];function t(e){return e==null||e===""?"—":String(e)}function D(e,n){return t(n[{WorkflowRun:"workflow_run_id",DataSnapshot:"data_snapshot_id",ResearchRun:"research_run_id",ChartAnnotationVersion:"annotation_version_id",TradePlanVersion:"plan_version_id",MarketSnapshot:"market_snapshot_id",PlanEvaluation:"plan_evaluation_id",ArtifactManifest:"artifact_manifest_id",FrozenRef:"ref_id"}[e]])}function J(e,n){return e==="WorkflowRun"?`研究结果 ${t(n.research_disposition)}；原因 ${t(n.research_reuse_reason)}；复用政策 ${t(n.research_reuse_policy)}`:e==="DataSnapshot"?`${t(n.snapshot_purpose)} 快照；requested ${t(n.requested_date)}；effective ${t(n.effective_session_date)}；cutoff ${t(n.as_of_at)}；质量 ${t(n.freshness_status)}/${t(n.quality_status)}`:e==="ResearchRun"?`研究 cutoff ${t(n.original_cutoff_date)}；输入快照 ${t(n.research_snapshot_id)}；JSON ${t(n.canonical_json_artifact_id)}；HTML ${t(n.html_artifact_id)}`:e==="PlanEvaluation"?`评估器 ${t(n.evaluator_version)}；政策 ${t(n.evaluation_policy_version)}；结果 ${t(n.outcome)}；冻结规则 ${JSON.stringify(n.rules??[])}`:e==="ArtifactManifest"?`manifest ${t(n.manifest_role)}；成员 ${JSON.stringify(n.members??[])}`:e==="FrozenRef"?`${t(n.ref_type)} ${t(n.ref_id)} · ${t(n.disposition)}`:JSON.stringify(n)}function v(e,n){e.replaceChildren(...n?.length?n.map(s=>{const a=document.createElement("li");return a.textContent=t(s),a}):[Object.assign(document.createElement("li"),{textContent:"当前版本未提供该项。"})])}function H(e){return`${t(e.label??e.metric_id)} · ${q(e)} · ${t(e.period)}`}function R(e){const n=document.querySelector("#research-empty"),s=document.querySelector("#research-content");if(!e){n.hidden=!1,s.hidden=!0,document.querySelector("#report-viewer").srcdoc="<p>当前没有可加载的类型化 Forecast/Valuation 研究视图。</p>";return}n.hidden=!0,s.hidden=!1,document.querySelector("#research-meta").textContent=`截至 ${t(e.as_of)} · ${t(e.model_identity)} · ${t(e.status)}`,document.querySelector("#story-what").textContent=t(e.story?.what_happens),document.querySelector("#story-why").textContent=t(e.story?.why_it_matters),v(document.querySelector("#story-transmission"),e.story?.transmission),v(document.querySelector("#story-counter"),e.story?.counterevidence),v(document.querySelector("#story-change"),e.story?.what_would_change_the_view),document.querySelector("#driver-list").replaceChildren(...(e.key_drivers??[]).map(l=>{const m=document.createElement("article"),r=document.createElement("p");r.className="eyebrow",r.textContent="Forecast · 推演值";const o=document.createElement("h3");o.textContent=t(l.label??l.metric_id);const i=document.createElement("p");return i.textContent=`${q(l)} · ${t(l.period)}`,m.append(r,o,i),m})),document.querySelector("#scenario-list").replaceChildren(...(e.scenarios??[]).map(l=>{const m=document.createElement("article");m.className=`scenario-card scenario-${l.role}`;const r=document.createElement("p");r.className="eyebrow",r.textContent=`Forecast 情景 · ${t(l.role)}`;const o=document.createElement("h3");o.textContent=`${t(l.label)}情景 · ${t(l.terminal_period)}`;const i=document.createElement("h4");i.textContent="Forecast · 关键财务推演";const u=document.createElement("ul");v(u,(l.financials??[]).map(H));const _=document.createElement("h4");_.textContent="Valuation · 方法级条件每股价值区间";const f=document.createElement("ul");return v(f,(l.methods??[]).map(M)),m.append(r,o,i,u,_,f),m})),document.querySelector("#implied-list").replaceChildren(...(e.market_implied_expectations??[]).map(l=>{const m=document.createElement("article"),r=document.createElement("h3");r.textContent=`${t(l.scenario_label)}情景 · 市场隐含终值增长`;const o=document.createElement("p");o.textContent=`低/基准/高：${y(l.low)} / ${y(l.base)} / ${y(l.high)}`;const i=document.createElement("p");return i.textContent=t(l.explanation),m.append(r,o,i),m}));const a=e.valuation_simulation,d=document.querySelector("#simulation-section");if(d.hidden=!a,a){document.querySelector("#simulation-status").textContent=a.converged?`已通过收敛门禁 · ${t(a.completed_samples)} 条路径`:`模拟受限 · 保留确定性情景 · 无效路径率 ${t(a.invalid_path_rate)}`;const l=a.quantiles??{};document.querySelector("#simulation-quantiles").replaceChildren(...Object.entries(l).map(([o,i])=>{const u=document.createElement("article"),_=document.createElement("h4");_.textContent=o.toUpperCase();const f=document.createElement("p");return f.textContent=q(i),u.append(_,f),u}));const m=a.tail_results;document.querySelector("#simulation-tail").textContent=m?`低于 ${q(m.threshold)} 的概率 ${y(m.probability_below_threshold)}；尾部均值 ${q(m.conditional_tail_mean)}`:"模拟未收敛，不发布尾部分布。",v(document.querySelector("#simulation-contributions"),(a.contributions??[]).map(o=>`${t(o.assumption_id)} · ${y({value:o.share,unit:"decimal"})} · ${t(o.method)}`)),document.querySelector("#simulation-basis").textContent=`${t(a.rng_algorithm)} · seed ${t(a.seed)} · 预算 ${t(a.sample_budget)} · batch ${t(a.batch_size)} · 容差 ${t(a.convergence_tolerance)} · 稳定批次 ${t(a.stable_batches)}/${t(a.stable_batches_required)}`,v(document.querySelector("#simulation-assumptions"),(a.assumptions??[]).map(o=>{const i=(o.parameters??[]).map(_=>`${t(_.name)}=${t(_.value)}`).join(", "),u=o.calibration??{};return`${t(o.assumption_id)} · ${t(o.family)}(${i}) · reference ${t(o.reference_value)} ${t(o.unit)} · bounds ${t(o.hard_bounds?.minimum)}–${t(o.hard_bounds?.maximum)} · sample ${t(u.sample_id)} (${t(u.observations?.length)} observations, ${t(u.window_start)}–${t(u.window_end)}) · available ${t(u.available_at)} · ${t(u.basis)} · override ${t(o.user_override_identity??"无")}`})),document.querySelector("#simulation-dependency").textContent=JSON.stringify(a.dependency_model??{},null,2);const r=a.deterministic_fallback??{};document.querySelector("#simulation-fallback").textContent=`${t(r.scenario_id)} / ${t(r.method_id)} / ${t(r.formula_version)} · ${t(r.low)} / ${t(r.base)} / ${t(r.high)} ${t(r.unit)} · ${t(r.period)}`,v(document.querySelector("#simulation-diagnostics"),a.diagnostics)}const c=e.market_price_paths,S=document.querySelector("#market-path-section");if(S.hidden=!c,c){document.querySelector("#market-path-interpretation").textContent=`${t(c.interpretation)} 当前状态：${t(c.current_market_state)}；完成路径：${t(c.completed_paths)}。`,document.querySelector("#market-path-divergence").textContent=t(e.value_market_divergence?.explanation),document.querySelector("#market-path-prices").replaceChildren(...Object.entries(c.terminal_price_quantiles??{}).map(([o,i])=>{const u=document.createElement("article"),_=document.createElement("h4");_.textContent=`终点 ${o.toUpperCase()}`;const f=document.createElement("p");return f.textContent=q(i),u.append(_,f),u}));const l=c.horizon_return_quantiles??{};document.querySelector("#market-path-returns").textContent=`P5 / P50 / P95：${y(l.p5)} / ${y(l.p50)} / ${y(l.p95)}`;const m=c.maximum_drawdown_quantiles??{};document.querySelector("#market-path-drawdown").textContent=`P5 / P50 / P95：${y(m.p5)} / ${y(m.p50)} / ${y(m.p95)}`;const r=(c.threshold_trigger_probabilities??[]).map(o=>`触及 ${t(o.threshold)} ${t(c.price_unit)}：${y({value:o.probability,unit:"decimal"})}`);c.tail_results&&r.push(`期限收益低于 ${y({value:c.tail_results.return_threshold,unit:"decimal"})}：${y({value:c.tail_results.probability_below_threshold,unit:"decimal"})}`),v(document.querySelector("#market-path-triggers"),r),document.querySelector("#market-path-basis").textContent=JSON.stringify({horizon_return_basis:c.horizon_return_basis,execution_period:c.execution_period,terminal_period:c.terminal_period,risk_horizon_period:c.risk_horizon_period,starting_price:c.starting_price,starting_price_available_at:c.starting_price_available_at,starting_price_evidence_refs:c.starting_price_evidence_refs,current_market_state:c.current_market_state,current_state_available_at:c.current_state_available_at,current_state_evidence_refs:c.current_state_evidence_refs,calibration:c.calibration,constraints:c.constraints,budget:c.budget},null,2),v(document.querySelector("#market-path-diagnostics"),c.diagnostics)}document.querySelector("#research-audit").textContent=JSON.stringify(e.audit,null,2),document.querySelector("#research-boundary").textContent=t(e.boundary),document.querySelector("#report-viewer").srcdoc=F(e)}function W(e){j=e;const n=document.querySelector("#research-version"),s=n.value;n.replaceChildren(...e.map((d,c)=>{const S=document.createElement("option");return S.value=d.view_id,S.textContent=V(d,c),S})),n.disabled=!e.length;const a=N(e,s)??e.at(-1)??null;a&&(n.value=a.view_id),R(a)}function K(e){T=e,W(e.research_views??[]),U(e);const n=e.task??{};document.querySelector("#task-summary").textContent=n.freshness_status==="valid"?"冻结数据可用于继续检查规则；请确认变化与不确定性。":"本次数据受限；仍可查看已冻结历史，但新的规则结论已阻断。";const s=[["请求日期",n.requested_date],["有效交易日",n.effective_session_date],["数据质量",n.quality_status],["冻结快照",n.snapshot_id]];document.querySelector("#task-facts").replaceChildren(...s.flatMap(([r,o])=>{const i=document.createElement("dt");i.textContent=r;const u=document.createElement("dd");return u.textContent=t(o),[i,u]}));const a=e.current_positions??[];document.querySelector("#position-status").textContent=e.security_relationship==="position"?"该标的存在当前估算仓位；以下数值由最新已确认账户快照与已确认执行记录确定性推导。":"最新已确认账户状态显示无仓位；这不同于仓位数据缺失。",document.querySelector("#position-list").replaceChildren(...a.length?a.map(r=>{const o=document.createElement("article"),i=document.createElement("h3");i.textContent=`${t(r.account_label)} · ${t(r.derived_from_snapshot_as_of)}`;const u=document.createElement("p");u.textContent=`数量 ${t(r.total_quantity)} · 可用 ${t(r.available_quantity_state)}:${t(r.available_quantity_value)} · 成本 ${t(r.cost_state)}:${t(r.cost_value)} ${t(r.currency)} · 现金 ${t(r.cash_state)}:${t(r.cash_value)} · 状态 ${t(r.state_status)} · 新鲜度 ${t(r.freshness)}`;const _=document.createElement("p");return _.textContent=`能力限制：${[...r.blocking_reasons??[],...r.unverified_evidence??[]].join("、")||"无"}`,o.append(i,u,_),o}):[Object.assign(document.createElement("p"),{textContent:e.security_relationship==="watchlist_not_held"?"本地账户快照确认无当前仓位。":"仓位数据缺失或账户尚未初始化；不能按零仓位解释。"})]);const d=e.history?.plans??[],c=d.map(r=>{const o=document.createElement("article"),i=document.createElement("h3");i.textContent=`计划 v${r.version_no} · 已确认`;const u=document.createElement("p");return u.textContent=`策略版本 ${t(r.strategy_version_id)} · 冻结于 ${t(r.created_at)} · 账户快照 ${t(r.account_snapshot_id)} · 图封印 ${t(r.graph_seal_hash)}`,o.append(i,u),o});for(const r of e.plan_drafts??[]){if(r.status!=="open")continue;const o=document.createElement("article"),i=document.createElement("h3");i.textContent=`待确认草稿 r${r.revision}`;const u=document.createElement("p");u.textContent=r.based_on_version_id?`相对 ${r.based_on_version_id} 的新版本；请通过 Skill 获取确认挑战并完成用户确认。`:"初始计划草稿；请通过 Skill 获取确认挑战并完成用户确认。",o.append(i,u),c.unshift(o)}document.querySelector("#plan-list").replaceChildren(...c.length?c:[Object.assign(document.createElement("p"),{textContent:"尚无计划草稿或已确认版本；可继续查看研究与标注历史。"})]);const S=(e.history?.workflows??[]).flatMap(r=>(r.refs??[]).map(o=>({...o,created_at:r.created_at,status:o.disposition}))),l=[["WorkflowRun",e.history?.workflows??[]],["DataSnapshot",e.history?.data_snapshots??[]],["ResearchRun",e.history?.research_runs??[]],["ChartAnnotationVersion",e.history?.annotations??[]],["TradePlanVersion",d],["MarketSnapshot",e.history?.market_snapshots??[]],["PlanEvaluation",e.history?.evaluations??[]],["ArtifactManifest",e.history?.artifact_manifests??[]],["FrozenRef",S]].flatMap(([r,o])=>o.map(i=>({kind:r,item:i})));document.querySelector("#timeline").replaceChildren(...l.length?l.map(({kind:r,item:o})=>{const i=document.createElement("li"),u=document.createElement("details"),_=document.createElement("summary");_.textContent=`${r} · ${D(r,o)} · ${t(o.status??o.lifecycle_status??o.disposition??"frozen")}`;const f=document.createElement("p");return f.textContent=J(r,o),u.append(_,f),i.append(u),i}):[Object.assign(document.createElement("li"),{textContent:"当前尚无版本历史。"})]),document.querySelector("#boundary").textContent=t(e.boundary);const m=e.update_authorizations?.[0];document.querySelector("#authorization-status").textContent=m?`已授权 · ${t(m.requested_date)} → ${t(m.effective_session_date)}`:"尚未授权新的更新"}function C(){document.querySelector("#ledger").replaceChildren(...$.map(n=>{const s=document.createElement("li");return s.textContent=`v${n.version_no} · ${n.status==="deleted"?"已删除":"生效"} · ${n.draft.anchors.map(a=>a.exact_price_decimal).join(" → ")}`,s}));const e=$.at(-1);document.querySelector("#revise").disabled=!e||e.status!=="active",document.querySelector("#delete").disabled=!e||e.status!=="active",document.querySelector("#restore").disabled=!e||e.status!=="deleted"}const X={ANNOTATION_PRICE_INVALID:"价格格式无效，请输入普通十进制价格后重试。",ANNOTATION_VERSION_CONFLICT:"标注已被更新，请刷新历史后重试。",INVOCATION_CONFLICT:"请求标识冲突，请重新执行操作。"};function g(e){const n=e.resultUnknown?"提交结果未知；请保持输入不变并重试同一操作，系统会复用原请求标识。":X[e.message]??"操作未完成，请检查输入并重试。";document.querySelector("#save-status").textContent=`保存失败：${n}`}function E(e){$.push(e),C()}function k(){document.querySelector("#save-status").textContent="已保存，但图表刷新失败；请重新载入页面恢复权威状态。";for(const e of["start","finish","confirm","revise","delete","restore"])document.querySelector(`#${e}`).disabled=!0}async function B(){if([h,$]=await Promise.all([b.series(),b.history()]),K(await b.workspace()),document.querySelector("#session").textContent=`有效交易日 ${h.effective_session_date}`,document.querySelector("#freshness").textContent=h.freshness==="valid"?"数据有效":`数据受限：${h.freshness}`,document.querySelector("#banner").textContent=h.freshness==="valid"?"冻结快照已载入；标注锚定市场时间与精确价格。":"数据不可用或陈旧，绘制已阻断。",document.querySelector("#details").textContent=JSON.stringify({data_snapshot_id:h.data_snapshot_id,factor_snapshot_id:h.factor_snapshot_id,adjustment_mode:h.adjustment_mode},null,2),document.querySelector("#start-price").value=h.bars[0]?.close_decimal??"",document.querySelector("#end-price").value=h.bars.at(-1)?.close_decimal??"",h.freshness!=="valid"&&(document.querySelector("#start").disabled=!0),p=P("chart"),!p)throw new Error("KLINECHART_INIT_FAILED");const e=I(h);p.setLocale("zh-CN"),p.setTimezone("Asia/Shanghai"),p.setDataLoader({getBars:({callback:n})=>n(e,!1)}),p.setSymbol({ticker:h.security_id,pricePrecision:4,volumePrecision:2}),p.setPeriod({type:"day",span:1}),p.createIndicator("VOL",!1),$.filter(n=>n.status==="active").slice(-1).forEach(n=>p.createOverlay(x(n))),C()}document.querySelector("#start").addEventListener("click",e=>{const n=document.querySelector("#start-price").value;if(!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(n))return document.querySelector("#save-status").textContent="起点价格格式无效";O=[{...h.bars[0],close_decimal:n}],e.currentTarget.disabled=!0,document.querySelector("#finish").disabled=!1,document.querySelector("#end-price").focus(),document.querySelector("#save-status").textContent="起点已选择；请选择终点"}),document.querySelector("#finish").addEventListener("click",e=>{const n=document.querySelector("#end-price").value;if(!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(n))return document.querySelector("#save-status").textContent="终点价格格式无效";O.push({...h.bars.at(-1),close_decimal:n}),e.currentTarget.disabled=!0,document.querySelector("#confirm").disabled=!1,document.querySelector("#confirm").focus(),document.querySelector("#save-status").textContent="终点已选择；请确认持久化"}),document.querySelector("#confirm").addEventListener("click",async e=>{const n=e.currentTarget;n.disabled=!0;const s={operation:"create",kind:"trend_line",style:"accent",anchors:O.map(d=>({market_timestamp:d.market_timestamp,exact_price_decimal:d.close_decimal}))};let a;try{a=await w.run(s)}catch(d){g(d),n.disabled=!1;return}E(a);try{p.createOverlay(x(a))}catch{k();return}document.querySelector("#save-status").textContent=`已持久化 v${a.version_no}`,document.querySelector("#start").disabled=!1}),document.querySelector("#revise").addEventListener("click",async e=>{e.currentTarget.disabled=!0;const n=$.at(-1),s=n.draft.anchors.map((d,c)=>({...d,exact_price_decimal:c===0?document.querySelector("#start-price").value:document.querySelector("#end-price").value}));let a;try{a=await w.run({operation:"revise",annotation_id:n.annotation_id,expected_version_no:n.version_no,kind:n.draft.kind,style:"warning",anchors:s})}catch(d){g(d),C();return}E(a);try{p.removeOverlay({id:n.annotation_id}),p.createOverlay(x(a))}catch{k();return}document.querySelector("#save-status").textContent=`已持久化 v${a.version_no} 修订`}),document.querySelector("#delete").addEventListener("click",async e=>{e.currentTarget.disabled=!0;const n=$.at(-1);let s;try{s=await w.run({operation:"delete",annotation_id:n.annotation_id,expected_version_no:n.version_no})}catch(a){g(a),C();return}E(s);try{p.removeOverlay({id:n.annotation_id})}catch{k();return}document.querySelector("#save-status").textContent=`已持久化 v${s.version_no} 删除版本`}),document.querySelector("#restore").addEventListener("click",async e=>{e.currentTarget.disabled=!0;const n=$.at(-1);let s;try{s=await w.run({operation:"restore",annotation_id:n.annotation_id,expected_version_no:n.version_no})}catch(a){g(a),C();return}E(s);try{p.createOverlay(x(s))}catch{k();return}document.querySelector("#save-status").textContent=`已持久化 v${s.version_no} 恢复版本`}),document.querySelector("#fullscreen").addEventListener("click",()=>document.querySelector(".workspace").classList.toggle("fullscreen")),document.querySelector("#motion-toggle").addEventListener("click",e=>{const n=document.documentElement.classList.toggle("reduce-motion");e.currentTarget.setAttribute("aria-pressed",String(n)),e.currentTarget.textContent=n?"已减少动态效果":"减少动态效果"}),document.querySelector("#authorize-update").addEventListener("click",async e=>{const n=e.currentTarget;n.disabled=!0;const s={requested_date:T.task.requested_date,effective_session_date:T.task.effective_session_date};try{const a=await b.authorize(s,`workspace:update:${crypto.randomUUID()}`);document.querySelector("#authorization-status").textContent=`已授权 · ${a.requested_date} → ${a.effective_session_date}`}catch{document.querySelector("#authorization-status").textContent="授权未完成；仍可查看现有冻结历史。",n.disabled=!1}}),document.querySelector("#research-version").addEventListener("change",e=>R(N(j,e.currentTarget.value))),document.querySelectorAll("[data-target]").forEach(e=>e.addEventListener("click",()=>{const n=document.querySelector(`#${e.dataset.target}`);n.scrollIntoView({block:"start"}),n.focus?.()})),window.addEventListener("beforeunload",()=>p&&A("chart")),B().catch(e=>{document.querySelector("#banner").textContent=`图表不可用：${e.message}`});
+const csrfToken =
+  document.querySelector('meta[name="csrf-token"]')?.content ?? "";
+
+const routes = {
+  portfolio: "/api/read-models/portfolio@1",
+  holding: "/api/read-models/holding@1",
+  review: "/api/read-models/review@1",
+  research: "/api/read-models/research-index@1",
+  editor: "/api/read-models/account-snapshot-editor@1",
+};
+
+let models;
+
+function text(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+
+function stateValue(state, value, currency = "") {
+  if (state === "known") return `${text(value)} ${currency}`.trim();
+  if (state === "not_applicable") return "不适用";
+  return "未知（未按零处理）";
+}
+
+function element(tag, content, className) {
+  const node = document.createElement(tag);
+  if (content !== undefined) node.textContent = text(content);
+  if (className) node.className = className;
+  return node;
+}
+
+function emptyList(label) {
+  return [element("li", label, "empty")];
+}
+
+function renderList(target, values, render = text, empty = "当前无此项。") {
+  target.replaceChildren(
+    ...(values?.length
+      ? values.map((value) => element("li", render(value)))
+      : emptyList(empty)),
+  );
+}
+
+async function fetchModel(url) {
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`READ_MODEL_HTTP_${response.status}`);
+  return response.json();
+}
+
+function renderOverview(view) {
+  const account = view.account_state_summary;
+  const estimated = account.estimated_state;
+  document.querySelector("#account-caption").textContent =
+    `账户 ${account.account_id} · confirmed ${account.confirmed_snapshot.as_of}`;
+  const summary = document.querySelector("#account-summary");
+  summary.replaceChildren(
+    element("p", `Confirmed：${account.confirmed_snapshot.as_of}`),
+    element(
+      "p",
+      `Estimated cash：${stateValue(
+        estimated.cash_state,
+        estimated.cash_value,
+        estimated.currency,
+      )}`,
+    ),
+    element(
+      "p",
+      `Estimated NAV：${stateValue(
+        estimated.nav_state,
+        estimated.nav_value,
+        estimated.currency,
+      )}`,
+    ),
+    element("p", `估算状态：${estimated.status}`, "muted"),
+  );
+  renderList(
+    document.querySelector("#task-summary"),
+    view.unresolved_decision_tasks,
+    (item) => `${item.task_type} · ${item.status}`,
+    "无未决任务。",
+  );
+  renderList(
+    document.querySelector("#change-summary"),
+    view.material_changes_since_last_review,
+    text,
+    "没有已证明的重要变化。",
+  );
+  const plans = document.querySelector("#plan-summary");
+  plans.replaceChildren(
+    ...(view.holding_active_plan_summaries.length
+      ? view.holding_active_plan_summaries.map((plan) => {
+          const card = element("article", undefined, "compact-card");
+          card.append(
+            element("h4", `${plan.security_id} · ${plan.strategy_version_id}`),
+            element("p", `状态：${plan.lifecycle_status}`),
+          );
+          const button = element("button", "查看只读计划", "link-button");
+          button.type = "button";
+          button.addEventListener("click", () => openPlan(plan.plan_id));
+          card.append(button);
+          return card;
+        })
+      : [element("p", "当前没有 active master plan。", "empty")]),
+  );
+  renderList(
+    document.querySelector("#exception-summary"),
+    view.discipline_exception_summary,
+    text,
+    "当前没有已确认的纪律例外。",
+  );
+}
+
+function renderHolding(view) {
+  const root = document.querySelector("#holding-content");
+  const position = view.position_summary;
+  const plan = view.active_plan_summary;
+  const positionCard = element("article", undefined, "detail-card");
+  positionCard.append(
+    element("h3", `${view.security_identity.security_id} · A 股`),
+    element(
+      "p",
+      position.position_state === "unknown"
+        ? "仓位未知（未按零仓位处理）"
+        : `总数量 ${text(position.total_quantity)}；可用数量 ${stateValue(
+            position.available_quantity_state,
+            position.available_quantity_value,
+          )}`,
+    ),
+    element(
+      "p",
+      position.position_state === "unknown"
+        ? position.reason_code
+        : `成本 ${stateValue(position.cost_state, position.cost_value)}；市值 ${stateValue(
+            position.market_value_state,
+            position.market_value_value,
+          )}`,
+      "muted",
+    ),
+  );
+  const planCard = element("article", undefined, "detail-card");
+  planCard.append(
+    element("h3", "Active master / core / grid"),
+    element(
+      "p",
+      plan
+        ? `${plan.strategy_version_id} · ${plan.lifecycle_status}`
+        : "当前没有 active plan。",
+    ),
+  );
+  if (plan) {
+    const button = element("button", "查看计划详情", "link-button");
+    button.type = "button";
+    button.addEventListener("click", () => openPlan(plan.plan_id));
+    planCard.append(button);
+  }
+  const warningCard = element("article", undefined, "detail-card");
+  warningCard.append(element("h3", "能力变化与不确定性"));
+  const warnings = element("ul");
+  renderList(
+    warnings,
+    [
+      ...view.ability_changing_warnings,
+      ...view.key_uncertainties,
+      ...view.material_evidence_changes,
+    ],
+  );
+  warningCard.append(warnings);
+  root.replaceChildren(positionCard, planCard, warningCard);
+}
+
+function renderReview(view) {
+  const root = document.querySelector("#review-content");
+  const run = view.review_run;
+  const summary = element("article", undefined, "detail-card");
+  summary.append(
+    element("h3", "所选完整交易日与运行状态"),
+    element(
+      "p",
+      run
+        ? `${run.selected_session} · ${run.status}`
+        : "尚未选择并完成一次手动复核。",
+    ),
+  );
+  const results = element("article", undefined, "detail-card");
+  results.append(element("h3", "逐持仓结果"));
+  const resultList = element("ul");
+  renderList(
+    resultList,
+    view.holding_outcomes,
+    (item) => `${item.security_id} · ${item.outcome}`,
+  );
+  results.append(resultList);
+  const tasks = element("article", undefined, "detail-card");
+  tasks.append(element("h3", "未决 / 延后任务"));
+  const taskList = element("ul");
+  renderList(
+    taskList,
+    view.unresolved_or_deferred_tasks,
+    (item) => `${item.task_type} · ${item.status}`,
+  );
+  tasks.append(taskList);
+  const impacts = element("article", undefined, "detail-card");
+  impacts.append(element("h3", "PlanImpact / Proposal"));
+  const impactList = element("ul");
+  renderList(
+    impactList,
+    [
+      ...view.plan_impact_summaries.map(
+        (item) =>
+          `${item.assessment_id} · ${item.impact_kind} · ${item.materiality}`,
+      ),
+      ...view.proposal_summaries.map(
+        (item) => `${item.proposal_id} · ${item.status}`,
+      ),
+    ],
+    text,
+  );
+  impacts.append(impactList);
+  root.replaceChildren(summary, results, tasks, impacts);
+}
+
+function renderResearch(view) {
+  const root = document.querySelector("#research-content");
+  root.replaceChildren(
+    ...(view.research_items.length
+      ? view.research_items.map((item) => {
+          const card = element("article", undefined, "detail-card");
+          card.append(
+            element("h3", `${item.security_id} · ${item.status}`),
+            element("p", `重要变化：${text(item.material_change)}`),
+            element("p", `关键不确定性：${text(item.key_uncertainties)}`),
+            element(
+              "p",
+              `什么会改变当前看法：${text(item.what_would_change_the_view)}`,
+            ),
+            element("p", `计划能力影响：${text(item.plan_capability_impact)}`, "muted"),
+          );
+          return card;
+        })
+      : [element("p", "当前没有已持久化的研究视图。", "empty")]),
+  );
+}
+
+async function openPlan(planId) {
+  const dialog = document.querySelector("#plan-dialog");
+  const target = document.querySelector("#plan-detail-content");
+  target.replaceChildren(element("p", "正在载入只读计划…"));
+  dialog.showModal();
+  try {
+    const view = await fetchModel(
+      `/api/read-models/trade-plan-detail@1?plan_id=${encodeURIComponent(planId)}`,
+    );
+    const identity = view.plan_identity;
+    const rules = element("ul");
+    renderList(
+      rules,
+      view.rules,
+      (rule) => `${rule.rule_class} · ${rule.rule_kind} · ${rule.priority}`,
+    );
+    const history = element("ul");
+    renderList(
+      history,
+      view.version_history,
+      (version) => `v${version.version_no} · ${version.confirmed_at}`,
+    );
+    const diagnostics = element("details");
+    diagnostics.append(
+      element("summary", "展开诊断与版本数量"),
+      element("p", `版本数量：${view.diagnostics.version_count}`),
+    );
+    target.replaceChildren(
+      element(
+        "p",
+        `${identity.security_id} · ${identity.strategy_version_id} · ${identity.lifecycle_status}`,
+      ),
+      element("h3", "HardRule / ReviewRule"),
+      rules,
+      element("h3", "版本历史"),
+      history,
+      diagnostics,
+    );
+  } catch (error) {
+    target.replaceChildren(element("p", `计划详情不可用：${error.message}`, "error"));
+  }
+}
+
+function applyStateField(form, prefix, state, value) {
+  form.elements[`${prefix}_state`].value = state ?? "unknown";
+  form.elements[`${prefix}_value`].value = value ?? "";
+}
+
+function renderEditor(view) {
+  const form = document.querySelector("#account-form");
+  const current = view.current_draft;
+  const confirmed = view.confirmed_snapshot_summary;
+  document.querySelector("#account-editor-summary").replaceChildren(
+    element(
+      "p",
+      confirmed
+        ? `已确认 v${confirmed.version_no} · ${confirmed.as_of_at}`
+        : "尚无已确认账户快照。",
+    ),
+    element(
+      "p",
+      current
+        ? `当前草稿 r${current.revision} · ${view.validation.state}`
+        : "当前没有 open 草稿。",
+      "muted",
+    ),
+  );
+  const accountId = models.portfolio.account_state_summary.account_id;
+  form.dataset.accountId = accountId;
+  if (current) {
+    form.dataset.draftId = current.draft_id;
+    form.dataset.revision = String(current.revision);
+    form.elements.as_of_at.value = current.as_of_at;
+    form.elements.session_semantics.value = current.session_semantics;
+    form.elements.currency.value = current.currency;
+    form.elements.redacted_source_ref.value = current.redacted_source_ref;
+    applyStateField(form, "cash", current.cash_state, current.cash_value);
+    applyStateField(form, "nav", current.nav_state, current.nav_value);
+    applyStateField(form, "fees", current.fees_state, current.fees_value);
+  } else {
+    delete form.dataset.draftId;
+    delete form.dataset.revision;
+    form.elements.as_of_at.value = new Date().toISOString().slice(0, 10);
+    form.elements.currency.value =
+      confirmed?.currency ?? models.portfolio.account_state_summary.estimated_state.currency;
+  }
+  document.querySelector("#confirm-draft").disabled =
+    !current || view.validation.state !== "valid";
+  const details = document.querySelector("#account-editor-details");
+  details.replaceChildren(
+    element("h3", "字段 lineage"),
+    element(
+      "p",
+      view.field_lineage.length
+        ? view.field_lineage
+            .map((item) => `${item.field} · ${item.source_kind} · ${item.redacted_source_ref}`)
+            .join("；")
+        : "无已确认 lineage。",
+    ),
+    element("h3", "校验"),
+    element(
+      "p",
+      view.validation.errors.length
+        ? view.validation.errors.join("；")
+        : view.validation.state,
+    ),
+    element("h3", "Canonical diff"),
+    element(
+      "pre",
+      view.canonical_diff
+        ? JSON.stringify(view.canonical_diff.canonical_diff, null, 2)
+        : "无 open 草稿。",
+    ),
+    element("h3", "能力影响"),
+    element(
+      "p",
+      view.capability_impacts.length
+        ? view.capability_impacts
+            .map((item) => `${item.capability_key} · ${item.state}`)
+            .join("；")
+        : "尚无已确认能力状态。",
+    ),
+  );
+}
+
+function draftFromForm(form) {
+  const current = models.editor.current_draft;
+  const value = (name) => form.elements[name].value.trim();
+  const optionalValue = (prefix) =>
+    value(`${prefix}_state`) === "known" ? value(`${prefix}_value`) : null;
+  return {
+    draft_id: form.dataset.draftId ?? `draft_web_${crypto.randomUUID().replaceAll("-", "")}`,
+    account_id: form.dataset.accountId,
+    revision: Number(form.dataset.revision ?? "1"),
+    status: "open",
+    source_kind: "manual_web_entry",
+    redacted_source_ref: value("redacted_source_ref"),
+    as_of_at: value("as_of_at"),
+    as_of_precision: "date",
+    timezone: "Asia/Shanghai",
+    session_semantics: value("session_semantics"),
+    currency: value("currency"),
+    cash_state: value("cash_state"),
+    cash_value: optionalValue("cash"),
+    nav_state: value("nav_state"),
+    nav_value: optionalValue("nav"),
+    fees_state: value("fees_state"),
+    fees_value: optionalValue("fees"),
+    positions:
+      current?.positions ??
+      models.editor.confirmed_snapshot_summary?.positions ??
+      [],
+    previous_snapshot_version_id:
+      current?.previous_snapshot_version_id ??
+      models.editor.confirmed_snapshot_summary?.account_snapshot_version_id ??
+      null,
+    revises_snapshot_version_id: current?.revises_snapshot_version_id ?? null,
+    corrects_snapshot_version_id: current?.corrects_snapshot_version_id ?? null,
+    correction_reason: current?.correction_reason ?? null,
+  };
+}
+
+function envelope(commandName, payloadSchemaVersion, payload, expectedRevision) {
+  return {
+    schema_version: "ApplicationCommandEnvelope@1",
+    command_name: commandName,
+    invocation_id: `web:${commandName}:${crypto.randomUUID()}`,
+    payload_schema_version: payloadSchemaVersion,
+    expected_revision: expectedRevision ?? null,
+    decision_actor: { actor_type: "user", actor_id: "local-user" },
+    interaction_channel: "web",
+    transport_actor: { actor_type: "adapter", actor_id: "web-local" },
+    approval: null,
+    payload,
+  };
+}
+
+async function dispatch(command) {
+  const response = await fetch("/api/application-commands", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify(command),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.code ?? `COMMAND_HTTP_${response.status}`);
+  return result;
+}
+
+async function refreshEditor() {
+  models.editor = await fetchModel(routes.editor);
+  renderEditor(models.editor);
+}
+
+document.querySelector("#account-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = document.querySelector("#account-form-status");
+  status.textContent = "正在确定性校验并保存草稿…";
+  const form = event.currentTarget;
+  const isUpdate = Boolean(form.dataset.draftId);
+  const command = envelope(
+    isUpdate ? "account_snapshot.update_draft@1" : "account_snapshot.create_draft@1",
+    isUpdate ? "UpdateAccountSnapshotDraft@1" : "CreateAccountSnapshotDraft@1",
+    { draft: draftFromForm(form) },
+    isUpdate ? Number(form.dataset.revision) : null,
+  );
+  try {
+    await dispatch(command);
+    await refreshEditor();
+    status.textContent =
+      models.editor.validation.state === "valid"
+        ? "草稿已保存并通过校验；仍需用户明确确认。"
+        : `草稿已保存但未通过校验：${models.editor.validation.errors.join("；")}`;
+  } catch (error) {
+    status.textContent = `草稿未保存：${error.message}`;
+  }
+});
+
+document.querySelector("#confirm-draft").addEventListener("click", async () => {
+  const current = models.editor.current_draft;
+  if (!current) return;
+  const status = document.querySelector("#account-form-status");
+  status.textContent = "正在记录用户明确确认…";
+  try {
+    await dispatch(
+      envelope(
+        "account_snapshot.confirm@1",
+        "ConfirmAccountSnapshot@1",
+        { draft_id: current.draft_id },
+        current.revision,
+      ),
+    );
+    models.portfolio = await fetchModel(routes.portfolio);
+    await refreshEditor();
+    renderOverview(models.portfolio);
+    status.textContent = "账户快照已由用户明确确认并生成不可变版本。";
+  } catch (error) {
+    status.textContent = `确认未完成：${error.message}`;
+  }
+});
+
+document.querySelectorAll("[data-value-field]").forEach((group) => {
+  const prefix = group.dataset.valueField;
+  const select = group.querySelector("select");
+  const input = group.querySelector("input");
+  const synchronize = () => {
+    input.disabled = select.value !== "known";
+    if (input.disabled) input.value = "";
+    input.required = select.value === "known";
+  };
+  select.addEventListener("change", synchronize);
+  synchronize();
+});
+
+document.querySelectorAll(".primary-nav [data-page]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const page = button.dataset.page;
+    document.querySelectorAll(".primary-nav button").forEach((item) => {
+      item.removeAttribute("aria-current");
+    });
+    button.setAttribute("aria-current", "page");
+    document.querySelectorAll(".page").forEach((section) => {
+      section.hidden = section.id !== `page-${page}`;
+    });
+    document.querySelector(`#page-${page}`).focus({ preventScroll: true });
+  });
+});
+
+document.querySelector("#open-account-editor").addEventListener("click", () => {
+  document.querySelector("#account-dialog").showModal();
+});
+
+document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelector(`#${button.dataset.closeDialog}`).close();
+  });
+});
+
+async function initialize() {
+  const status = document.querySelector("#load-status");
+  try {
+    const [portfolio, holding, review, research, editor] = await Promise.all(
+      Object.values(routes).map(fetchModel),
+    );
+    models = { portfolio, holding, review, research, editor };
+    renderOverview(portfolio);
+    renderHolding(holding);
+    renderReview(review);
+    renderResearch(research);
+    renderEditor(editor);
+    status.textContent = "已载入同一 application read-model authority。";
+    status.dataset.state = "ready";
+  } catch (error) {
+    status.textContent = `工作台不可用：${error.message}`;
+    status.dataset.state = "error";
+  }
+}
+
+initialize();

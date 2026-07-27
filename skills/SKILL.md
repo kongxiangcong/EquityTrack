@@ -18,7 +18,7 @@ python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
 python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest <manifest.json> --live-qualification-artifact-id <artifact_id>
-python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --security-id <id> --snapshot-id <id>
+python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --account-id <id> --security-id <id>
 python -m trading_platform.cli test --repo-root <repo>
 python -m trading_platform.cli inventory --repo-root <repo>
 python -m trading_platform.cli backup --data-root <root> --archive <outside-root.zip>
@@ -151,6 +151,15 @@ portfolio home contract has exactly five summary groups: account state,
 unresolved tasks, material changes, active-plan summaries, and discipline
 exceptions. Unknown, unable, and unverified remain explicit. Full manifest,
 policy, model, hash, and log detail is never promoted onto the home view.
+
+The production local Web exposes those DTOs through six explicit versioned
+read routes and has exactly four primary destinations: `总览`, `组合`, `复核`,
+and `研究`. AccountSnapshot editing posts the same
+`ApplicationCommandEnvelope@1` to the shared dispatcher and always identifies
+an explicit local user; plan detail is read-only. Plan confirmation, task
+disposition, execution entry, and discipline-review confirmation remain
+Skill-first. `/api/workspace`, public `daily`, chart annotation routes, and
+update-authorization routes are retired and have no aliases or fallbacks.
 
 Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 

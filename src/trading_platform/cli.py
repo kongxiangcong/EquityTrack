@@ -24,13 +24,11 @@ from trading_platform.application import (
     open_platform_operations,
     open_project_verification,
     open_provider_qualification,
+    open_read_models,
     open_research_archive,
     open_research_workflow,
     open_server_runtime,
     open_watchlist,
-    open_chart_annotations,
-    open_chart_workspace,
-    open_update_authorizations,
     open_workflow_inspection,
     open_workflow_runtime,
     HealthQuery,
@@ -100,8 +98,8 @@ def _parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve")
     serve.add_argument("--data-root", type=Path, required=True)
     serve.add_argument("--web-root", type=Path, required=True)
+    serve.add_argument("--account-id", required=True)
     serve.add_argument("--security-id", required=True)
-    serve.add_argument("--snapshot-id", required=True)
     test = sub.add_parser("test")
     test.add_argument("--repo-root", type=Path, default=Path.cwd())
     inventory = sub.add_parser("inventory")
@@ -344,17 +342,15 @@ def main(argv: list[str] | None = None) -> int:
             }
         elif operation == "serve":
             with (
-                open_chart_workspace(args.data_root) as chart_workspace,
-                open_chart_annotations(args.data_root) as chart_annotations,
-                open_update_authorizations(args.data_root) as update_authorizations,
+                open_read_models(args.data_root) as read_models,
+                open_application_commands(args.data_root) as application_commands,
             ):
                 server = LocalChartWorkspaceServer(
-                    chart_workspace=chart_workspace,
-                    chart_annotations=chart_annotations,
-                    update_authorizations=update_authorizations,
+                    read_models=read_models,
+                    application_commands=application_commands,
                     web_root=args.web_root,
+                    account_id=args.account_id,
                     security_id=args.security_id,
-                    snapshot_id=args.snapshot_id,
                 )
                 try:
                     with open_server_runtime(args.data_root):

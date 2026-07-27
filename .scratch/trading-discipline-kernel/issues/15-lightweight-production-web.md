@@ -1,6 +1,6 @@
 # 15 — Lightweight production Web
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 08, 14
@@ -41,3 +41,40 @@ Plan confirmation UI, task disposition UI, execution entry UI, scheduler, real-t
 ## One-way cutover
 
 Replace and remove old `/api/workspace` callers, legacy navigation, hard-coded holding content, and superseded production bundles in the same change. Never copy A/B/C prototype business or build files into production.
+
+## Claim record
+
+- External seams: six explicit versioned GET routes backed by
+  `open_read_models`, and the existing shared application command envelope for
+  AccountSnapshot draft create/revise/confirm; static production assets remain
+  the only browser shell.
+- Deep-module ownership: application read models own presentation truth and
+  serialization; the Web server owns HTTP security/protocol conversion only;
+  the browser source owns navigation, progressive disclosure, form interaction,
+  and accessible rendering without business decisions.
+- Old paths to replace: `/api/workspace`, `chartGateway.workspace`, the
+  single-security chart/research shell, old workspace DOM IDs, and direct
+  annotation/update-authorization mutations exposed by the production page.
+- Superseded artifacts to delete: stale navigation and hard-coded holding
+  layout, chart/research prototype rendering modules no longer imported,
+  retired workspace payload tests, hashed bundles/CSS/maps not referenced by
+  the rebuilt production index, and every `/api/workspace` occurrence outside
+  explicit absence assertions.
+
+## Resolution evidence
+
+- Production navigation is exactly `总览`, `组合`, `复核`, and `研究`.
+  AccountSnapshot editing and read-only plan detail are progressive
+  disclosures, not primary destinations.
+- The server exposes six explicit versioned read routes and one shared
+  application-command-envelope POST route. Web account mutation is restricted
+  to the explicit local user and the existing AccountSnapshot named tasks.
+- Removed the retired workspace/chart/update-authorization routes, chart and
+  research prototype modules, KLineCharts runtime dependency and licenses,
+  stale private-seam tests, and superseded hashed bundles.
+- `TDK-AC-031` and `TDK-AC-032` passed in Python integration tests and the
+  production CDP verifier. The acceptance validator independently verified the
+  evidence and all four screenshot hashes.
+- Detailed current evidence:
+  `.scratch/trading-discipline-kernel/evidence/15-lightweight-production-web.md`
+  and `.scratch/trading-discipline-kernel/evidence/15-browser-cdp.json`.

@@ -25,9 +25,12 @@ the live qualification sequence. Watchlist identity, invocation replay, and
 transaction rules are implemented by the canonical SQLite Watchlist task;
 `PlatformStore` does not forward them.
 
-The Web adapter receives explicit DecisionWorkspace, ChartWorkspace,
-ChartAnnotations, TradePlan, and update-authorization tasks. It projects typed
-results and does not receive a root object, container, or facade.
+The production Web adapter receives only `ReadModelService` and
+`ApplicationCommandDispatcher`. Six explicit versioned GET routes serialize
+the same immutable DTOs as Skill; the sole POST route decodes the shared
+application command envelope and admits only user-authored AccountSnapshot
+commands. It does not receive a root object, persistence adapter, chart task,
+plan mutation task, container, or facade.
 
 ## Research and presentation
 
@@ -106,6 +109,11 @@ Holding, plan, review, research, and account-editor DTOs keep diagnostics and
 provenance behind detail fields while preserving explicit
 known/unknown/not-applicable, unable, and unverified states. The unversioned
 `DecisionWorkspace` mapping and Python `/api/workspace` route are deleted.
+Production assets expose exactly `总览`, `组合`, `复核`, and `研究`; account
+editing and read-only plan detail are progressive disclosures rather than
+additional primary navigation. The production browser runtime has no chart
+dependency. Plan confirmation, task disposition, execution truth, and
+discipline-review confirmation remain Skill-first.
 
 ## Data, privacy, and financial boundaries
 

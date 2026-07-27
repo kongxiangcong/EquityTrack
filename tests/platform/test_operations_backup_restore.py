@@ -1021,10 +1021,10 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
             str(restored),
             "--web-root",
             str(repo / "web/dist"),
+            "--account-id",
+            "account_local",
             "--security-id",
             "security_yihua",
-            "--snapshot-id",
-            "snapshot_chart",
         ],
         cwd=repo,
         stdout=subprocess.PIPE,
@@ -1035,14 +1035,15 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
         line = process.stdout.readline().strip()
         envelope = json.loads(line)
         assert envelope["ok"] is True
-        chart = json.loads(
+        research = json.loads(
             urlopen(
-                envelope["result"]["url"] + "/api/chart-series",
+                envelope["result"]["url"]
+                + "/api/read-models/research-index@1",
                 timeout=5,
             ).read()
         )
-        assert chart["data_snapshot_id"] == "snapshot_chart"
-        assert secret not in json.dumps(chart) and secret not in line
+        assert research["schema_version"] == "ResearchIndexView@1"
+        assert secret not in json.dumps(research) and secret not in line
     finally:
         process.terminate()
         try:
