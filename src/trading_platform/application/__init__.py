@@ -50,10 +50,18 @@ if TYPE_CHECKING:
         ApplicationCommandResult,
     )
     from .manual_portfolio_review import (
+        FreezePlanImpactInput,
         GetManualPortfolioReview,
         ManualPortfolioReview,
         ResumeManualPortfolioReview,
         StartManualPortfolioReview,
+    )
+    from .plan_impacts import (
+        AcceptPlanChangeProposal,
+        CreatePlanChangeProposal,
+        CreatePlanImpactAssessment,
+        PlanImpacts,
+        RejectPlanChangeProposal,
     )
     from .decision_tasks import (
         DecisionTasks,
@@ -97,6 +105,7 @@ if TYPE_CHECKING:
         open_discipline_reviews,
         open_market,
         open_manual_portfolio_review,
+        open_plan_impacts,
         open_platform_health,
         open_platform_operations,
         open_project_verification,
@@ -164,9 +173,15 @@ _EXPORT_MODULES = {
     "ApplicationCommandFailure": ".commands",
     "ApplicationCommandResult": ".commands",
     "GetManualPortfolioReview": ".manual_portfolio_review",
+    "FreezePlanImpactInput": ".manual_portfolio_review",
     "ManualPortfolioReview": ".manual_portfolio_review",
     "ResumeManualPortfolioReview": ".manual_portfolio_review",
     "StartManualPortfolioReview": ".manual_portfolio_review",
+    "AcceptPlanChangeProposal": ".plan_impacts",
+    "CreatePlanChangeProposal": ".plan_impacts",
+    "CreatePlanImpactAssessment": ".plan_impacts",
+    "PlanImpacts": ".plan_impacts",
+    "RejectPlanChangeProposal": ".plan_impacts",
     "DecisionTasks": ".decision_tasks",
     "DeferDecisionTask": ".decision_tasks",
     "ListDecisionTasks": ".decision_tasks",
@@ -216,6 +231,7 @@ _EXPORT_MODULES = {
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",
     "open_manual_portfolio_review": ".bootstrap",
+    "open_plan_impacts": ".bootstrap",
     "open_platform_health": ".bootstrap",
     "open_platform_operations": ".bootstrap",
     "open_project_verification": ".bootstrap",

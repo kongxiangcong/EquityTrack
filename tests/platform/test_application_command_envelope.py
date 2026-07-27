@@ -297,6 +297,8 @@ def test_all_mutations_cross_named_tasks_and_envelope() -> None:
         "execution_record.declare@1",
         "execution_record.correct@1",
         "discipline_review.confirm@1",
+        "plan_impact_assessment.create@1",
+        "plan_change_proposal.create@1",
         "plan_change_proposal.accept@1",
         "plan_change_proposal.reject@1",
     )

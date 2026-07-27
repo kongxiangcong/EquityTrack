@@ -17,8 +17,12 @@ from trading_platform.domain.manual_review import (
     ManualReviewHolding,
     ReviewOutcome,
 )
-from trading_platform.domain.decision_tasks import DecisionTask
+from trading_platform.domain.plan_impacts import (
+    FrozenPlanImpactEvidence,
+    PlanImpactError,
+)
 from trading_platform.identity import canonical_hash
+from trading_platform.domain.decision_tasks import DecisionTask
 
 from .locking import DataRootWriterLock
 from .decision_tasks import SQLiteDecisionTaskRepository
@@ -478,6 +482,69 @@ class SQLiteManualPortfolioReviewRepository:
             created_at=row["created_at"],
             schema_version=row["schema_version"],
         )
+
+    def freeze_plan_impact_input(
+        self, query
+    ) -> FrozenPlanImpactEvidence:
+        row = self._connection.execute(
+            "SELECT i.*,m.manifest_id,m.content_hash AS manifest_hash "
+            "FROM manual_portfolio_review_item i "
+            "JOIN manual_portfolio_review_manifest m "
+            "ON m.review_run_id=i.review_run_id "
+            "JOIN trade_plan_rule p "
+            "ON p.plan_version_id=i.plan_version_id "
+            "AND p.rule_id=? AND p.rule_class='review' "
+            "WHERE i.review_run_id=? AND i.review_item_id=?",
+            (
+                query.review_rule_id,
+                query.review_run_id,
+                query.review_item_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise PlanImpactError("PLAN_IMPACT_AUTHORITY_NOT_FOUND")
+        routing = tuple(json.loads(row["review_rule_routing_json"]))
+        routed = next(
+            (
+                value
+                for value in routing
+                if value.get("rule_id") == query.review_rule_id
+            ),
+            None,
+        )
+        unable = tuple(json.loads(row["unable_reasons_json"]))
+        if routed is None:
+            if not unable:
+                raise PlanImpactError(
+                    "PLAN_IMPACT_REVIEW_RULE_NOT_FROZEN"
+                )
+            result = "unable_to_determine"
+        else:
+            result = str(routed.get("result"))
+        identity = {
+            "review_run_id": row["review_run_id"],
+            "review_item_id": row["review_item_id"],
+            "plan_version_id": row["plan_version_id"],
+            "review_rule_id": query.review_rule_id,
+            "review_rule_result": result,
+            "evidence_manifest_id": row["manifest_id"],
+            "research_refs": tuple(
+                json.loads(row["research_run_ids_json"])
+            ),
+            "market_refs": tuple(
+                json.loads(row["market_snapshot_ids_json"])
+            ),
+            "industry_refs": (),
+            "sector_refs": (),
+            "unable_reasons": unable,
+            "schema_version": "FrozenPlanImpactEvidence@1",
+        }
+        frozen = FrozenPlanImpactEvidence(
+            **identity,
+            authority_content_hash=canonical_hash(identity),
+        )
+        frozen.validate()
+        return frozen
 
     def _evaluation(
         self, plan_version_id: str, session: str

@@ -895,6 +895,14 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
         "SELECT sql FROM sqlite_master "
         "WHERE type='table' AND name='discipline_review_version'"
     ).fetchone()[0]
+    assessment_sql = store.connection.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='plan_impact_assessment'"
+    ).fetchone()[0]
+    proposal_sql = store.connection.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='plan_change_proposal'"
+    ).fetchone()[0]
     assert "decision_actor LIKE 'user:%'" in action_sql
     assert "corrects_entry_id TEXT UNIQUE" in action_sql
     assert (
@@ -906,6 +914,13 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
     assert "supersedes_version_no" in discipline_sql
     assert "timezone='Asia/Shanghai'" in discipline_sql
     assert "draft_invocation_id TEXT UNIQUE" in discipline_sql
+    assert "authority_content_hash TEXT NOT NULL" in assessment_sql
+    assert "review_rule_result TEXT NOT NULL" in assessment_sql
+    assert "command_invocation_id TEXT NOT NULL UNIQUE" in proposal_sql
+    assert "base_graph_seal_hash TEXT NOT NULL" in proposal_sql
+    assert "supersedes_revision" in proposal_sql
+    assert "decision_actor LIKE 'user:%'" in proposal_sql
+    assert "decision_actor LIKE 'agent:%'" in proposal_sql
     store.migrate()
     assert store.connection.execute(
         "SELECT count(*) FROM schema_migration WHERE version=17"

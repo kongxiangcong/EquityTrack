@@ -68,6 +68,13 @@ from .discipline_reviews import (
     ConfirmDisciplineReviewVersion,
     DisciplineReviews,
 )
+from .plan_impacts import (
+    AcceptPlanChangeProposal,
+    CreatePlanChangeProposal,
+    CreatePlanImpactAssessment,
+    PlanImpacts,
+    RejectPlanChangeProposal,
+)
 from trading_platform.domain.decision_tasks import (
     DeferralCondition,
     UserDisposition,
@@ -115,8 +122,14 @@ _CAPABILITIES = {
     "execution_record.declare@1": ApprovalCapability.EXECUTION_TRUTH,
     "execution_record.correct@1": ApprovalCapability.EXECUTION_TRUTH,
     "discipline_review.confirm@1": ApprovalCapability.REVIEW_CONFIRMATION,
-    "plan_change_proposal.accept@1": ApprovalCapability.DRAFT_MUTATION,
-    "plan_change_proposal.reject@1": ApprovalCapability.DRAFT_MUTATION,
+    "plan_impact_assessment.create@1": ApprovalCapability.DRAFT_MUTATION,
+    "plan_change_proposal.create@1": ApprovalCapability.DRAFT_MUTATION,
+    "plan_change_proposal.accept@1": (
+        ApprovalCapability.PROPOSAL_DISPOSITION
+    ),
+    "plan_change_proposal.reject@1": (
+        ApprovalCapability.PROPOSAL_DISPOSITION
+    ),
 }
 
 _IMPLEMENTED = {
@@ -134,6 +147,10 @@ _IMPLEMENTED = {
     "execution_record.declare@1",
     "execution_record.correct@1",
     "discipline_review.confirm@1",
+    "plan_impact_assessment.create@1",
+    "plan_change_proposal.create@1",
+    "plan_change_proposal.accept@1",
+    "plan_change_proposal.reject@1",
 }
 
 
@@ -148,6 +165,7 @@ class ApplicationCommandDispatcher:
         decision_tasks: DecisionTasks,
         decision_journal: DecisionJournal,
         discipline_reviews: DisciplineReviews,
+        plan_impacts: PlanImpacts,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._trade_plans = trade_plans
@@ -155,6 +173,7 @@ class ApplicationCommandDispatcher:
         self._decision_tasks = decision_tasks
         self._decision_journal = decision_journal
         self._discipline_reviews = discipline_reviews
+        self._plan_impacts = plan_impacts
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -206,6 +225,7 @@ class ApplicationCommandDispatcher:
             ApprovalCapability.TASK_DISPOSITION,
             ApprovalCapability.EXECUTION_TRUTH,
             ApprovalCapability.REVIEW_CONFIRMATION,
+            ApprovalCapability.PROPOSAL_DISPOSITION,
         } and actor != "user":
             return self._failure(envelope, "USER_DECISION_CAPABILITY_REQUIRED")
         if (
@@ -370,11 +390,77 @@ class ApplicationCommandDispatcher:
                 transport_actor=transport.identity,
             )
             return command, self._discipline_reviews.confirm(command)
+        if envelope.command_name == "plan_impact_assessment.create@1":
+            command = CreatePlanImpactAssessment(
+                invocation_id=envelope.invocation_id,
+                review_run_id=str(payload["review_run_id"]),
+                review_item_id=str(payload["review_item_id"]),
+                review_rule_id=str(payload["review_rule_id"]),
+                impact_kind=str(payload["impact_kind"]),
+                materiality=str(payload["materiality"]),
+                uncertainties=tuple(
+                    str(value)
+                    for value in payload.get("uncertainties", ())
+                ),
+                what_changed=str(payload["what_changed"]),
+                what_would_change_the_view=str(
+                    payload["what_would_change_the_view"]
+                ),
+                model_identity=str(payload["model_identity"]),
+                policy_identity=str(payload["policy_identity"]),
+                prompt_identity=str(payload["prompt_identity"]),
+                created_by=actor.actor_type,
+                created_at=str(payload["created_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._plan_impacts.create_assessment(command)
+        if envelope.command_name == "plan_change_proposal.create@1":
+            command = CreatePlanChangeProposal(
+                invocation_id=envelope.invocation_id,
+                assessment_id=str(payload["assessment_id"]),
+                proposed_content=_mapping(
+                    payload["proposed_content"]
+                ),
+                parameters=_mapping(payload["parameters"]),
+                created_by=actor.actor_type,
+                created_at=str(payload["created_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._plan_impacts.create_proposal(command)
         plan_actor = PlanCommandActor(
             actor.identity,
             envelope.interaction_channel.value,
             transport.identity,
         )
+        if envelope.command_name == "plan_change_proposal.accept@1":
+            command = AcceptPlanChangeProposal(
+                invocation_id=envelope.invocation_id,
+                proposal_id=str(payload["proposal_id"]),
+                expected_revision=_revision(envelope),
+                draft_id=str(payload["draft_id"]),
+                expected_draft_revision=(
+                    int(payload["expected_draft_revision"])
+                    if payload.get("expected_draft_revision")
+                    is not None
+                    else None
+                ),
+                decided_at=str(payload["decided_at"]),
+                actor=plan_actor,
+            )
+            return command, self._plan_impacts.accept(command)
+        if envelope.command_name == "plan_change_proposal.reject@1":
+            command = RejectPlanChangeProposal(
+                invocation_id=envelope.invocation_id,
+                proposal_id=str(payload["proposal_id"]),
+                expected_revision=_revision(envelope),
+                decided_at=str(payload["decided_at"]),
+                actor=plan_actor,
+            )
+            return command, self._plan_impacts.reject(command)
         if envelope.command_name == "trade_plan.create_draft@1":
             raw_draft = payload["draft"]
             if not isinstance(raw_draft, Mapping):
@@ -639,6 +725,8 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
                 "decision_task_id",
                 "execution_record_id",
                 "discipline_review_id",
+                "assessment_id",
+                "proposal_id",
             )
             if payload.get(key)
         ),

@@ -21,6 +21,7 @@ from trading_platform.domain.decision_tasks import (
     finalize_decision_tasks,
     prepare_decision_tasks,
 )
+from trading_platform.domain.plan_impacts import FrozenPlanImpactEvidence
 from trading_platform.domain.workflow import NodeDefinition, WorkflowDefinition
 from trading_platform.identity import canonical_hash
 
@@ -93,6 +94,13 @@ class GetManualPortfolioReview:
     review_run_id: str
 
 
+@dataclass(frozen=True)
+class FreezePlanImpactInput:
+    review_run_id: str
+    review_item_id: str
+    review_rule_id: str
+
+
 class ManualPortfolioReviewRepository(Protocol):
     fault_injector: object
 
@@ -140,6 +148,10 @@ class ManualPortfolioReviewRepository(Protocol):
     def manifest(
         self, review_run_id: str
     ) -> ManualPortfolioReviewManifest: ...
+
+    def freeze_plan_impact_input(
+        self, query: FreezePlanImpactInput
+    ) -> FrozenPlanImpactEvidence: ...
 
 
 class ManualPortfolioReview:
@@ -358,7 +370,21 @@ class ManualPortfolioReview:
             raise ManualReviewError("MANUAL_REVIEW_ID_REQUIRED")
         return self._repository.get(query.review_run_id)
 
+    def freeze_plan_impact_input(
+        self, query: FreezePlanImpactInput
+    ) -> FrozenPlanImpactEvidence:
+        if (
+            not query.review_run_id
+            or not query.review_item_id
+            or not query.review_rule_id
+        ):
+            raise ManualReviewError("PLAN_IMPACT_INPUT_INVALID")
+        evidence = self._repository.freeze_plan_impact_input(query)
+        evidence.validate()
+        return evidence
+
 __all__ = [
+    "FreezePlanImpactInput",
     "GetManualPortfolioReview",
     "ManualPortfolioReview",
     "ResumeManualPortfolioReview",

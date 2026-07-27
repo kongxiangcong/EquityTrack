@@ -87,6 +87,16 @@ Confirmation appends a version and receipt; later drafts never rewrite prior
 versions. Monthly reporting is a deterministic aggregation of confirmed
 versions, not a second persistence model.
 
+`PlanImpacts` consumes only the immutable manual-review item/manifest and its
+referenced ReviewRule. The domain owns evidence-bound assessment identity,
+unable-state preservation, the finite canonical content patch, and immutable
+proposal revisions. The SQLite adapter owns frozen authority proof,
+active-base concurrency, replay, and append-only disposition history.
+Accepting a proposal delegates to the existing `TradePlanTasks` draft
+operation and stops at an open draft; only the existing canonical diff,
+confirmation challenge, and explicit user-confirmation path can change the
+active plan.
+
 ## Data, privacy, and financial boundaries
 
 - Official disclosures are canonical for critical financial facts.

@@ -36,6 +36,7 @@ class ApprovalCapability(str, Enum):
     TASK_DISPOSITION = "task_disposition"
     EXECUTION_TRUTH = "execution_truth"
     REVIEW_CONFIRMATION = "review_confirmation"
+    PROPOSAL_DISPOSITION = "proposal_disposition"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,8 @@ _PAYLOAD_SCHEMAS = {
     "execution_record.declare@1": "DeclareExecutionRecord@1",
     "execution_record.correct@1": "CorrectExecutionRecord@1",
     "discipline_review.confirm@1": "ConfirmDisciplineReview@1",
+    "plan_impact_assessment.create@1": "CreatePlanImpactAssessment@1",
+    "plan_change_proposal.create@1": "CreatePlanChangeProposal@1",
     "plan_change_proposal.accept@1": "AcceptPlanChangeProposal@1",
     "plan_change_proposal.reject@1": "RejectPlanChangeProposal@1",
 }

@@ -56,6 +56,7 @@ from .manual_portfolio_review import ManualPortfolioReview
 from .decision_tasks import DecisionTasks
 from .decision_journal import DecisionJournal
 from .discipline_reviews import DisciplineReviews
+from .plan_impacts import PlanImpacts
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -70,6 +71,9 @@ from trading_platform.persistence.decision_journal import (
 )
 from trading_platform.persistence.discipline_reviews import (
     SQLiteDisciplineReviewRepository,
+)
+from trading_platform.persistence.plan_impacts import (
+    SQLitePlanImpactRepository,
 )
 from trading_platform.domain.discipline_reviews import (
     DisciplineReviewService,
@@ -284,6 +288,21 @@ def open_application_commands(
             store.connection, store.writer_lock
         )
         journal = DecisionJournal(journal_repository)
+        trade_plans = TradePlanTasks(
+            SQLiteTradePlanRepository(
+                store.connection, store.writer_lock
+            )
+        )
+        manual_reviews = ManualPortfolioReview(
+            SQLiteManualPortfolioReviewRepository(
+                store.connection, store.writer_lock
+            ),
+            AccountStateQueries(
+                SQLiteAccountSnapshotProjection(store.connection),
+                journal_repository,
+            ),
+            _ledger(store),
+        )
         yield ApplicationCommandDispatcher(
             AccountSnapshotCommands(
                 SQLiteAccountSnapshotRepository(
@@ -291,21 +310,8 @@ def open_application_commands(
                 ),
                 AccountSnapshotService(),
             ),
-            TradePlanTasks(
-                SQLiteTradePlanRepository(
-                    store.connection, store.writer_lock
-                )
-            ),
-            ManualPortfolioReview(
-                SQLiteManualPortfolioReviewRepository(
-                    store.connection, store.writer_lock
-                ),
-                AccountStateQueries(
-                    SQLiteAccountSnapshotProjection(store.connection),
-                    journal_repository,
-                ),
-                _ledger(store),
-            ),
+            trade_plans,
+            manual_reviews,
             DecisionTasks(
                 SQLiteDecisionTaskRepository(
                     store.connection, store.writer_lock
@@ -318,6 +324,13 @@ def open_application_commands(
                     store.connection, store.writer_lock
                 ),
                 DisciplineReviewService(),
+            ),
+            PlanImpacts(
+                SQLitePlanImpactRepository(
+                    store.connection, store.writer_lock
+                ),
+                manual_reviews,
+                trade_plans,
             ),
         )
 
@@ -392,6 +405,39 @@ def open_discipline_reviews(
                 store.connection, store.writer_lock
             ),
             DisciplineReviewService(),
+        )
+
+
+@contextmanager
+def open_plan_impacts(
+    data_root: Path,
+    migrations_root: Path | None = None,
+) -> Iterator[PlanImpacts]:
+    with _store(data_root, migrations_root) as store:
+        journal_repository = SQLiteDecisionJournalRepository(
+            store.connection, store.writer_lock
+        )
+        manual_reviews = ManualPortfolioReview(
+            SQLiteManualPortfolioReviewRepository(
+                store.connection, store.writer_lock
+            ),
+            AccountStateQueries(
+                SQLiteAccountSnapshotProjection(store.connection),
+                journal_repository,
+            ),
+            _ledger(store),
+        )
+        plan_tasks = TradePlanTasks(
+            SQLiteTradePlanRepository(
+                store.connection, store.writer_lock
+            )
+        )
+        yield PlanImpacts(
+            SQLitePlanImpactRepository(
+                store.connection, store.writer_lock
+            ),
+            manual_reviews,
+            plan_tasks,
         )
 
 

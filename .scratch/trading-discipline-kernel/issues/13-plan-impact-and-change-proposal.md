@@ -1,6 +1,6 @@
 # 13 — PlanImpactAssessment and PlanChangeProposal
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 07, 09, 10, 12
@@ -41,3 +41,48 @@ Research auto-modifying plans, Agent approval, automatic proposal acceptance, ta
 ## One-way cutover
 
 Remove any path where research/evidence writes active plan content. All changes converge on the existing canonical authoring/challenge command; no proposal-specific compatibility activation exists.
+
+## Claim record
+
+- External seams: named create-assessment, create-proposal, accept-proposal, and
+  reject-proposal application tasks. Proposal acceptance delegates only to the
+  existing canonical `TradePlanAuthoring` create/revise draft operation.
+- Deep-module ownership: `domain/plan_impacts.py` owns frozen assessment and
+  proposal invariants, canonical patch/hash identity, lifecycle transitions,
+  and stale-base rules; application owns Agent authorship/capability and
+  accept-to-draft orchestration; SQLite owns frozen authority reads,
+  concurrency, immutable assessment/proposal persistence, and replay.
+- Old paths to replace: unfrozen review-rule summaries, evidence/research
+  mutation of active plan content, caller-authored proposal diff identity, and
+  any proposal acceptance that bypasses canonical draft validation/challenge.
+- Superseded artifacts to delete: proposal-specific plan writer or activation
+  route, direct active-plan update, automatic acceptance, Agent approval,
+  mutable evidence references, duplicate canonical patch/diff calculator,
+  compatibility alias, and tests of a retired direct-write seam.
+
+## Resolution evidence
+
+- Added evidence-bound `PlanImpactAssessment@1` and immutable
+  `PlanChangeProposal@1` revisions. ReviewRule unable state remains unable with
+  explicit uncertainty; Agent/system authorship cannot become user approval.
+- Manual review now exposes one frozen input query that proves the immutable
+  review item, manifest, referenced plan version, ReviewRule, result, and
+  research/market evidence identities before assessment creation.
+- Proposal creation stores a finite canonical content-replacement patch against
+  the exact base graph seal. The application computes the proposed graph and
+  delegates only to the existing `CreateTradePlanDraft` or
+  `ReviseTradePlanDraft` task.
+- Accept/reject require a user decision actor through the shared envelope.
+  Acceptance stops at an open Draft; it neither issues nor consumes a
+  confirmation challenge and never calls activation.
+- Repeated acceptance replays both the ordinary draft receipt and proposal
+  disposition. A stale active base fails before draft creation. Injected
+  disposition failure rolls back the proposal revision and receipt; retry
+  repairs the safe open-Draft boundary without duplication.
+- TDK-AC-017 and TDK-AC-025 pass. The contract suite passed
+  `8 passed in 6.51s`, the final related cohort gate passed
+  `97 passed in 65.24s`, and the final wider regression passed
+  `165 passed in 96.68s`.
+- `0017` is content-complete for tickets 09–13 and remains unapplied to both
+  known persistent roots at schema 11. Its final cohort SHA-256 is
+  `A53804AB84FF683C457B8B2C6718572D3B604690AF83E346EFD68AF3BC3F302C`.

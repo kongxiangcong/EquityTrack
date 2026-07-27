@@ -241,20 +241,26 @@ CREATE TABLE discipline_review_version (
 
 CREATE TABLE plan_impact_assessment (
   assessment_id TEXT PRIMARY KEY,
+  invocation_id TEXT NOT NULL UNIQUE,
+  request_hash TEXT NOT NULL,
   review_run_id TEXT NOT NULL REFERENCES manual_portfolio_review_run(review_run_id),
   review_item_id TEXT NOT NULL REFERENCES manual_portfolio_review_item(review_item_id),
   plan_version_id TEXT NOT NULL REFERENCES trade_plan_version(plan_version_id),
   review_rule_id TEXT NOT NULL,
+  review_rule_result TEXT NOT NULL CHECK(review_rule_result IN ('pass','fail','unable_to_determine')),
   evidence_manifest_id TEXT NOT NULL REFERENCES manual_portfolio_review_manifest(manifest_id),
   research_refs_json TEXT NOT NULL,
   market_refs_json TEXT NOT NULL,
   industry_refs_json TEXT NOT NULL,
   sector_refs_json TEXT NOT NULL,
+  unable_reasons_json TEXT NOT NULL,
+  authority_content_hash TEXT NOT NULL,
   impact_kind TEXT NOT NULL,
   materiality TEXT NOT NULL,
   uncertainties_json TEXT NOT NULL,
   what_changed TEXT NOT NULL,
   what_would_change_the_view TEXT NOT NULL,
+  finding_schema_version TEXT NOT NULL CHECK(finding_schema_version='PlanImpactFinding@1'),
   model_identity TEXT NOT NULL,
   policy_identity TEXT NOT NULL,
   prompt_identity TEXT NOT NULL,
@@ -267,9 +273,13 @@ CREATE TABLE plan_impact_assessment (
 CREATE TABLE plan_change_proposal (
   proposal_id TEXT NOT NULL,
   revision INTEGER NOT NULL CHECK(revision > 0),
+  supersedes_revision INTEGER,
+  command_invocation_id TEXT NOT NULL UNIQUE,
+  request_hash TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('open','accepted','rejected','superseded')),
   assessment_id TEXT NOT NULL REFERENCES plan_impact_assessment(assessment_id),
   base_plan_version_id TEXT NOT NULL REFERENCES trade_plan_version(plan_version_id),
+  base_graph_seal_hash TEXT NOT NULL,
   proposed_canonical_patch_json TEXT NOT NULL,
   proposed_diff_hash TEXT NOT NULL,
   created_by TEXT NOT NULL CHECK(created_by IN ('agent','system')),
@@ -278,7 +288,20 @@ CREATE TABLE plan_change_proposal (
   accepted_draft_id TEXT REFERENCES trade_plan_draft(draft_id),
   content_hash TEXT NOT NULL UNIQUE,
   schema_version TEXT NOT NULL CHECK(schema_version='PlanChangeProposal@1'),
+  decision_actor TEXT,
+  interaction_channel TEXT,
+  transport_actor TEXT,
   PRIMARY KEY(proposal_id,revision),
+  FOREIGN KEY(proposal_id,supersedes_revision)
+    REFERENCES plan_change_proposal(proposal_id,revision),
+  CHECK(
+    (revision=1 AND supersedes_revision IS NULL AND status='open')
+    OR (revision>1 AND supersedes_revision=revision-1 AND status IN ('accepted','rejected','superseded'))
+  ),
+  CHECK(
+    (revision=1 AND (decision_actor LIKE 'agent:%' OR decision_actor LIKE 'system:%') AND interaction_channel IS NOT NULL AND transport_actor IS NOT NULL)
+    OR (revision>1 AND decision_actor LIKE 'user:%' AND interaction_channel IS NOT NULL AND transport_actor IS NOT NULL)
+  ),
   CHECK((status='accepted' AND accepted_draft_id IS NOT NULL) OR (status<>'accepted' AND accepted_draft_id IS NULL))
 );
 
