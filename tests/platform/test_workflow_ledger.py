@@ -9,6 +9,11 @@ from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
 from tests.platform.test_research_workflow import _request, _root
 from trading_platform.application.contracts import StartResearchWorkflow
 from trading_platform.persistence.locking import PersistenceError
+from tests.platform.test_manual_portfolio_review import (
+    _complete_session,
+    _start as _start_manual_review,
+)
+from tests.platform.test_plan_confirmation import _authority_root
 
 
 def test_ledger_persists_only_request_v2_and_one_bound_view_manifest(
@@ -68,6 +73,33 @@ def test_checkpoint_members_are_content_addressed_and_role_complete(
         "decision_view_pdf",
     }
     root.close()
+
+
+def test_manual_review_uses_workflow_artifact_manifest_not_a_second_ledger(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    _complete_session(data_root, "2026-07-27")
+    review = _start_manual_review(
+        data_root,
+        invocation_id="ledger:manual-review",
+        selected_session="2026-07-27",
+    )
+    adapter = SQLiteOwningAdapterFixture(data_root)
+    row = adapter.execute(
+        "SELECT m.manifest_role,m.producer_id,m.member_count,r.ref_type "
+        "FROM artifact_manifest m JOIN workflow_run_ref r "
+        "ON r.ref_id=m.artifact_manifest_id "
+        "WHERE r.workflow_run_id=? AND r.ref_role='manual_review_manifest'",
+        (review.workflow_run_id,),
+    ).fetchone()
+    assert tuple(row) == (
+        "manual_portfolio_review",
+        review.workflow_run_id,
+        1,
+        "ArtifactManifest",
+    )
+    adapter.close()
 
 
 def test_archive_fails_closed_when_a_persisted_view_object_is_corrupt(

@@ -16,7 +16,6 @@ from trading_platform.application import (
     open_account_current_export,
     open_account_acceptance,
     open_account_history,
-    open_daily_research_cycle,
     open_data_synchronization,
     open_import_preview,
     open_market,
@@ -95,7 +94,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluation_show = sub.add_parser("evaluation-show")
     evaluation_show.add_argument("--data-root", type=Path, required=True)
     evaluation_show.add_argument("--evaluation-id", required=True)
-    for name in ("sync", "daily"):
+    for name in ("sync",):
         command = sub.add_parser(name)
         command.add_argument("--data-root", type=Path, required=True)
         command.add_argument("--job-file", type=Path, required=True)
@@ -227,15 +226,11 @@ def main(argv: list[str] | None = None) -> int:
             result = open_platform_operations(args.restored_root).switch_restored_root(
                 args.restored_root, args.pointer_file
             )
-        elif operation in {"sync", "daily"}:
-            if operation == "daily":
-                with open_daily_research_cycle(args.data_root, args.job_file) as daily:
-                    result = daily.run().to_dict()
-            else:
-                with open_data_synchronization(
-                    args.data_root, args.job_file
-                ) as synchronization:
-                    result = asdict(synchronization.run())
+        elif operation == "sync":
+            with open_data_synchronization(
+                args.data_root, args.job_file
+            ) as synchronization:
+                result = asdict(synchronization.run())
         elif operation == "test":
             npm_executable = shutil.which("npm.cmd") or shutil.which("npm")
             if npm_executable is None:
@@ -409,10 +404,6 @@ def main(argv: list[str] | None = None) -> int:
                     else "MIGRATION_VALIDATION_FAILED"
                 ),
                 ",".join(result.get("errors", ())),
-            )
-        if operation == "daily" and result["doctor"]["status"] != "passed":
-            raise OperationError(
-                "DAILY_DOCTOR_FAILED", ",".join(result["doctor"]["errors"])
             )
         print(
             json.dumps(

@@ -133,6 +133,8 @@ class MigrationRunner:
                         self._preflight_account_snapshot_0015()
                     else:
                         self._preflight_strategy_plan_0016()
+                elif path.name == "0017_manual_review_journal.sql":
+                    self._preflight_manual_review_0017()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
@@ -177,6 +179,52 @@ class MigrationRunner:
                 if rebuilds_parent_tables:
                     self.connection.execute("PRAGMA legacy_alter_table=OFF")
                     self.connection.execute("PRAGMA foreign_keys=ON")
+
+    def _preflight_manual_review_0017(self) -> None:
+        def block(message: str) -> None:
+            raise PersistenceError(
+                "MANUAL_REVIEW_HISTORY_UNMIGRATABLE", message
+            )
+
+        reserved = {
+            "manual_portfolio_review_run",
+            "manual_portfolio_review_item",
+            "manual_portfolio_review_checkpoint",
+            "manual_portfolio_review_manifest",
+            "decision_task",
+            "decision_task_transition",
+            "action_log_entry",
+            "execution_record",
+            "discipline_review_version",
+            "plan_impact_assessment",
+            "plan_change_proposal",
+        }
+        collision = self.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            f"AND name IN ({','.join('?' for _ in reserved)}) LIMIT 1",
+            tuple(sorted(reserved)),
+        ).fetchone()
+        if collision is not None:
+            block(
+                "A reserved cohort-C table already exists without a "
+                "migration ledger entry."
+            )
+        corrupt_workflow = self.connection.execute(
+            "SELECT workflow_run_id FROM workflow_run "
+            "WHERE workflow_run_id IS NULL OR workflow_id IS NULL "
+            "OR status NOT IN "
+            "('queued','running','succeeded','succeeded_with_limits',"
+            "'failed','cancelled') LIMIT 1"
+        ).fetchone()
+        if corrupt_workflow is not None:
+            block("Legacy workflow identity cannot be retained exactly.")
+        corrupt_evaluation = self.connection.execute(
+            "SELECT plan_evaluation_id FROM plan_evaluation "
+            "WHERE plan_evaluation_id IS NULL OR plan_version_id IS NULL "
+            "OR market_snapshot_id IS NULL LIMIT 1"
+        ).fetchone()
+        if corrupt_evaluation is not None:
+            block("Legacy plan evaluation identity is incomplete.")
 
     def _preflight_strategy_plan_0016(self) -> None:
         from trading_platform.domain.plans import (

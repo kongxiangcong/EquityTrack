@@ -9,15 +9,18 @@ object.
 
 ```text
 CLI adapter
-  -> Health / DataSynchronization / DailyResearchCycle
+  -> Health / DataSynchronization / ApplicationCommandDispatcher
+  -> ManualPortfolioReview
   -> ResearchWorkflow / WorkflowInspection / ResearchArchive / ForecastReview
   -> Watchlist / Account / Market / Maintenance
   -> domain modules
   -> persistence adapters
 ```
 
-`DailyResearchCycle` alone owns the daily sync → optional research → optional
-market evaluation → doctor sequence. `ProviderQualificationService` alone owns
+`ManualPortfolioReview` owns the explicit complete-session portfolio review,
+last-successful cutoff, per-holding continuation, and frozen manifest. Data
+sync and research remain separate evidence-producing tasks and never schedule
+or trigger portfolio review. `ProviderQualificationService` alone owns
 the live qualification sequence. Watchlist identity, invocation replay, and
 transaction rules are implemented by the canonical SQLite Watchlist task;
 `PlatformStore` does not forward them.

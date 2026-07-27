@@ -183,6 +183,9 @@ def test_retired_routes_facade_ports_and_forwarders_are_deleted() -> None:
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'trading-platform = "trading_platform.cli:main"' in project
     assert "equity_research.cli" not in project
+    cli = (ROOT / "src/trading_platform/cli.py").read_text(encoding="utf-8")
+    assert 'add_parser("daily")' not in cli
+    assert "open_daily_research_cycle" not in cli
 
 
 def test_application_tasks_depend_inward_and_composition_has_no_locator() -> None:

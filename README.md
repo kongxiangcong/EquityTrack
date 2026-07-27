@@ -16,8 +16,8 @@ python -m trading_platform.cli health --data-root <root>
 python -m trading_platform.cli doctor --data-root <root>
 python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
-python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
+python -m trading_platform.cli application-command --data-root <root> --envelope-file <command.json>
 python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>

@@ -50,6 +50,10 @@ from .trade_plan_authoring import (
     ReviseTradePlanDraft,
     TradePlanTasks,
 )
+from .manual_portfolio_review import (
+    ManualPortfolioReview,
+    StartManualPortfolioReview,
+)
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,7 @@ _IMPLEMENTED = {
     "trade_plan.reject_draft@1",
     "trade_plan.issue_confirmation_challenge@1",
     "trade_plan.confirm@1",
+    "manual_portfolio_review.run@1",
 }
 
 
@@ -116,9 +121,11 @@ class ApplicationCommandDispatcher:
         self,
         account_snapshots: AccountSnapshotCommands,
         trade_plans: TradePlanTasks,
+        manual_reviews: ManualPortfolioReview,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._trade_plans = trade_plans
+        self._manual_reviews = manual_reviews
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -212,6 +219,27 @@ class ApplicationCommandDispatcher:
                 **common,
             )
             return command, self._account_snapshots.execute(command)
+        if envelope.command_name == "manual_portfolio_review.run@1":
+            command = StartManualPortfolioReview(
+                invocation_id=envelope.invocation_id,
+                account_id=str(payload["account_id"]),
+                requested_at=str(payload["requested_at"]),
+                selected_complete_session=str(
+                    payload["selected_complete_session"]
+                ),
+                first_window_start_exclusive=(
+                    str(payload["first_window_start_exclusive"])
+                    if payload.get("first_window_start_exclusive")
+                    is not None
+                    else None
+                ),
+                code_identity=str(payload["code_identity"]),
+                config_identity=str(payload["config_identity"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._manual_reviews.start(command)
         plan_actor = PlanCommandActor(
             actor.identity,
             envelope.interaction_channel.value,
@@ -485,6 +513,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
             for key in (
                 "account_snapshot_version_id",
                 "plan_version_id",
+                "review_run_id",
                 "draft_id",
                 "challenge_id",
                 "event_id",

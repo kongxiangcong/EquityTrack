@@ -370,6 +370,27 @@ class GenericObjectCommit:
 
 
 @dataclass(frozen=True)
+class ManualReviewManifestCommit:
+    workflow_run_id: str
+    payload: bytes
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class ManualReviewManifestCommitResult:
+    object_sha256: str
+    artifact_manifest_id: str
+
+
+@dataclass(frozen=True)
+class FinalizeManualReviewWorkflow:
+    workflow_run_id: str
+    terminal_status: str
+    artifact_manifest_id: str
+    completed_at: str
+
+
+@dataclass(frozen=True)
 class QualificationReceiptCommit:
     invocation_id: str
     request_hash: str
@@ -472,7 +493,12 @@ TransitionCommand: TypeAlias = (
     AcquireLease | Heartbeat | RequestCancellation | StopIfCancelled
     | BeginNode | MarkRetryable | FailExecution
 )
-ArtifactCommit: TypeAlias = ForecastReviewCommit | GenericObjectCommit | QualificationReceiptCommit
+ArtifactCommit: TypeAlias = (
+    ForecastReviewCommit
+    | GenericObjectCommit
+    | ManualReviewManifestCommit
+    | QualificationReceiptCommit
+)
 CheckpointCommit: TypeAlias = CommitEvaluationNode
 CheckpointResult: TypeAlias = (
     str | EvaluationCheckpointResult | None
@@ -495,11 +521,23 @@ class WorkflowLedgerPort(Protocol):
     @overload
     def commit_artifacts(self, command: GenericObjectCommit) -> ObjectCommitResult: ...
     @overload
+    def commit_artifacts(
+        self, command: ManualReviewManifestCommit
+    ) -> ManualReviewManifestCommitResult: ...
+    @overload
     def commit_artifacts(self, command: ForecastReviewCommit) -> str: ...
     @overload
     def commit_artifacts(self, command: QualificationReceiptCommit) -> str: ...
-    def commit_artifacts(self, command: ArtifactCommit) -> ObjectCommitResult | str: ...
+    def commit_artifacts(
+        self, command: ArtifactCommit
+    ) -> ObjectCommitResult | ManualReviewManifestCommitResult | str: ...
+    @overload
     def complete(self, command: FinalizeEvaluationSuccess) -> str: ...
+    @overload
+    def complete(self, command: FinalizeManualReviewWorkflow) -> str: ...
+    def complete(
+        self, command: FinalizeEvaluationSuccess | FinalizeManualReviewWorkflow
+    ) -> str: ...
     @overload
     def load(self, query: WorkflowRunQuery) -> WorkflowLedgerView: ...
     @overload

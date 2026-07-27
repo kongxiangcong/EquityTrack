@@ -25,6 +25,15 @@ from trading_platform.application import (
 )
 from tests.platform.test_account_snapshots import _draft, _ready_root
 from tests.platform.test_estimated_account_state import _confirmed
+from tests.platform.test_manual_portfolio_review import (
+    _complete_session,
+    _start as _start_manual_review,
+)
+from tests.platform.test_plan_confirmation import _authority_root
+from trading_platform.application import (
+    GetManualPortfolioReview,
+    open_manual_portfolio_review,
+)
 
 
 class InjectedCrash(RuntimeError):
@@ -49,6 +58,34 @@ def test_estimated_account_state_rebuilds_identically_after_restart(
     assert after.unverified_evidence == (
         "EXECUTION_RECORD_READER_UNAVAILABLE",
     )
+
+
+def test_manual_review_checkpoint_and_manifest_survive_restart(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    _complete_session(data_root, "2026-07-27")
+    before = _start_manual_review(
+        data_root,
+        invocation_id="restart:manual-review",
+        selected_session="2026-07-27",
+    )
+    with open_manual_portfolio_review(data_root) as restarted:
+        after = restarted.get(
+            GetManualPortfolioReview(before.review_run_id)
+        )
+    assert after == before
+    adapter = SQLiteOwningAdapterFixture(data_root)
+    assert adapter.execute(
+        "SELECT status FROM workflow_run WHERE workflow_run_id=?",
+        (before.workflow_run_id,),
+    ).fetchone()[0] == "succeeded_with_limits"
+    assert adapter.execute(
+        "SELECT count(*) FROM manual_portfolio_review_checkpoint "
+        "WHERE review_run_id=? AND status='committed'",
+        (before.review_run_id,),
+    ).fetchone()[0] == 1
+    adapter.close()
 
 
 class CrashAt:

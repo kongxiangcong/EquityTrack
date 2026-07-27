@@ -76,6 +76,9 @@ from trading_platform.application.workflow_ledger import (
     FinalizeEvaluationSuccess,
     ForecastReviewCommit,
     GenericObjectCommit,
+    ManualReviewManifestCommit,
+    ManualReviewManifestCommitResult,
+    FinalizeManualReviewWorkflow,
     QualificationReceiptCommit,
     QualificationReceiptQuery,
     Heartbeat,
@@ -655,8 +658,14 @@ class WorkflowLedger:
         raise TypeError("WORKFLOW_TRANSITION_TYPE_INVALID")
 
     def commit_artifacts(
-        self, command: ForecastReviewCommit | GenericObjectCommit | QualificationReceiptCommit
-    ) -> ObjectCommitResult | str:
+        self,
+        command: (
+            ForecastReviewCommit
+            | GenericObjectCommit
+            | ManualReviewManifestCommit
+            | QualificationReceiptCommit
+        ),
+    ) -> ObjectCommitResult | ManualReviewManifestCommitResult | str:
         if isinstance(command, QualificationReceiptCommit):
             return self.__qualification_receipts.commit(command)
         if isinstance(command, GenericObjectCommit):
@@ -685,6 +694,8 @@ class WorkflowLedger:
                 if existed
                 else ReferenceDisposition.CREATED,
             )
+        if isinstance(command, ManualReviewManifestCommit):
+            return self._commit_manual_review_manifest(command)
         if isinstance(command, ForecastReviewCommit):
             return self._persist_forecast_review(
                 draft=command.draft,
@@ -700,9 +711,206 @@ class WorkflowLedger:
         return self.__research_artifact_commit.commit(command)
 
     def complete(
-        self, command: FinalizeEvaluationSuccess
+        self,
+        command: FinalizeEvaluationSuccess | FinalizeManualReviewWorkflow,
     ) -> str:
+        if isinstance(command, FinalizeManualReviewWorkflow):
+            return self._finalize_manual_review(command)
         return self._finalize_evaluation_success(command)
+
+    def _commit_manual_review_manifest(
+        self, command: ManualReviewManifestCommit
+    ) -> ManualReviewManifestCommitResult:
+        if (
+            not command.workflow_run_id
+            or not command.payload
+            or canonical_hash(json.loads(command.payload))
+            != command.content_hash
+        ):
+            raise WorkflowPersistenceError(
+                "MANUAL_REVIEW_MANIFEST_INVALID",
+                "manual_review.manifest",
+                command.workflow_run_id,
+            )
+        published = self._publish_durable(command.payload)
+        with self.__writer_lock.acquire(
+            f"manual-review-manifest:{command.workflow_run_id}"
+        ):
+            self.__connection.execute("BEGIN IMMEDIATE")
+            try:
+                workflow = self.__connection.execute(
+                    "SELECT status FROM workflow_run "
+                    "WHERE workflow_run_id=?",
+                    (command.workflow_run_id,),
+                ).fetchone()
+                if workflow is None or workflow["status"] not in {
+                    "running",
+                    "succeeded",
+                    "succeeded_with_limits",
+                }:
+                    raise WorkflowPersistenceError(
+                        "MANUAL_REVIEW_WORKFLOW_INVALID",
+                        "manual_review.manifest",
+                        command.workflow_run_id,
+                    )
+                artifact_id = self._register_artifact(
+                    published,
+                    "application/json",
+                    "ManualPortfolioReviewManifest@1",
+                )
+                manifest_id = (
+                    "manifest_"
+                    + canonical_hash(
+                        {
+                            "role": "manual_portfolio_review",
+                            "producer": command.workflow_run_id,
+                            "artifact_id": artifact_id,
+                            "content_hash": command.content_hash,
+                        }
+                    )[:24]
+                )
+                self.__connection.execute(
+                    "INSERT OR IGNORE INTO artifact_manifest("
+                    "artifact_manifest_id,manifest_role,producer_type,"
+                    "producer_id,membership_hash,created_at,member_count"
+                    ") VALUES(?,?,?,?,?,?,?)",
+                    (
+                        manifest_id,
+                        "manual_portfolio_review",
+                        "WorkflowRun",
+                        command.workflow_run_id,
+                        canonical_hash((artifact_id,)),
+                        _now(),
+                        1,
+                    ),
+                )
+                self.__connection.execute(
+                    "INSERT OR IGNORE INTO artifact_manifest_member "
+                    "VALUES(?,?,?,?,?)",
+                    (
+                        manifest_id,
+                        0,
+                        artifact_id,
+                        "manual_review_manifest",
+                        "output",
+                    ),
+                )
+                stored_manifest = self.__connection.execute(
+                    "SELECT manifest_role,producer_type,producer_id,"
+                    "membership_hash,member_count FROM artifact_manifest "
+                    "WHERE artifact_manifest_id=?",
+                    (manifest_id,),
+                ).fetchone()
+                stored_member = self.__connection.execute(
+                    "SELECT artifact_id,member_role,direction "
+                    "FROM artifact_manifest_member "
+                    "WHERE artifact_manifest_id=? AND member_order=0",
+                    (manifest_id,),
+                ).fetchone()
+                if (
+                    stored_manifest is None
+                    or tuple(stored_manifest)
+                    != (
+                        "manual_portfolio_review",
+                        "WorkflowRun",
+                        command.workflow_run_id,
+                        canonical_hash((artifact_id,)),
+                        1,
+                    )
+                    or stored_member is None
+                    or tuple(stored_member)
+                    != (
+                        artifact_id,
+                        "manual_review_manifest",
+                        "output",
+                    )
+                ):
+                    raise WorkflowPersistenceError(
+                        "MANUAL_REVIEW_MANIFEST_MISMATCH",
+                        "manual_review.manifest",
+                        command.workflow_run_id,
+                    )
+                self.__connection.execute(
+                    "INSERT OR IGNORE INTO workflow_run_ref "
+                    "VALUES(?,?,?,?,?)",
+                    (
+                        command.workflow_run_id,
+                        "manual_review_manifest",
+                        "ArtifactManifest",
+                        manifest_id,
+                        "created",
+                    ),
+                )
+                self.__connection.commit()
+            except BaseException:
+                self.__connection.rollback()
+                raise
+        return ManualReviewManifestCommitResult(
+            published.sha256, manifest_id
+        )
+
+    def _finalize_manual_review(
+        self, command: FinalizeManualReviewWorkflow
+    ) -> str:
+        if command.terminal_status not in {
+            "succeeded",
+            "succeeded_with_limits",
+            "failed",
+        }:
+            raise WorkflowPersistenceError(
+                "MANUAL_REVIEW_TERMINAL_STATUS_INVALID",
+                "manual_review.finalize",
+                command.workflow_run_id,
+            )
+        with self.__writer_lock.acquire(
+            f"manual-review-finalize:{command.workflow_run_id}"
+        ):
+            self.__connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.__connection.execute(
+                    "SELECT status FROM workflow_run WHERE workflow_run_id=?",
+                    (command.workflow_run_id,),
+                ).fetchone()
+                if row is None:
+                    raise WorkflowPersistenceError(
+                        "WORKFLOW_NOT_FOUND",
+                        "manual_review.finalize",
+                        command.workflow_run_id,
+                    )
+                if row["status"] in {
+                    "succeeded",
+                    "succeeded_with_limits",
+                    "failed",
+                }:
+                    if row["status"] != command.terminal_status:
+                        raise WorkflowPersistenceError(
+                            "WORKFLOW_TERMINAL_CONFLICT",
+                            "manual_review.finalize",
+                            command.workflow_run_id,
+                        )
+                    self.__connection.rollback()
+                    return command.artifact_manifest_id
+                self.__connection.execute(
+                    "UPDATE workflow_run SET status=?,completed_at=? "
+                    "WHERE workflow_run_id=? AND status='running'",
+                    (
+                        command.terminal_status,
+                        command.completed_at,
+                        command.workflow_run_id,
+                    ),
+                )
+                self._transition(
+                    command.workflow_run_id,
+                    "running",
+                    command.terminal_status,
+                    "MANUAL_REVIEW_COMPLETED",
+                    command.completed_at,
+                )
+                self.__connection.commit()
+            except BaseException:
+                self.__connection.rollback()
+                raise
+        return command.artifact_manifest_id
 
     def _insert_started_run(
         self, command: StartWorkflow, request_artifact_id: str, request_hash: str

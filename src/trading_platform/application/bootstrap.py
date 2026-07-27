@@ -35,7 +35,7 @@ from trading_platform.verification import (
     SubprocessVerificationExecutor,
 )
 
-from .cli_tasks import DailyResearchCycle, DataSynchronization
+from .cli_tasks import DataSynchronization
 from .health import Health
 from .watchlist import Watchlist
 from .research_tasks import ResearchArchive, WorkflowInspection
@@ -52,9 +52,13 @@ from .account_state import AccountStateQueries, EstimatedAccountWorkspace
 from .strategy_catalog import StrategyQueries
 from .trade_plan_authoring import TradePlanTasks
 from .commands import ApplicationCommandDispatcher
+from .manual_portfolio_review import ManualPortfolioReview
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
+from trading_platform.persistence.manual_portfolio_review import (
+    SQLiteManualPortfolioReviewRepository,
+)
 
 
 def _repo_root() -> Path:
@@ -181,49 +185,6 @@ def open_provider_qualification(
 
 
 @contextmanager
-def open_daily_research_cycle(
-    data_root: Path,
-    job_file: Path,
-    *,
-    credential_adapter: CredentialAdapter | None = None,
-    migrations_root: Path | None = None,
-    provider_runtime: ProviderRuntimeAdapter | None = None,
-) -> Iterator[DailyResearchCycle]:
-    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
-    with _store(data_root, migrations_root) as store:
-        repository = DataRepository(
-            store.connection,
-            _ledger(store),
-            store.data_root,
-            store.writer_lock,
-        )
-        research = ResearchWorkflow(
-            _ledger(store),
-            _repo_root(),
-        )
-        plans = SQLiteTradePlanRepository(
-            store.connection, store.writer_lock
-        )
-        market = MarketEvaluationService(
-            SQLiteMarketRepository(store.connection, store.writer_lock), plans
-        )
-        yield DailyResearchCycle(
-            loaded.job,
-            loaded.request,
-            store.watchlist,
-            DataSyncService(
-                repository,
-                loaded.provider,
-                loaded.query_policy,
-                loaded.source_policy,
-            ),
-            research,
-            market,
-            store,
-        )
-
-
-@contextmanager
 def open_research_workflow(
     data_root: Path,
     *,
@@ -313,6 +274,36 @@ def open_application_commands(
                     store.connection, store.writer_lock
                 )
             ),
+            ManualPortfolioReview(
+                SQLiteManualPortfolioReviewRepository(
+                    store.connection, store.writer_lock
+                ),
+                AccountStateQueries(
+                    SQLiteAccountSnapshotProjection(store.connection)
+                ),
+                _ledger(store),
+            ),
+        )
+
+
+@contextmanager
+def open_manual_portfolio_review(
+    data_root: Path,
+    migrations_root: Path | None = None,
+    *,
+    fault_injector=None,
+) -> Iterator[ManualPortfolioReview]:
+    with _store(data_root, migrations_root) as store:
+        repository = SQLiteManualPortfolioReviewRepository(
+            store.connection, store.writer_lock
+        )
+        repository.fault_injector = fault_injector
+        yield ManualPortfolioReview(
+            repository,
+            AccountStateQueries(
+                SQLiteAccountSnapshotProjection(store.connection)
+            ),
+            _ledger(store),
         )
 
 
@@ -473,9 +464,9 @@ __all__ = [
     "open_chart_workspace",
     "open_browser_acceptance_fixture",
     "open_data_synchronization",
-    "open_daily_research_cycle",
     "open_import_preview",
     "open_market",
+    "open_manual_portfolio_review",
     "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",

@@ -49,6 +49,12 @@ if TYPE_CHECKING:
         ApplicationCommandFailure,
         ApplicationCommandResult,
     )
+    from .manual_portfolio_review import (
+        GetManualPortfolioReview,
+        ManualPortfolioReview,
+        ResumeManualPortfolioReview,
+        StartManualPortfolioReview,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
@@ -60,7 +66,6 @@ if TYPE_CHECKING:
         open_strategy_queries,
         open_account_acceptance,
         open_account_history,
-        open_daily_research_cycle,
         open_data_synchronization,
         open_import_preview,
         open_chart_annotations,
@@ -68,6 +73,7 @@ if TYPE_CHECKING:
         open_browser_acceptance_fixture,
         open_decision_workspace,
         open_market,
+        open_manual_portfolio_review,
         open_platform_health,
         open_platform_operations,
         open_project_verification,
@@ -134,6 +140,10 @@ _EXPORT_MODULES = {
     "ApplicationCommandDispatcher": ".commands",
     "ApplicationCommandFailure": ".commands",
     "ApplicationCommandResult": ".commands",
+    "GetManualPortfolioReview": ".manual_portfolio_review",
+    "ManualPortfolioReview": ".manual_portfolio_review",
+    "ResumeManualPortfolioReview": ".manual_portfolio_review",
+    "StartManualPortfolioReview": ".manual_portfolio_review",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -161,11 +171,11 @@ _EXPORT_MODULES = {
     "open_chart_annotations": ".bootstrap",
     "open_chart_workspace": ".bootstrap",
     "open_browser_acceptance_fixture": ".bootstrap",
-    "open_daily_research_cycle": ".bootstrap",
     "open_decision_workspace": ".bootstrap",
     "open_data_synchronization": ".bootstrap",
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",
+    "open_manual_portfolio_review": ".bootstrap",
     "open_platform_health": ".bootstrap",
     "open_platform_operations": ".bootstrap",
     "open_project_verification": ".bootstrap",

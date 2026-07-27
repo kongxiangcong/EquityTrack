@@ -1,6 +1,6 @@
 # 09 — ManualPortfolioReviewRun
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 02, 06, 08
@@ -43,3 +43,46 @@ Scheduler, intraday monitor, automatic plan changes, task disposition, execution
 ## One-way cutover
 
 Remove `daily` as the public portfolio review entry and update Skill/CLI callers. Daily research may remain only as an internal evidence producer; no compatibility public alias is retained.
+
+## Claim record
+
+- External seams: `manual_portfolio_review.run@1` through the shared
+  `ApplicationCommandEnvelope@1`, plus named start/resume/get tasks and the
+  existing WorkflowLedger/ArtifactManifest evidence seam.
+- Deep-module ownership: `domain/manual_review.py` owns run/window/outcome/
+  checkpoint/manifest invariants; `application/manual_portfolio_review.py`
+  owns the complete manual review orchestration and item-level continuation;
+  `persistence/manual_portfolio_review.py` owns cohort-C transactions,
+  uniqueness, replay, checkpoint advancement, and SQLite protocol conversion.
+- Old paths to replace: public CLI/Skill `daily`, `DailyResearchCycle` as a
+  portfolio-review entry, scheduler-shaped daily assumptions, and any
+  review caller that derives its own cutoff or writes review artifacts.
+- Superseded artifacts to delete: the public `daily` parser/dispatch/export/
+  Skill instructions, daily portfolio tests or examples, duplicate run ledger
+  or manifest storage, implicit latest-success cutoff logic outside the
+  repository transaction, and compatibility aliases for the retired route.
+
+## Resolution evidence
+
+- Added the final cohort-C `0017_manual_review_journal.sql` with fail-closed
+  preflight, immutable journal constraints, rollback, and replay coverage. Its
+  SHA-256 is
+  `4BC5B38496A187E04B8CE0513F6BAB387C206C45979AEDF22E5D4053C41BE579`;
+  `0016` remains unchanged and both known persistent roots remain at schema 11.
+- `ManualPortfolioReview` now owns the named start/resume/get task while the
+  domain owns review window, outcomes, checkpoints, and deterministic manifest
+  construction. SQLite owns context proof, transactions, invocation replay,
+  immutable reads, and successful-cutoff advancement.
+- Removed the public CLI/Skill/application `daily` portfolio-review path with
+  no alias or fallback. The shared command envelope uses the same canonical
+  request hash as the persisted receipt.
+- `TDK-AC-019` and the ticket-focused migration/workflow group passed:
+  `38 passed in 29.62s`. The wider relevant regression group passed:
+  `127 passed in 69.33s`.
+- An earlier short-window test process was terminated by the tool after about
+  five seconds and was not counted as a pass; the same focused group was then
+  rerun to completion.
+- Mechanical audit passed for the ticket diff, dependency direction, retired
+  daily symbols, compatibility/debt markers, and public-interface regression.
+  Detailed current evidence is recorded in
+  `evidence/09-manual-portfolio-review.md`.

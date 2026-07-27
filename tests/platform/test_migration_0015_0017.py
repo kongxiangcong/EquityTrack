@@ -208,7 +208,7 @@ def test_fresh_and_populated_roots_upgrade_idempotently(tmp_path: Path) -> None:
     fresh.migrate()
     assert fresh.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 16
+    ).fetchone()[0] == 17
     fresh.close()
 
     data_root, _ = _legacy_root(tmp_path)
@@ -338,7 +338,7 @@ def test_strategy_plan_0016_installs_full_cohort_schema_idempotently(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 16
+    ).fetchone()[0] == 17
     expected_tables = {
         "investment_thesis_version",
         "strategy_definition",
@@ -830,9 +830,166 @@ def test_strategy_plan_0016_rolls_back_and_replays_after_injected_failure(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 16
+    ).fetchone()[0] == 17
     assert store.connection.execute(
         "SELECT count(*) FROM strategy_version "
         "WHERE publicly_selectable=1"
     ).fetchone()[0] == 2
+    store.close()
+
+
+def test_manual_review_0017_installs_complete_final_cohort_idempotently(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "manual-review-cohort"
+    store = PlatformStore(data_root, ROOT / "migrations")
+    store.migrate()
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 17
+    expected = {
+        "manual_portfolio_review_run",
+        "manual_portfolio_review_item",
+        "manual_portfolio_review_checkpoint",
+        "manual_portfolio_review_manifest",
+        "decision_task",
+        "decision_task_transition",
+        "action_log_entry",
+        "execution_record",
+        "discipline_review_version",
+        "plan_impact_assessment",
+        "plan_change_proposal",
+    }
+    actual = {
+        row[0]
+        for row in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert expected <= actual
+    triggers = {
+        row[0]
+        for row in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        )
+    }
+    assert {
+        "manual_review_item_no_update",
+        "manual_review_manifest_no_update",
+        "decision_task_transition_no_update",
+        "action_log_entry_no_update",
+        "execution_record_no_update",
+        "discipline_review_no_update",
+        "plan_impact_no_update",
+        "plan_change_proposal_no_update",
+    } <= triggers
+    store.migrate()
+    assert store.connection.execute(
+        "SELECT count(*) FROM schema_migration WHERE version=17"
+    ).fetchone()[0] == 1
+    store.close()
+
+
+def test_legacy_daily_and_evaluation_history_do_not_become_review_truth(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "legacy-review-history"
+    through_16 = _copy_migrations(tmp_path, 16)
+    prior = PlatformStore(data_root, through_16)
+    prior.migrate()
+    prior.connection.execute(
+        "INSERT INTO workflow_run VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "workflow_daily_legacy",
+            "daily:legacy",
+            "daily-research",
+            1,
+            "legacy-request",
+            "2026-07-24",
+            "2026-07-24",
+            "succeeded",
+            "2026-07-24T15:00:00+08:00",
+            "2026-07-24T15:30:00+08:00",
+            "legacy-owner",
+            "2026-07-24T15:31:00+08:00",
+            "2026-07-24T15:30:00+08:00",
+            "legacy-definition",
+            0,
+        ),
+    )
+    prior.connection.commit()
+    prior.close()
+
+    upgraded = PlatformStore(data_root, ROOT / "migrations")
+    upgraded.migrate()
+    assert upgraded.connection.execute(
+        "SELECT status FROM workflow_run "
+        "WHERE workflow_run_id='workflow_daily_legacy'"
+    ).fetchone()[0] == "succeeded"
+    assert upgraded.connection.execute(
+        "SELECT count(*) FROM manual_portfolio_review_run"
+    ).fetchone()[0] == 0
+    assert upgraded.connection.execute(
+        "SELECT count(*) FROM decision_task"
+    ).fetchone()[0] == 0
+    assert upgraded.connection.execute(
+        "SELECT count(*) FROM execution_record"
+    ).fetchone()[0] == 0
+    upgraded.close()
+
+
+def test_manual_review_0017_rolls_back_and_replays_after_injected_failure(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "manual-review-crash"
+    through_16 = _copy_migrations(tmp_path, 16)
+    prior = PlatformStore(data_root, through_16)
+    prior.migrate()
+    prior.close()
+
+    store = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        store.migrate(fail_after=8)
+    assert failure.value.code == "MIGRATION_INJECTED_FAILURE"
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 16
+    assert store.connection.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE name='manual_portfolio_review_run'"
+    ).fetchone() is None
+    store.migrate()
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 17
+    store.close()
+
+
+def test_manual_review_0017_preflight_collision_is_a_noop(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "manual-review-preflight"
+    through_16 = _copy_migrations(tmp_path, 16)
+    prior = PlatformStore(data_root, through_16)
+    prior.migrate()
+    prior.connection.execute(
+        "CREATE TABLE execution_record(legacy_payload TEXT)"
+    )
+    prior.connection.commit()
+    prior.close()
+
+    store = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        store.migrate()
+    assert failure.value.code == "MANUAL_REVIEW_HISTORY_UNMIGRATABLE"
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 16
+    assert store.connection.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE name='manual_portfolio_review_run'"
+    ).fetchone() is None
+    assert store.connection.execute(
+        "SELECT sql FROM sqlite_master WHERE name='execution_record'"
+    ).fetchone()[0] == "CREATE TABLE execution_record(legacy_payload TEXT)"
     store.close()

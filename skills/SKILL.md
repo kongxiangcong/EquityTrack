@@ -1,6 +1,6 @@
 ---
 name: equity-researcher
-description: Operate the local personal research platform and generate evidence-constrained equity research. Use for platform bootstrap, doctor, migration, sync, daily jobs, serving, tests, backup, restore, workflow resume/history, or company research and valuation requests. Never provide personalized trading instructions.
+description: Operate the local personal research platform and generate evidence-constrained equity research. Use for platform bootstrap, doctor, migration, sync, manual portfolio review, serving, tests, backup, restore, workflow resume/history, or company research and valuation requests. Never provide personalized trading instructions.
 ---
 
 # Personal Research Platform
@@ -15,7 +15,6 @@ python -m trading_platform.cli health --data-root <root>
 python -m trading_platform.cli doctor --data-root <root>
 python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
-python -m trading_platform.cli daily --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
 python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest <manifest.json> --live-qualification-artifact-id <artifact_id>
@@ -76,6 +75,17 @@ decision actor. Plan confirmation additionally requires the unexpired,
 unconsumed challenge ID in `approval.challenge_id`. Never use arbitrary Shell,
 SQL, filesystem paths, provider destinations, credentials, or ad-hoc SQLite
 access as an application-command payload.
+
+`manual_portfolio_review.run@1` is the only public portfolio-review workflow.
+Its `RunManualPortfolioReview@1` payload supplies `account_id`, `requested_at`,
+an explicit `selected_complete_session`,
+`first_window_start_exclusive` for the first review, and the current `code_identity` and
+`config_identity`. The application proves the selected complete A-share
+session, derives the confirmed snapshot and estimated state, and chooses the
+last successful cutoff; the caller must not supply holdings, outcomes,
+manifest IDs, task IDs, or a truth hash. Reviews are manual and may span
+multiple sessions. Sync and research only produce evidence and never trigger a
+review.
 
 Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 
