@@ -11,7 +11,7 @@ from trading_platform.application.web_tasks import WorkspaceUpdateCommand
 
 def test_update_authorization_rows_are_storage_immutable(tmp_path: Path) -> None:
     root = _root(tmp_path)
-    root.workspace.authorize(
+    root.update_authorizations.authorize(
         WorkspaceUpdateCommand(
             "workspace-persistence:create",
             "security_yihua",

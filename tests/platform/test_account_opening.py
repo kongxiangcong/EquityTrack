@@ -157,29 +157,6 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
         "SELECT count(*) FROM portfolio_snapshot"
     ).fetchone()[0] == 0
     connection.close()
-    chart = chart_root(tmp_path / "data")
-    security_id = detail.draft.positions[0].security_id
-    workspace = chart.workspace.build(security_id, "snapshot_chart")
-    assert workspace["current_positions"] == []
-    assert "account_opening_state" not in workspace
-    server = LocalChartWorkspaceServer(
-        decision_workspace=chart.workspace,
-        chart_workspace=chart.chart,
-        chart_annotations=chart.chart,
-        update_authorizations=chart.update_authorizations,
-        web_root=REPO_ROOT / "web/dist",
-        security_id=security_id,
-        snapshot_id="snapshot_chart",
-    )
-    import json
-    from urllib.request import urlopen
-
-    base = server.start()
-    payload = json.loads(urlopen(base + "/api/workspace").read())
-    assert payload["current_positions"] == []
-    assert "account_opening_state" not in payload
-    server.close()
-    chart.close()
     archive = tmp_path / "opening.zip"
     PlatformOperations(tmp_path / "data").backup(archive)
     restored = tmp_path / "restored"

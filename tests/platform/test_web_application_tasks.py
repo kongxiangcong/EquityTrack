@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 from trading_platform.application import (
     open_browser_acceptance_fixture,
-    open_decision_workspace,
+    open_read_models,
     open_platform_operations,
 )
 from trading_platform.domain.chart import (
@@ -18,11 +18,6 @@ from trading_platform.domain.chart import (
 )
 from trading_platform.web_server import LocalChartWorkspaceServer
 from trading_platform.application.browser_acceptance import BrowserAcceptanceFixture
-
-
-class _DecisionWorkspace:
-    def build(self, security_id: str, snapshot_id: str) -> dict[str, object]:
-        return {"task": {"security_id": security_id, "snapshot_id": snapshot_id}}
 
 
 class _ChartWorkspace:
@@ -84,7 +79,6 @@ def test_web_annotation_route_invokes_one_typed_lifecycle_task(
     (web_root / "index.html").write_text("<html><head></head></html>", encoding="utf-8")
     annotations = _ChartAnnotations()
     server = LocalChartWorkspaceServer(
-        decision_workspace=_DecisionWorkspace(),
         chart_workspace=_ChartWorkspace(),
         chart_annotations=annotations,
         update_authorizations=_UpdateAuthorizations(),
@@ -142,12 +136,15 @@ def test_public_browser_fixture_prepares_decision_journey(
     ) as fixture:
         prepared = fixture.prepare()
 
-    with open_decision_workspace(tmp_path) as workspace:
-        projected = workspace.build(prepared.security_id, prepared.snapshot_id)
+    with open_read_models(tmp_path) as read_models:
+        projected = read_models.research_index(
+            "2026-07-27T18:30:00+08:00",
+            prepared.security_id,
+        )
 
-    assert projected["research_views"][0]["schema_version"] == "ResearchDecisionView@2"
-    assert projected["research_views"][0]["workflow_run_id"] == prepared.workflow_run_id
-    assert projected["plan_drafts"] == []
+    assert projected.schema_version == "ResearchIndexView@1"
+    assert projected.research_items[0]["research_run_id"]
+    assert prepared.workflow_run_id in projected.source_ids
 
 
 def test_browser_fixture_has_no_caller_authored_research_artifact_surface() -> None:

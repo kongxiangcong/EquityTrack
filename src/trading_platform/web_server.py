@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 from trading_platform.application import (
     ChartAnnotations,
     ChartWorkspace,
-    DecisionWorkspace,
     UpdateAuthorizations,
     WorkspaceUpdateCommand,
 )
@@ -24,7 +23,6 @@ class LocalChartWorkspaceServer:
     def __init__(
         self,
         *,
-        decision_workspace: DecisionWorkspace,
         chart_workspace: ChartWorkspace,
         chart_annotations: ChartAnnotations,
         update_authorizations: UpdateAuthorizations,
@@ -32,7 +30,6 @@ class LocalChartWorkspaceServer:
         security_id: str,
         snapshot_id: str,
     ) -> None:
-        self.decision_workspace = decision_workspace
         self.chart_workspace = chart_workspace
         self.chart_annotations = chart_annotations
         self.update_authorizations = update_authorizations
@@ -67,12 +64,6 @@ class LocalChartWorkspaceServer:
                                 owner.security_id
                             )
                         ]
-                    )
-                elif path == "/api/workspace":
-                    self._json(
-                        owner.decision_workspace.build(
-                            owner.security_id, owner.snapshot_id
-                        )
                     )
                 else:
                     relative = "index.html" if path == "/" else path.lstrip("/")

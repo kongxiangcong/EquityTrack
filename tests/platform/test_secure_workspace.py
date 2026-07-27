@@ -15,7 +15,6 @@ from trading_platform.application import ApplicationCommandEnvelopeV1
 def _server(tmp_path: Path):
     root = _root(tmp_path)
     server = LocalChartWorkspaceServer(
-        decision_workspace=root.workspace,
         chart_workspace=root.chart,
         chart_annotations=root.chart,
         update_authorizations=root.update_authorizations,
@@ -26,22 +25,32 @@ def _server(tmp_path: Path):
     return root, server, server.start()
 
 
-def test_workspace_security_headers_and_safe_history_projection(
+def test_workspace_security_headers_and_safe_chart_projection(
     tmp_path: Path,
 ) -> None:
     root, server, base = _server(tmp_path)
-    response = urlopen(base + "/api/workspace")
+    response = urlopen(base + "/api/chart-series")
     payload = json.loads(response.read())
     assert response.headers["Content-Security-Policy"].startswith(
         "default-src 'self'"
     )
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
-    assert payload["task"]["security_id"] == "security_yihua"
-    assert payload["history"]["annotations"] == []
+    assert payload["security_id"] == "security_yihua"
     serialized = json.dumps(payload)
     assert str(tmp_path) not in serialized
     assert "csrf" not in serialized.lower()
+    server.close()
+    root.close()
+
+
+def test_unversioned_workspace_route_is_absent(
+    tmp_path: Path,
+) -> None:
+    root, server, base = _server(tmp_path)
+    with pytest.raises(HTTPError) as missing:
+        urlopen(base + "/api/workspace")
+    assert missing.value.code == 404
     server.close()
     root.close()
 
@@ -189,7 +198,7 @@ def test_secret_and_personal_paths_never_reach_dom_logs_or_artifacts(
     monkeypatch.setenv("OPENAI_API_KEY", marker)
     root, server, base = _server(tmp_path)
     html = urlopen(base).read()
-    workspace = urlopen(base + "/api/workspace").read()
+    chart = urlopen(base + "/api/chart-series").read()
     artifact_payloads = b"".join(
         path.read_bytes()
         for path in (tmp_path / "objects").rglob("*")
@@ -198,13 +207,13 @@ def test_secret_and_personal_paths_never_reach_dom_logs_or_artifacts(
     output = capsys.readouterr()
     combined = (
         html
-        + workspace
+        + chart
         + artifact_payloads
         + output.out.encode()
         + output.err.encode()
     )
     assert marker.encode() not in combined
-    assert str(tmp_path).encode() not in html + workspace
+    assert str(tmp_path).encode() not in html + chart
     request = Request(
         base + "/api/provider-destination",
         data=json.dumps({"url": "https://evil.example"}).encode(),

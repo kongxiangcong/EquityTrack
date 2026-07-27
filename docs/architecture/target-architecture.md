@@ -97,6 +97,16 @@ operation and stops at an open draft; only the existing canonical diff,
 confirmation challenge, and explicit user-confirmation path can change the
 active plan.
 
+`ReadModelService` owns six frozen application presentation contracts and one
+deterministic codec shared by Skill and Web. `SQLiteReadModelProjection`
+rebuilds them from snapshot, estimated-state, plan, review, journal, proposal,
+and persisted research authority; no projection table or second truth model
+exists. The portfolio home DTO exposes only its five decision-summary groups.
+Holding, plan, review, research, and account-editor DTOs keep diagnostics and
+provenance behind detail fields while preserving explicit
+known/unknown/not-applicable, unable, and unverified states. The unversioned
+`DecisionWorkspace` mapping and Python `/api/workspace` route are deleted.
+
 ## Data, privacy, and financial boundaries
 
 - Official disclosures are canonical for critical financial facts.

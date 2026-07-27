@@ -88,7 +88,8 @@ def test_request_v2_produces_one_canonical_view_manifest_and_no_trade_state(
     root = _root(tmp_path)
     before = SQLiteOwningAdapterFixture(root.data_root).execute(
         "SELECT "
-        "(SELECT count(*) FROM trade_plan),"
+        "(SELECT count(*) FROM trade_plan_master),"
+        "(SELECT count(*) FROM trade_plan_version),"
         "(SELECT count(*) FROM plan_evaluation),"
         "(SELECT count(*) FROM update_authorization)"
     ).fetchone()
@@ -103,7 +104,8 @@ def test_request_v2_produces_one_canonical_view_manifest_and_no_trade_state(
     view = json.loads(decision.json_bytes)
     after = adapter.execute(
         "SELECT "
-        "(SELECT count(*) FROM trade_plan),"
+        "(SELECT count(*) FROM trade_plan_master),"
+        "(SELECT count(*) FROM trade_plan_version),"
         "(SELECT count(*) FROM plan_evaluation),"
         "(SELECT count(*) FROM update_authorization)"
     ).fetchone()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Mapping, Protocol
 
 from trading_platform.domain.chart import (
     AnnotationLifecycleCommand,
@@ -16,10 +16,6 @@ class WorkspaceUpdateCommand:
     security_id: str
     requested_date: str
     effective_session_date: str
-
-
-class DecisionWorkspace(Protocol):
-    def build(self, security_id: str, snapshot_id: str) -> Mapping[str, Any]: ...
 
 
 class ChartWorkspace(Protocol):
@@ -39,7 +35,6 @@ class UpdateAuthorizations(Protocol):
 __all__ = [
     "ChartAnnotations",
     "ChartWorkspace",
-    "DecisionWorkspace",
     "UpdateAuthorizations",
     "WorkspaceUpdateCommand",
 ]

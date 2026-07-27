@@ -10,10 +10,8 @@ from trading_platform.account import AccountOpeningService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.account_history import AccountHistoryImportService
 from trading_platform.application.health import Health
-from trading_platform.application.account_state import (
-    AccountStateQueries,
-    EstimatedAccountWorkspace,
-)
+from trading_platform.application.account_state import AccountStateQueries
+from trading_platform.application.read_models import ReadModelService
 from trading_platform.application.trade_plan_authoring import TradePlanTasks
 from trading_platform.application.research_tasks import (
     ForecastReview,
@@ -43,7 +41,15 @@ from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.persistence.account_snapshots import (
     SQLiteAccountSnapshotProjection,
 )
-from trading_platform.persistence.workspace import WorkspaceService
+from trading_platform.persistence.workspace import (
+    WorkspaceUpdateAuthorizationService,
+)
+from trading_platform.persistence.read_models import (
+    SQLiteReadModelProjection,
+)
+from trading_platform.persistence.decision_journal import (
+    SQLiteDecisionJournalRepository,
+)
 from trading_platform.operations import PlatformOperations
 from trading_platform.workflows.research import (
     ResearchWorkflow,
@@ -272,16 +278,20 @@ class PlatformTaskFixture:
             SQLiteMarketRepository(store.connection, store.writer_lock),
             plan_repository,
         )
-        self.update_authorizations = WorkspaceService(
-            store.connection,
-            ledger,
-            store.writer_lock,
+        self.update_authorizations = WorkspaceUpdateAuthorizationService(
+            store.connection, store.writer_lock
         )
-        self.workspace = EstimatedAccountWorkspace(
-            AccountStateQueries(
-                SQLiteAccountSnapshotProjection(store.connection)
-            ),
-            self.update_authorizations,
+        self.read_models = ReadModelService(
+            SQLiteReadModelProjection(
+                store.connection,
+                AccountStateQueries(
+                    SQLiteAccountSnapshotProjection(store.connection),
+                    SQLiteDecisionJournalRepository(
+                        store.connection, store.writer_lock
+                    ),
+                ),
+                ledger,
+            )
         )
         self.accounts = AccountOpeningService(
             data_root, repo_root, migrations_root or repo_root / "migrations"

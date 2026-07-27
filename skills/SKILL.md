@@ -140,6 +140,18 @@ open `TradePlanDraft`; it cannot issue or consume a confirmation challenge and
 cannot activate a plan. The existing trade-plan challenge and user
 confirmation commands remain mandatory.
 
+Formal reads use the same six immutable application DTOs for Skill and Web:
+`PortfolioWorkspaceView@1`, `HoldingWorkspaceView@1`,
+`TradePlanDetailView@1`, `ReviewWorkspaceView@1`,
+`ResearchIndexView@1`, and `AccountSnapshotEditorView@1`. Use
+`open_read_models(...)` and the single `encode_read_model(...)` codec; adapters
+must not rebuild or rename fields. Every DTO carries exact source IDs,
+`generated_at`, a deterministic projection ID, and a content hash. The
+portfolio home contract has exactly five summary groups: account state,
+unresolved tasks, material changes, active-plan summaries, and discipline
+exceptions. Unknown, unable, and unverified remain explicit. Full manifest,
+policy, model, hash, and log detail is never promoted onto the home view.
+
 Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.

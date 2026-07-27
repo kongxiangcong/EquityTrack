@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Protocol
 
 from trading_platform.domain.account_snapshots import AccountSnapshotVersion
 from trading_platform.domain.account_state import (
@@ -31,15 +31,6 @@ class AccountSnapshotAuthorityReader(Protocol):
     def version(self, account_snapshot_version_id: str) -> AccountSnapshotVersion: ...
 
     def account_ids(self) -> tuple[str, ...]: ...
-
-
-class AccountStateWorkspaceReadModel(Protocol):
-    def build(
-        self,
-        security_id: str,
-        snapshot_id: str,
-        account_states: tuple[EstimatedAccountState, ...],
-    ) -> Mapping[str, Any]: ...
 
 
 class AccountStateQueries:
@@ -105,26 +96,8 @@ class AccountStateQueries:
         )
 
 
-class EstimatedAccountWorkspace:
-    """Builds the workspace only from the canonical estimated-state task."""
-
-    def __init__(
-        self,
-        states: AccountStateQueries,
-        workspace: AccountStateWorkspaceReadModel,
-    ) -> None:
-        self._states = states
-        self._workspace = workspace
-
-    def build(self, security_id: str, snapshot_id: str) -> Mapping[str, Any]:
-        return self._workspace.build(
-            security_id, snapshot_id, self._states.list_current()
-        )
-
-
 __all__ = [
     "AccountStateQueries",
     "CompareConfirmedAccountState",
-    "EstimatedAccountWorkspace",
     "GetEstimatedAccountState",
 ]

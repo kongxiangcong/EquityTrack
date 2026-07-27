@@ -386,7 +386,6 @@ def test_local_workspace_http_reload_and_server_restart_restore_sqlite_state(
 ) -> None:
     root = _root(tmp_path)
     server = LocalChartWorkspaceServer(
-        decision_workspace=root.workspace,
         chart_workspace=root.chart,
         chart_annotations=root.chart,
         update_authorizations=root.update_authorizations,
@@ -482,7 +481,6 @@ def test_local_workspace_http_reload_and_server_restart_restore_sqlite_state(
 
     rebuilt = _root(tmp_path)
     restarted = LocalChartWorkspaceServer(
-        decision_workspace=rebuilt.workspace,
         chart_workspace=rebuilt.chart,
         chart_annotations=rebuilt.chart,
         update_authorizations=rebuilt.update_authorizations,

@@ -1,6 +1,6 @@
 # 14 — Versioned read models
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 01, 02, 03, 10, 11, 12, 13
@@ -42,3 +42,41 @@ HTML/CSS, Web routing, state-changing UI, arbitrary query endpoints, raw provena
 ## One-way cutover
 
 Delete the unversioned `DecisionWorkspace`/workspace mapping and all callers. Do not retain `/api/workspace` payload compatibility or a second projection builder.
+
+## Claim record
+
+- External seams: six typed read queries on one `ReadModelService`, plus one
+  stable application codec used identically by Skill and Web adapters.
+- Deep-module ownership: immutable application DTOs own presentation
+  allowlists, exact source identities, progressive-disclosure boundaries, and
+  content hashes; SQLite projection owns cross-authority reads and explicit
+  unknown/unverified/unable conversion; codecs own deterministic external
+  serialization only.
+- Old paths to replace: unversioned `DecisionWorkspace.build`, the monolithic
+  workspace mapping, direct Web `WorkspaceService` reads, and channel-specific
+  read serialization.
+- Superseded artifacts to delete: `DecisionWorkspace`, `open_decision_workspace`,
+  `/api/workspace` payload assumptions and fixtures, raw provenance/home
+  diagnostics fields, duplicate Web/Skill projection builders, compatibility
+  aliases, and tests tied to the retired mapping.
+
+## Resolution evidence
+
+- Added the six immutable `@1` application DTOs, one `ReadModelService`, one
+  SQLite projection adapter, and one deterministic codec shared by external
+  adapters.
+- Portfolio summary projection is closed to exactly the five specified groups;
+  unknown, unable, and unverified states remain explicit in all detailed
+  projections.
+- Deleted the unversioned Python `DecisionWorkspace`,
+  `EstimatedAccountWorkspace`, `WorkspaceService.build`, bootstrap entrypoint,
+  backend route, CLI composition, fixtures, and retired payload assertions.
+  Ticket 15 owns the already-declared production asset cutover to the six
+  versioned Web routes.
+- Replaced one stale no-trade-side-effect assertion that still queried retired
+  `trade_plan` with the canonical `trade_plan_master` and
+  `trade_plan_version` authority tables.
+- `TDK-AC-027` and focused Web/Skill equality/restart tests passed; the wider
+  current-state public-interface regression passed 101 tests.
+- Detailed current evidence:
+  `.scratch/trading-discipline-kernel/evidence/14-versioned-read-models.md`.

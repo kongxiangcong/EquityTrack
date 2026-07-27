@@ -23,7 +23,9 @@ from trading_platform.persistence.account_snapshots import (
 from trading_platform.persistence.market import SQLiteMarketRepository
 from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.persistence.presence import RuntimePresence
-from trading_platform.persistence.workspace import WorkspaceService
+from trading_platform.persistence.workspace import (
+    WorkspaceUpdateAuthorizationService,
+)
 from trading_platform.operations import PlatformOperations
 from trading_platform.operations import OperationError
 from trading_platform.provider_config import ProviderRuntimeAdapter, load_sync_job
@@ -43,12 +45,11 @@ from .workflow_ledger import QualificationReceiptQuery, WorkflowLedgerPort
 from .web_tasks import (
     ChartAnnotations,
     ChartWorkspace,
-    DecisionWorkspace,
     UpdateAuthorizations,
 )
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
-from .account_state import AccountStateQueries, EstimatedAccountWorkspace
+from .account_state import AccountStateQueries
 from .strategy_catalog import StrategyQueries
 from .trade_plan_authoring import TradePlanTasks
 from .commands import ApplicationCommandDispatcher
@@ -57,6 +58,7 @@ from .decision_tasks import DecisionTasks
 from .decision_journal import DecisionJournal
 from .discipline_reviews import DisciplineReviews
 from .plan_impacts import PlanImpacts
+from .read_models import ReadModelService
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -74,6 +76,9 @@ from trading_platform.persistence.discipline_reviews import (
 )
 from trading_platform.persistence.plan_impacts import (
     SQLitePlanImpactRepository,
+)
+from trading_platform.persistence.read_models import (
+    SQLiteReadModelProjection,
 )
 from trading_platform.domain.discipline_reviews import (
     DisciplineReviewService,
@@ -233,24 +238,6 @@ def open_research_archive(
 ) -> Iterator[ResearchArchive]:
     with _store(data_root, migrations_root) as store:
         yield ResearchArchive(_ledger(store))
-
-
-@contextmanager
-def open_decision_workspace(
-    data_root: Path, migrations_root: Path | None = None
-) -> Iterator[DecisionWorkspace]:
-    with _store(data_root, migrations_root) as store:
-        yield EstimatedAccountWorkspace(
-            AccountStateQueries(
-                SQLiteAccountSnapshotProjection(store.connection),
-                SQLiteDecisionJournalRepository(
-                    store.connection, store.writer_lock
-                ),
-            ),
-            WorkspaceService(
-                store.connection, _ledger(store), store.writer_lock
-            ),
-        )
 
 
 @contextmanager
@@ -442,11 +429,33 @@ def open_plan_impacts(
 
 
 @contextmanager
+def open_read_models(
+    data_root: Path,
+    migrations_root: Path | None = None,
+) -> Iterator[ReadModelService]:
+    with _store(data_root, migrations_root) as store:
+        yield ReadModelService(
+            SQLiteReadModelProjection(
+                store.connection,
+                AccountStateQueries(
+                    SQLiteAccountSnapshotProjection(store.connection),
+                    SQLiteDecisionJournalRepository(
+                        store.connection, store.writer_lock
+                    ),
+                ),
+                _ledger(store),
+            )
+        )
+
+
+@contextmanager
 def open_update_authorizations(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[UpdateAuthorizations]:
     with _store(data_root, migrations_root) as store:
-        yield WorkspaceService(store.connection, _ledger(store), store.writer_lock)
+        yield WorkspaceUpdateAuthorizationService(
+            store.connection, store.writer_lock
+        )
 
 
 @contextmanager
@@ -610,11 +619,11 @@ __all__ = [
     "open_decision_tasks",
     "open_decision_journal",
     "open_discipline_reviews",
-    "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",
     "open_project_verification",
     "open_provider_qualification",
+    "open_read_models",
     "open_research_archive",
     "open_research_workflow",
     "open_watchlist",

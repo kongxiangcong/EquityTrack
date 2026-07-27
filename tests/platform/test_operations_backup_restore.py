@@ -46,7 +46,9 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    before = root.workspace.build("security_yihua", "snapshot_chart")
+    before = root.chart.get_series(
+        "security_yihua", "snapshot_chart"
+    )
     root.close()
     archive = tmp_path / "backups" / "platform-backup.zip"
     backup = PlatformOperations(live).backup(archive)
@@ -55,10 +57,9 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
     report = PlatformOperations.restore(archive, restored)
     assert report["status"] == "succeeded" and report["doctor_status"] == "passed"
     rebuilt = _root(restored)
-    assert (
-        rebuilt.workspace.build("security_yihua", "snapshot_chart")["task"]
-        == before["task"]
-    )
+    assert rebuilt.chart.get_series(
+        "security_yihua", "snapshot_chart"
+    ) == before
     restored_store = PlatformStore(restored, Path.cwd() / "migrations")
     assert restored_store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
     restored_store.close()
@@ -1034,14 +1035,14 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
         line = process.stdout.readline().strip()
         envelope = json.loads(line)
         assert envelope["ok"] is True
-        workspace = json.loads(
-            urlopen(envelope["result"]["url"] + "/api/workspace", timeout=5).read()
+        chart = json.loads(
+            urlopen(
+                envelope["result"]["url"] + "/api/chart-series",
+                timeout=5,
+            ).read()
         )
-        assert (
-            workspace["task"]["snapshot_id"] == "snapshot_chart"
-            and workspace["history"]["workflows"]
-        )
-        assert secret not in json.dumps(workspace) and secret not in line
+        assert chart["data_snapshot_id"] == "snapshot_chart"
+        assert secret not in json.dumps(chart) and secret not in line
     finally:
         process.terminate()
         try:
