@@ -19,10 +19,36 @@ from trading_platform.domain.research_evaluation import (
     ResearchWorkflowRequest,
     StrategyValidationSelection,
 )
+from trading_platform.application import (
+    GetEstimatedAccountState,
+    open_account_state_queries,
+)
+from tests.platform.test_account_snapshots import _draft, _ready_root
+from tests.platform.test_estimated_account_state import _confirmed
 
 
 class InjectedCrash(RuntimeError):
     pass
+
+
+def test_estimated_account_state_rebuilds_identically_after_restart(
+    tmp_path: Path,
+) -> None:
+    data_root = _ready_root(tmp_path)
+    _confirmed(
+        data_root,
+        _draft(cash_state="unknown"),
+        create_invocation="restart:state:create",
+        confirm_invocation="restart:state:confirm",
+    )
+    with open_account_state_queries(data_root) as first_process:
+        before = first_process.get(GetEstimatedAccountState("account_local"))
+    with open_account_state_queries(data_root) as restarted_process:
+        after = restarted_process.get(GetEstimatedAccountState("account_local"))
+    assert after == before
+    assert after.unverified_evidence == (
+        "EXECUTION_RECORD_READER_UNAVAILABLE",
+    )
 
 
 class CrashAt:

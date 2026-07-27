@@ -1,6 +1,6 @@
 # 02 — EstimatedAccountState
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 01
@@ -42,3 +42,42 @@ Creating executions, broker reconciliation, plan evaluation, UI rendering, or tr
 ## One-way cutover
 
 Replace workspace “current positions” derived from account-opening rows with this projection. Do not retain an alternate position calculator or write estimated values into snapshot tables.
+
+## Claim record
+
+- External seams: latest-confirmed `AccountSnapshotVersion` projection,
+  future ticket-11 confirmed `ExecutionRecordReader`, version-1 projection
+  checkpoint rows, restart/rebuild, and the workspace read model.
+- Deep-module ownership: `domain/account_state.py` owns order-independent
+  execution replay, duplicate suppression, unknown propagation, correction and
+  drift calculations; `application/account_state.py` owns the complete query
+  and comparison tasks; `SQLiteAccountSnapshotProjection` owns authority-record
+  loading and checkpoint persistence/rebuild.
+- Old paths to replace: workspace `current_positions` assembled directly from
+  confirmed snapshot rows, account-opening aliases in the workspace read
+  model, and any caller-side quantity/cash replay.
+- Superseded artifacts to delete: the Ticket-01 interim workspace position
+  shape, duplicate position calculators, tests that bind the workspace to raw
+  snapshot SQL, and any estimated values written into immutable snapshot
+  tables. The confirmed snapshot graph and execution history remain immutable
+  authority inputs.
+
+## Answer
+
+Implemented the canonical deterministic estimated-state projection and drift
+assessment behind named application queries. The projection records the exact
+confirmed snapshot seal and contributing confirmed execution identities,
+deduplicates and orders replay deterministically, replaces corrected records,
+propagates unknown cash/position operands without inventing zeroes, and blocks
+conflicting or impossible records. A later confirmed snapshot is compared with
+the prior estimate while both immutable snapshot history and the prior estimate
+hash remain unchanged.
+
+The workspace now receives only `EstimatedAccountState` values from the
+application task. Its old raw-snapshot position query, `account_opening_state`
+alias, Ticket-01 interim field shape, and production Web reads of those retired
+fields were removed. Until ticket 11 installs the production execution reader,
+the state explicitly reports `EXECUTION_RECORD_READER_UNAVAILABLE` and remains
+partial rather than pretending that no executions exist.
+
+Evidence: `evidence/02-estimated-account-state.md`.

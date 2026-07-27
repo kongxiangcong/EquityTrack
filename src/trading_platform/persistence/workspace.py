@@ -14,6 +14,7 @@ from trading_platform.application.workflow_ledger import (
 )
 from trading_platform.research_view import ResearchDecisionView, ResearchViewError
 from trading_platform.application.web_tasks import WorkspaceUpdateCommand
+from trading_platform.domain.account_state import EstimatedAccountState
 
 
 class WorkspaceService:
@@ -29,7 +30,12 @@ class WorkspaceService:
         self.writer_lock = writer_lock
         self.workflow_ledger = workflow_ledger
 
-    def build(self, security_id: str, snapshot_id: str) -> dict[str, Any]:
+    def build(
+        self,
+        security_id: str,
+        snapshot_id: str,
+        account_states: tuple[EstimatedAccountState, ...],
+    ) -> dict[str, Any]:
         snapshot = self._one(
             "SELECT requested_date,effective_session_date,freshness_status,quality_status FROM data_snapshot WHERE data_snapshot_id=?",
             (snapshot_id,),
@@ -48,28 +54,74 @@ class WorkspaceService:
                 (evaluation["plan_evaluation_id"],),
             )
         manifests = [dict(item) for item in workflow_evidence.manifests]
-        account_positions = self._all(
-            "SELECT a.base_currency,a.initialized_at,"
-            "v.account_snapshot_version_id AS account_snapshot_id,"
-            "v.as_of_at AS snapshot_as_of,v.as_of_precision,"
-            "v.session_semantics,v.source_kind,p.security_id,"
-            "p.total_quantity,p.available_quantity_state,"
-            "p.available_quantity_value,p.cost_state,p.cost_value,"
-            "p.market_value_state,p.market_value_value,"
-            "(SELECT h.reconciliation_status FROM account_history_snapshot h "
-            "WHERE h.account_id=a.account_id ORDER BY h.created_at DESC LIMIT 1) "
-            "AS latest_import_status "
-            "FROM account_snapshot_projection_checkpoint c "
-            "JOIN account a USING(account_id) "
-            "JOIN account_snapshot_version v USING(account_snapshot_version_id) "
-            "JOIN account_snapshot_position p USING(account_snapshot_version_id) "
-            "WHERE p.security_id=? ORDER BY a.initialized_at,a.account_id",
-            (security_id,),
+        matching_account_ids: list[str] = []
+        account_positions: list[dict[str, Any]] = []
+        for state in account_states:
+            for position in state.positions:
+                if position.security_id != security_id:
+                    continue
+                matching_account_ids.append(state.account_id)
+                account_positions.append(
+                    {
+                        "account_label": f"本地账户 {len(account_positions) + 1}",
+                        "estimated_account_state_id": (
+                            state.estimated_account_state_id
+                        ),
+                        "derived_from_snapshot_id": (
+                            state.derived_from_snapshot_id
+                        ),
+                        "derived_from_snapshot_as_of": (
+                            state.derived_from_snapshot_as_of
+                        ),
+                        "derived_from_snapshot_as_of_precision": (
+                            state.derived_from_snapshot_as_of_precision
+                        ),
+                        "derived_from_snapshot_session_semantics": (
+                            state.derived_from_snapshot_session_semantics
+                        ),
+                        "snapshot_graph_seal_hash": (
+                            state.snapshot_graph_seal_hash
+                        ),
+                        "execution_record_ids": state.execution_record_ids,
+                        "security_id": position.security_id,
+                        "total_quantity": position.total_quantity,
+                        "available_quantity_state": (
+                            position.available_quantity_state
+                        ),
+                        "available_quantity_value": (
+                            position.available_quantity_value
+                        ),
+                        "cost_state": position.cost_state,
+                        "cost_value": position.cost_value,
+                        "market_value_state": position.market_value_state,
+                        "market_value_value": position.market_value_value,
+                        "cash_state": state.cash_state,
+                        "cash_value": state.cash_value,
+                        "currency": state.currency,
+                        "state_status": state.status,
+                        "blocking_reasons": state.blocking_reasons,
+                        "unverified_evidence": state.unverified_evidence,
+                        "content_hash": state.content_hash,
+                        "relationship": "position",
+                        "freshness": "derived_from_latest_confirmed",
+                    }
+                )
+        history_imports = (
+            []
+            if not matching_account_ids
+            else self._all(
+                "SELECT b.history_import_batch_id,b.window_start,b.window_end,"
+                "b.result_counts_json,b.quality_issues_json,"
+                "s.account_history_snapshot_id,s.as_of_date,"
+                "s.reconciliation_status,s.limitations_json "
+                "FROM history_import_batch b "
+                "LEFT JOIN account_history_snapshot s "
+                "USING(history_import_batch_id) "
+                f"WHERE b.account_id IN ({','.join('?' for _ in matching_account_ids)}) "
+                "ORDER BY b.created_at",
+                tuple(matching_account_ids),
+            )
         )
-        for index, position in enumerate(account_positions, start=1):
-            position["account_label"] = f"本地账户 {index}"
-            position["relationship"] = "position"
-            position["freshness"] = "latest_confirmed_snapshot"
         return {
             "task": {
                 "security_id": security_id,
@@ -94,9 +146,10 @@ class WorkspaceService:
                 "SELECT draft_id,plan_id,based_on_version_id,revision,status,content_hash,created_at,updated_at FROM trade_plan_draft WHERE security_id=? ORDER BY updated_at DESC",
                 (security_id,),
             ),
-            "security_relationship": self._relationship(account_positions),
+            "security_relationship": self._relationship(
+                account_positions, len(account_states)
+            ),
             "current_positions": account_positions,
-            "account_opening_state": account_positions,
             "history": {
                 "workflows": workflows,
                 "data_snapshots": self._all(
@@ -112,10 +165,7 @@ class WorkspaceService:
                     "SELECT v.plan_version_id,v.plan_id,v.version_no,v.confirmed_at AS created_at,v.user_input_source,v.content_json,r.snapshot_type,r.snapshot_id AS account_snapshot_id,r.snapshot_as_of,r.reconciliation_status FROM trade_plan_version v LEFT JOIN plan_account_snapshot_reference r USING(plan_version_id) WHERE v.security_id=? ORDER BY v.confirmed_at,v.version_no",
                     (security_id,),
                 ),
-                "account_imports": self._all(
-                    "SELECT b.history_import_batch_id,b.window_start,b.window_end,b.result_counts_json,b.quality_issues_json,s.account_history_snapshot_id,s.as_of_date,s.reconciliation_status,s.limitations_json FROM history_import_batch b LEFT JOIN account_history_snapshot s USING(history_import_batch_id) WHERE b.account_id IN (SELECT c.account_id FROM account_snapshot_projection_checkpoint c JOIN account_snapshot_position p USING(account_snapshot_version_id) WHERE p.security_id=?) ORDER BY b.created_at",
-                    (security_id,),
-                ),
+                "account_imports": history_imports,
                 "market_snapshots": self._all(
                     "SELECT market_snapshot_id,status,requested_date,effective_session_date,created_at FROM market_snapshot WHERE security_id=? ORDER BY created_at",
                     (security_id,),
@@ -277,7 +327,11 @@ class WorkspaceService:
         rows = self._all(sql, parameters)
         return rows[0] if rows else None
 
-    def _relationship(self, positions: list[dict[str, Any]]) -> str:
+    def _relationship(
+        self,
+        positions: list[dict[str, Any]],
+        confirmed_account_count: int,
+    ) -> str:
         if positions:
             return "position"
         account_count = self.connection.execute(
@@ -285,10 +339,7 @@ class WorkspaceService:
         ).fetchone()[0]
         if account_count == 0:
             return "account_data_missing"
-        covered_accounts = self.connection.execute(
-            "SELECT count(DISTINCT account_id) FROM account_import_batch"
-        ).fetchone()[0]
-        if covered_accounts < account_count:
+        if confirmed_account_count < account_count:
             return "position_data_missing"
         return "watchlist_not_held"
 

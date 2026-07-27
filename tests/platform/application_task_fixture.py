@@ -10,6 +10,10 @@ from trading_platform.account import AccountOpeningService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.account_history import AccountHistoryImportService
 from trading_platform.application.health import Health
+from trading_platform.application.account_state import (
+    AccountStateQueries,
+    EstimatedAccountWorkspace,
+)
 from trading_platform.application.research_tasks import (
     ForecastReview,
     ResearchArchive,
@@ -35,6 +39,9 @@ from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.market import SQLiteMarketRepository
 from trading_platform.persistence.plans import SQLitePlanRepository
+from trading_platform.persistence.account_snapshots import (
+    SQLiteAccountSnapshotProjection,
+)
 from trading_platform.persistence.workspace import WorkspaceService
 from trading_platform.plans import PlanService
 from trading_platform.operations import PlatformOperations
@@ -264,10 +271,15 @@ class PlatformTaskFixture:
             SQLiteMarketRepository(store.connection, store.writer_lock),
             self.plans,
         )
-        self.workspace = WorkspaceService(
-            store.connection,
-            ledger,
-            store.writer_lock,
+        self.workspace = EstimatedAccountWorkspace(
+            AccountStateQueries(
+                SQLiteAccountSnapshotProjection(store.connection)
+            ),
+            WorkspaceService(
+                store.connection,
+                ledger,
+                store.writer_lock,
+            ),
         )
         self.accounts = AccountOpeningService(
             data_root, repo_root, migrations_root or repo_root / "migrations"

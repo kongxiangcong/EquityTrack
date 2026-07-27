@@ -6,6 +6,11 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .account_state import (
+        AccountStateQueries,
+        CompareConfirmedAccountState,
+        GetEstimatedAccountState,
+    )
     from .account_snapshots import (
         AccountSnapshotCommands,
         AccountSnapshotQueries,
@@ -20,6 +25,7 @@ if TYPE_CHECKING:
         open_account_current_export,
         open_account_snapshot_commands,
         open_account_snapshot_queries,
+        open_account_state_queries,
         open_account_acceptance,
         open_account_history,
         open_daily_research_cycle,
@@ -69,6 +75,9 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "AccountStateQueries": ".account_state",
+    "CompareConfirmedAccountState": ".account_state",
+    "GetEstimatedAccountState": ".account_state",
     "AccountSnapshotCommands": ".account_snapshots",
     "AccountSnapshotQueries": ".account_snapshots",
     "ConfirmAccountSnapshot": ".account_snapshots",
@@ -98,6 +107,7 @@ _EXPORT_MODULES = {
     "open_account_current_export": ".bootstrap",
     "open_account_snapshot_commands": ".bootstrap",
     "open_account_snapshot_queries": ".bootstrap",
+    "open_account_state_queries": ".bootstrap",
     "open_account_acceptance": ".bootstrap",
     "open_account_history": ".bootstrap",
     "open_chart_annotations": ".bootstrap",

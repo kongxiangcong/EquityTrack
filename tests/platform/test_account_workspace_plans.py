@@ -65,7 +65,7 @@ def test_workspace_distinguishes_position_and_plan_freezes_account_snapshot(
     position = workspace["current_positions"][0]
     assert {
         "account_label",
-        "snapshot_as_of",
+        "derived_from_snapshot_as_of",
         "total_quantity",
         "available_quantity_state",
         "available_quantity_value",

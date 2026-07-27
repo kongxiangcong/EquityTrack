@@ -636,6 +636,22 @@ class SQLiteAccountSnapshotProjection:
             else None
         )
 
+    def version(
+        self, account_snapshot_version_id: str
+    ) -> AccountSnapshotVersion:
+        return load_version_record(
+            self._connection, account_snapshot_version_id
+        )
+
+    def account_ids(self) -> tuple[str, ...]:
+        return tuple(
+            row["account_id"]
+            for row in self._connection.execute(
+                "SELECT account_id FROM account_snapshot_projection_checkpoint "
+                "ORDER BY account_id"
+            )
+        )
+
 
 __all__ = [
     "SQLiteAccountSnapshotProjection",

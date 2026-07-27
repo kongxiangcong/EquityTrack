@@ -160,7 +160,8 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
     chart = chart_root(tmp_path / "data")
     security_id = detail.draft.positions[0].security_id
     workspace = chart.workspace.build(security_id, "snapshot_chart")
-    assert workspace["account_opening_state"] == []
+    assert workspace["current_positions"] == []
+    assert "account_opening_state" not in workspace
     server = LocalChartWorkspaceServer(
         decision_workspace=chart.workspace,
         chart_workspace=chart.chart,
@@ -176,7 +177,8 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
 
     base = server.start()
     payload = json.loads(urlopen(base + "/api/workspace").read())
-    assert payload["account_opening_state"] == []
+    assert payload["current_positions"] == []
+    assert "account_opening_state" not in payload
     server.close()
     chart.close()
     archive = tmp_path / "opening.zip"

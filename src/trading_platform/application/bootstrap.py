@@ -50,6 +50,8 @@ from .web_tasks import (
 )
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
+from .account_state import AccountStateQueries, EstimatedAccountWorkspace
+from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 
 
@@ -254,7 +256,14 @@ def open_decision_workspace(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[DecisionWorkspace]:
     with _store(data_root, migrations_root) as store:
-        yield WorkspaceService(store.connection, _ledger(store), store.writer_lock)
+        yield EstimatedAccountWorkspace(
+            AccountStateQueries(
+                SQLiteAccountSnapshotProjection(store.connection)
+            ),
+            WorkspaceService(
+                store.connection, _ledger(store), store.writer_lock
+            ),
+        )
 
 
 @contextmanager
@@ -361,6 +370,20 @@ def open_account_snapshot_queries(
         )
 
 
+@contextmanager
+def open_account_state_queries(
+    data_root: Path,
+    migrations_root: Path | None = None,
+    *,
+    execution_reader: ExecutionRecordReader | None = None,
+) -> Iterator[AccountStateQueries]:
+    with _store(data_root, migrations_root) as store:
+        yield AccountStateQueries(
+            SQLiteAccountSnapshotProjection(store.connection),
+            execution_reader,
+        )
+
+
 def open_platform_operations(data_root: Path) -> PlatformOperations:
     return PlatformOperations(data_root)
 
@@ -404,6 +427,7 @@ __all__ = [
     "open_account_current_export",
     "open_account_snapshot_commands",
     "open_account_snapshot_queries",
+    "open_account_state_queries",
     "open_account_acceptance",
     "open_account_history",
     "open_acceptance_evidence",

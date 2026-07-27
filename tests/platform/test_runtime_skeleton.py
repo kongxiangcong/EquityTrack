@@ -13,8 +13,10 @@ import pytest
 
 from trading_platform.application import (
     ConfirmAccountSnapshot,
+    CompareConfirmedAccountState,
     CreateAccountSnapshotDraft,
     GetAccountSnapshot,
+    GetEstimatedAccountState,
     Capability,
     CapabilityStatus,
     HealthQuery,
@@ -22,6 +24,7 @@ from trading_platform.application import (
     open_platform_operations,
     open_account_snapshot_commands,
     open_account_snapshot_queries,
+    open_account_state_queries,
 )
 from trading_platform.domain.account_snapshots import (
     AccountSnapshotDraft,
@@ -68,17 +71,22 @@ def test_account_snapshot_is_exposed_only_as_named_application_tasks(
         CreateAccountSnapshotDraft.__name__,
         ConfirmAccountSnapshot.__name__,
         GetAccountSnapshot.__name__,
+        GetEstimatedAccountState.__name__,
+        CompareConfirmedAccountState.__name__,
         AccountSnapshotDraft.__name__,
         AccountSnapshotPosition.__name__,
     } == {
         "CreateAccountSnapshotDraft",
         "ConfirmAccountSnapshot",
         "GetAccountSnapshot",
+        "GetEstimatedAccountState",
+        "CompareConfirmedAccountState",
         "AccountSnapshotDraft",
         "AccountSnapshotPosition",
     }
     assert callable(open_account_snapshot_commands)
     assert callable(open_account_snapshot_queries)
+    assert callable(open_account_state_queries)
 
 
 def test_production_web_index_references_tracked_build_assets() -> None:

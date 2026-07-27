@@ -13,9 +13,10 @@ test("workspace is task-first, progressively discloses provenance, and exposes f
   for(const kind of ["WorkflowRun","DataSnapshot","ResearchRun","ChartAnnotationVersion","TradePlanVersion","MarketSnapshot","PlanEvaluation","ArtifactManifest"]) assert.ok(app.includes(kind))
 })
 
-test("account context distinguishes positions and keeps provenance progressive",()=>{
+test("account context uses the canonical estimated state and keeps provenance progressive",()=>{
   for(const marker of ["当前仓位与现金","账户语境"]) assert.ok(html.includes(marker))
-  for(const marker of ["current_positions","security_relationship","account_snapshot_id","仓位数据缺失","能力限制"]) assert.ok(app.includes(marker))
+  for(const marker of ["current_positions","security_relationship","account_snapshot_id","derived_from_snapshot_as_of","total_quantity","available_quantity_state","cost_state","cash_state","state_status","blocking_reasons","unverified_evidence","仓位数据缺失","能力限制"]) assert.ok(app.includes(marker))
+  for(const retiredField of ["position.snapshot_as_of","position.quantity_decimal","position.available_decimal","position.frozen_decimal","position.cost_price_decimal","position.base_currency","position.cash_decimal","position.reconciliation_status","position.limitations"]) assert.equal(app.includes(retiredField),false)
   for(const privateField of ["source_row_identity","source_object_sha256","private_root"]) assert.equal(app.includes(privateField),false)
 })
 
