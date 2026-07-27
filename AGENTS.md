@@ -66,7 +66,7 @@ apply especially to `skills/` and the `equity-researcher` skill.
 
 - Do not fabricate financial data, market data, consensus data, citations, or source metadata.
 - Use Tushare as the primary structured market-data provider for security master, trading calendar, OHLCV, adjustment factors, market cross-sections, and financial/disclosure indexes when configured and entitled. Use Kimi Datasource only as an auxiliary Codex/Skill control-plane source for discovery, candidate data, and cross-checking; do not make Kimi a business-runtime dependency.
-- Before using Tushare, read `.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/tushare_usage.md` and the companion `tushare-vs-kimi-datasource.md`, then use the preconfigured connection details exactly as documented there. Do not require the user to provide or configure a separate token for that gateway. Do not echo embedded connection parameters in user-facing output or logs.
+- Before using Tushare, read `.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/tushare_usage.md` and the companion `tushare-vs-kimi-datasource.md`, then use only the approved environment-backed connection seam documented there. Do not require the user to paste or reconfigure a token for that gateway. Do not put or echo credential values or private endpoint parameters in source, Git, user-facing output, artifacts, or logs.
 - The Tushare-compatible gateway documented there is not an official `tushare.pro` host. Preserve the actual gateway identity in provenance and do not treat it as an official disclosure authority.
 - Official disclosure is primary for critical financial data:
   - A-share: CNINFO, SSE/SZSE/BSE announcements, company IR reports.

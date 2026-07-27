@@ -1,0 +1,12 @@
+{
+  "name": "chart-annotation-prototype",
+  "version": "0.0.0-prototype",
+  "private": true,
+  "description": "PROTOTYPE ONLY - K-line and versioned annotation seam",
+  "scripts": {
+    "prototype": "python -m http.server 4173 --bind 127.0.0.1"
+  },
+  "dependencies": {
+    "klinecharts": "10.0.0"
+  }
+}

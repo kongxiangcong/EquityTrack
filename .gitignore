@@ -6,8 +6,17 @@ __pycache__/
 htmlcov/
 build/
 /dist/
+node_modules/
 *.egg-info/
 outputs/
 docs/data/
 .env.local
 skills/scripts/fixtures/model_workbooks/generated/
+/tushare_usage.md
+/docs/prompts/kimi-datasource/
+/docs/prompts/kimi-datasource.zip
+/.scratch/ticket*-browser*/
+/.scratch/code-structure-deepening/ticket14-acceptance-*/
+/.scratch/code-structure-deepening/ticket14-browser-evidence*.json
+/.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/002897_*.csv
+/.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/revalidation-*/
