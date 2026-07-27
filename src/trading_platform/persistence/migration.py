@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .locking import DataRootWriterLock, PersistenceError
@@ -61,6 +62,7 @@ class MigrationRunner:
                 in {
                     "0013_source_policy_official_evidence.sql",
                     "0014_research_evaluation.sql",
+                    "0015_account_snapshot_version.sql",
                 }
             )
             try:
@@ -71,8 +73,10 @@ class MigrationRunner:
                 if rebuilds_parent_tables:
                     if path.name == "0013_source_policy_official_evidence.sql":
                         self._preflight_source_policy_0013()
-                    else:
+                    elif path.name == "0014_research_evaluation.sql":
                         self._preflight_research_evaluation_0014()
+                    else:
+                        self._preflight_account_snapshot_0015()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
@@ -88,7 +92,11 @@ class MigrationRunner:
                                 "SOURCE_POLICY_IDENTITY_UNMIGRATABLE"
                                 if path.name
                                 == "0013_source_policy_official_evidence.sql"
-                                else "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE"
+                                else (
+                                    "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE"
+                                    if path.name == "0014_research_evaluation.sql"
+                                    else "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE"
+                                )
                             ),
                             f"Migration {index:04d} produced invalid foreign-key lineage.",
                         )
@@ -104,6 +112,110 @@ class MigrationRunner:
                 if rebuilds_parent_tables:
                     self.connection.execute("PRAGMA legacy_alter_table=OFF")
                     self.connection.execute("PRAGMA foreign_keys=ON")
+
+    def _preflight_account_snapshot_0015(self) -> None:
+        def block(message: str) -> None:
+            raise PersistenceError(
+                "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE", message
+            )
+
+        invalid_account = self.connection.execute(
+            "SELECT p.portfolio_snapshot_id FROM portfolio_snapshot p "
+            "LEFT JOIN account a USING(account_id) "
+            "WHERE a.account_id IS NULL OR length(trim(a.account_id))=0 "
+            "OR length(trim(a.base_currency))<>3 LIMIT 1"
+        ).fetchone()
+        if invalid_account is not None:
+            block("A legacy opening graph lacks stable account identity or currency.")
+
+        missing_graph = self.connection.execute(
+            "SELECT p.portfolio_snapshot_id FROM portfolio_snapshot p "
+            "LEFT JOIN account_import_batch b "
+            "ON b.account_id=p.account_id "
+            "AND b.source_snapshot_hash=p.source_snapshot_hash "
+            "LEFT JOIN account_cash_opening c USING(account_id) "
+            "WHERE b.import_batch_id IS NULL OR c.account_id IS NULL LIMIT 1"
+        ).fetchone()
+        if missing_graph is not None:
+            block("A legacy opening graph is incomplete.")
+
+        legacy_graphs = tuple(
+            self.connection.execute(
+                "SELECT p.portfolio_snapshot_id,p.account_id,p.as_of_date,"
+                "p.source_snapshot_hash,b.confirmed_as_of,b.evidence_json "
+                "FROM portfolio_snapshot p "
+                "JOIN account_import_batch b "
+                "ON b.account_id=p.account_id "
+                "AND b.source_snapshot_hash=p.source_snapshot_hash"
+            )
+        )
+        for row in legacy_graphs:
+            try:
+                evidence = json.loads(row["evidence_json"])
+                confirmation = evidence["confirmation"]
+                invocation_id = confirmation["invocation_id"]
+                confirmed_at = confirmation["confirmed_at"]
+                confirmed_as_of = confirmation["confirmed_as_of"]
+                confirmed_instant = datetime.fromisoformat(confirmed_at)
+                datetime.fromisoformat(f"{row['as_of_date']}T00:00:00")
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise PersistenceError(
+                    "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE",
+                    "A legacy opening graph lacks explicit confirmation provenance.",
+                ) from error
+            if (
+                not invocation_id
+                or confirmed_instant.tzinfo is None
+                or confirmed_as_of != row["as_of_date"]
+                or row["confirmed_as_of"] != row["as_of_date"]
+            ):
+                block(
+                    "A legacy opening graph has inconsistent confirmation provenance."
+                )
+
+        positions = tuple(
+            self.connection.execute(
+                "SELECT p.position_id,p.account_id,p.security_id,"
+                "p.quantity_decimal,p.available_decimal,p.frozen_decimal "
+                "FROM account_position p "
+                "LEFT JOIN security s USING(security_id)"
+                " WHERE s.security_id IS NULL OR length(trim(p.security_id))=0 "
+                "OR NOT EXISTS(SELECT 1 FROM portfolio_snapshot ps "
+                "WHERE ps.account_id=p.account_id)"
+            )
+        )
+        if positions:
+            block("A legacy position lacks stable snapshot or security identity.")
+        quantities = tuple(
+            self.connection.execute(
+                "SELECT position_id,quantity_decimal,available_decimal,"
+                "frozen_decimal FROM account_position"
+            )
+        )
+        for row in quantities:
+            try:
+                total = Decimal(row["quantity_decimal"])
+                available = Decimal(row["available_decimal"])
+                frozen = Decimal(row["frozen_decimal"])
+            except (InvalidOperation, TypeError) as error:
+                raise PersistenceError(
+                    "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE",
+                    "A legacy position quantity is not an exact decimal.",
+                ) from error
+            if (
+                not all(value.is_finite() and value >= 0 for value in (total, available, frozen))
+                or available + frozen != total
+            ):
+                block("A legacy position has an invalid quantity relation.")
+
+        history_reference = self.connection.execute(
+            "SELECT plan_version_id FROM plan_account_snapshot_reference "
+            "WHERE snapshot_type<>'PortfolioSnapshot' LIMIT 1"
+        ).fetchone()
+        if history_reference is not None:
+            block(
+                "A legacy plan references broker history as current account truth."
+            )
 
     def _preflight_source_policy_0013(self) -> None:
         placeholder_policy = self.connection.execute(

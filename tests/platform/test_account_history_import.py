@@ -12,6 +12,10 @@ from trading_platform.account_history import (
 )
 from trading_platform.persistence import PlatformStore
 from trading_platform.operations import PlatformOperations
+from trading_platform.application import (
+    ConfirmAccountSnapshot,
+    open_account_snapshot_commands,
+)
 from tests.platform.test_account_opening import _sources
 from tests.platform.test_tonghuashun_preview import _write
 
@@ -32,6 +36,19 @@ def _opened_account(tmp_path: Path) -> tuple[str, list[Path]]:
         tmp_path / "private-opening",
         ("2026-07-10",),
     )
+    with open_account_snapshot_commands(tmp_path / "data") as commands:
+        commands.execute(
+            ConfirmAccountSnapshot(
+                invocation_id="opening:history:confirm",
+                draft_id=opening.account_snapshot_draft_id,
+                expected_revision=1,
+                decision_actor_type="user",
+                decision_actor_id="local-user",
+                interaction_channel="cli",
+                transport_actor_type="user",
+                transport_actor_id="local-user",
+            )
+        )
     return opening.account_id, sources
 
 

@@ -673,9 +673,19 @@ class AccountHistoryImportService:
                 _render(cls._signed(row[index])) for index in (4, 5, 6)
             )
         actual = {
-            row[0]: (row[1], row[2], row[3])
+            row[0]: (
+                row[1],
+                row[2],
+                _render(Decimal(row[1]) - Decimal(row[2])),
+            )
             for row in store.connection.execute(
-                "SELECT security_id,quantity_decimal,available_decimal,frozen_decimal FROM account_position WHERE account_id=?",
+                "SELECT p.security_id,p.total_quantity,"
+                "p.available_quantity_value "
+                "FROM account_snapshot_projection_checkpoint c "
+                "JOIN account_snapshot_position p "
+                "USING(account_snapshot_version_id) "
+                "WHERE c.account_id=? "
+                "AND p.available_quantity_state='known'",
                 (account_id,),
             )
         }

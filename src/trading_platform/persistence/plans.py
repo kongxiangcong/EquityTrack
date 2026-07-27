@@ -586,8 +586,12 @@ class SQLitePlanRepository:
         if content.account_snapshot_id is None:
             return None
         row = self.connection.execute(
-            "SELECT 'AccountHistorySnapshot' AS snapshot_type,s.account_history_snapshot_id AS snapshot_id,s.account_id,s.as_of_date AS snapshot_as_of,s.reconciliation_status FROM account_history_snapshot s WHERE s.account_history_snapshot_id=? UNION ALL SELECT 'PortfolioSnapshot',p.portfolio_snapshot_id,p.account_id,p.as_of_date,p.reconciliation_status FROM portfolio_snapshot p WHERE p.portfolio_snapshot_id=?",
-            (content.account_snapshot_id, content.account_snapshot_id),
+            "SELECT 'AccountSnapshotVersion' AS snapshot_type,"
+            "v.account_snapshot_version_id AS snapshot_id,v.account_id,"
+            "v.as_of_at AS snapshot_as_of,'confirmed' AS reconciliation_status "
+            "FROM account_snapshot_version v "
+            "WHERE v.account_snapshot_version_id=?",
+            (content.account_snapshot_id,),
         ).fetchone()
         if row is None or row["reconciliation_status"] == "blocked":
             raise PlanError("PLAN_ACCOUNT_SNAPSHOT_INVALID")
@@ -596,39 +600,33 @@ class SQLitePlanRepository:
         ).fetchone()
         if account is None or account[0] != content.currency:
             raise PlanError("PLAN_ACCOUNT_SNAPSHOT_INVALID")
-        is_portfolio = row["snapshot_type"] == "PortfolioSnapshot"
-        position = (
-            self.connection.execute(
-                "SELECT p.quantity_decimal,p.available_decimal,p.frozen_decimal,l.cost_price_decimal FROM account_position p JOIN account_position_lot l USING(position_id) WHERE p.account_id=? AND p.security_id=?",
-                (row["account_id"], content.security_id),
-            ).fetchone()
-            if is_portfolio
-            else None
-        )
-        portfolio = (
-            self.connection.execute(
-                "SELECT total_equity_decimal FROM portfolio_snapshot WHERE portfolio_snapshot_id=?",
-                (row["snapshot_id"],),
-            ).fetchone()
-            if is_portfolio
-            else None
-        )
+        position = self.connection.execute(
+            "SELECT total_quantity,available_quantity_state,"
+            "available_quantity_value,cost_state,cost_value "
+            "FROM account_snapshot_position "
+            "WHERE account_snapshot_version_id=? AND security_id=?",
+            (row["snapshot_id"], content.security_id),
+        ).fetchone()
+        cash = self.connection.execute(
+            "SELECT nav_state,nav_value FROM account_snapshot_cash "
+            "WHERE account_snapshot_version_id=?",
+            (row["snapshot_id"],),
+        ).fetchone()
         values = {
-            "metrics_supported": is_portfolio,
-            "position_status": (
-                ("position" if position else "not_held") if is_portfolio else "unknown"
-            ),
-            "position_quantity": (
-                (position[0] if position else "0") if is_portfolio else None
-            ),
+            "metrics_supported": True,
+            "position_status": "position" if position else "not_held",
+            "position_quantity": position[0] if position else "0",
             "position_available": (
-                (position[1] if position else "0") if is_portfolio else None
+                position[2]
+                if position and position[1] == "known"
+                else None
             ),
-            "position_frozen": (
-                (position[2] if position else "0") if is_portfolio else None
+            "position_cost_basis": (
+                position[4] if position and position[3] == "known" else None
             ),
-            "position_cost_basis": position[3] if position else None,
-            "portfolio_net_asset_value": portfolio[0] if portfolio else None,
+            "portfolio_net_asset_value": (
+                cash[1] if cash and cash[0] == "known" else None
+            ),
             "currency": content.currency,
         }
         context_json = json.dumps(values, sort_keys=True, separators=(",", ":"))

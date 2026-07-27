@@ -12,11 +12,20 @@ from pathlib import Path
 import pytest
 
 from trading_platform.application import (
+    ConfirmAccountSnapshot,
+    CreateAccountSnapshotDraft,
+    GetAccountSnapshot,
     Capability,
     CapabilityStatus,
     HealthQuery,
     open_platform_health,
     open_platform_operations,
+    open_account_snapshot_commands,
+    open_account_snapshot_queries,
+)
+from trading_platform.domain.account_snapshots import (
+    AccountSnapshotDraft,
+    AccountSnapshotPosition,
 )
 from trading_platform.identity import CanonicalDate, build_code_identity, canonical_hash
 
@@ -50,6 +59,26 @@ def test_health_is_a_named_task_without_a_root_or_facade(tmp_path: Path) -> None
         assert health.capabilities[Capability.PERSISTENCE] is CapabilityStatus.AVAILABLE
         assert not hasattr(health_task, "facade")
         assert not hasattr(health_task, "services")
+
+
+def test_account_snapshot_is_exposed_only_as_named_application_tasks(
+    tmp_path: Path,
+) -> None:
+    assert {
+        CreateAccountSnapshotDraft.__name__,
+        ConfirmAccountSnapshot.__name__,
+        GetAccountSnapshot.__name__,
+        AccountSnapshotDraft.__name__,
+        AccountSnapshotPosition.__name__,
+    } == {
+        "CreateAccountSnapshotDraft",
+        "ConfirmAccountSnapshot",
+        "GetAccountSnapshot",
+        "AccountSnapshotDraft",
+        "AccountSnapshotPosition",
+    }
+    assert callable(open_account_snapshot_commands)
+    assert callable(open_account_snapshot_queries)
 
 
 def test_production_web_index_references_tracked_build_assets() -> None:

@@ -1,6 +1,6 @@
 # 01 — AccountSnapshotVersion
 
-**Status:** ready-for-agent  
+**Status:** resolved  
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 00
@@ -43,3 +43,35 @@ Estimated state, execution projection, broker transaction reconciliation, strate
 ## One-way cutover
 
 Remove application reads that treat account-opening rows or broker history as current truth in the same change. Preserve source evidence; do not add fallback readers, dual writes, or unknown-to-zero conversion.
+
+## Claim record
+
+- External seams: actor type/id, interaction-channel and transport-actor
+  metadata compatible with the locked `ApplicationCommandEnvelope@1`;
+  qualified current-export draft input; legacy opening/history evidence;
+  SQLite migration 0015; and named snapshot command and query openers. Ticket
+  08 will decode the shared envelope into these task inputs rather than
+  introducing an account-specific actor or envelope model.
+- Deep-module ownership: `domain/account_snapshots.py` owns draft/version
+  validation, three-state financial values, immutable transitions and
+  capability derivation; `application/account_snapshots.py` owns complete
+  create/update/confirm/query tasks and actor policy; the SQLite adapter owns
+  transactionality, idempotency, constraints, preflight and one-way legacy
+  conversion.
+- Old paths to replace: application reads that use `AccountOpeningService`,
+  `AccountHistoryImportService`, `portfolio_snapshot`,
+  `account_opening_position`, or broker history as current account truth.
+- Superseded artifacts to delete: old current-position projection callers,
+  private-seam tests that assert opening rows are current truth, stale opening
+  documentation, and any duplicate snapshot DTO/repository introduced during
+  migration. Source import evidence and immutable historical references remain.
+
+## Answer
+
+Implemented the account snapshot graph and migration 0015 as the sole current
+account truth. Qualified current exports now create only an open draft; user
+confirmation advances the immutable projection atomically. Legacy opening
+rows and broker history remain evidence only, and all runtime current-truth
+reads were moved to the confirmed snapshot projection.
+
+Evidence: [`../evidence/01-account-snapshot-version.md`](../evidence/01-account-snapshot-version.md)

@@ -16,6 +16,10 @@ from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import DataProvider, FixtureRights
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
+from trading_platform.persistence.account_snapshots import (
+    SQLiteAccountSnapshotProjection,
+    SQLiteAccountSnapshotRepository,
+)
 from trading_platform.persistence.market import SQLiteMarketRepository
 from trading_platform.persistence.plans import SQLitePlanRepository
 from trading_platform.persistence.presence import RuntimePresence
@@ -45,6 +49,8 @@ from .web_tasks import (
     UpdateAuthorizations,
 )
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
+from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
+from trading_platform.domain.account_snapshots import AccountSnapshotService
 
 
 def _repo_root() -> Path:
@@ -321,7 +327,7 @@ def open_market(
         )
 
 
-def open_account(
+def open_account_current_export(
     data_root: Path,
     repo_root: Path | None = None,
     migrations_root: Path | None = None,
@@ -330,6 +336,29 @@ def open_account(
     migration_path = migrations_root or root / "migrations"
     _assert_store_ready(data_root, migration_path)
     return AccountOpeningService(data_root, root, migration_path)
+
+
+@contextmanager
+def open_account_snapshot_commands(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[AccountSnapshotCommands]:
+    with _store(data_root, migrations_root) as store:
+        yield AccountSnapshotCommands(
+            SQLiteAccountSnapshotRepository(
+                store.connection, store.writer_lock
+            ),
+            AccountSnapshotService(),
+        )
+
+
+@contextmanager
+def open_account_snapshot_queries(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[AccountSnapshotQueries]:
+    with _store(data_root, migrations_root) as store:
+        yield AccountSnapshotQueries(
+            SQLiteAccountSnapshotProjection(store.connection)
+        )
 
 
 def open_platform_operations(data_root: Path) -> PlatformOperations:
@@ -372,7 +401,9 @@ def open_account_acceptance(
 
 
 __all__ = [
-    "open_account",
+    "open_account_current_export",
+    "open_account_snapshot_commands",
+    "open_account_snapshot_queries",
     "open_account_acceptance",
     "open_account_history",
     "open_acceptance_evidence",

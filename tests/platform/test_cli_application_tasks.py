@@ -15,7 +15,7 @@ from trading_platform.application import (
     decode_market_snapshot_command,
     decode_plan_evaluation_command,
     decode_watchlist_identity,
-    open_account,
+    open_account_current_export,
     open_account_acceptance,
     open_account_history,
     open_platform_health,
@@ -82,7 +82,7 @@ def test_named_task_openers_never_bootstrap_or_migrate_implicitly(
     assert not (data_root / "platform.sqlite3").exists()
 
     for opener in (
-        lambda: open_account(data_root, ROOT),
+        lambda: open_account_current_export(data_root, ROOT),
         lambda: open_account_history(data_root, ROOT),
         lambda: open_account_acceptance(data_root, ROOT / "migrations"),
     ):

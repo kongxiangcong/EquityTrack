@@ -10,6 +10,11 @@
 > 随后的实施前基线清理已按该建议保留权威文档，移除旧运行输出、冲突审计、
 > `node_modules`、未获再分发许可的 raw 数据及明文连接资料。当前 TDK 实施权威以
 > `.scratch/trading-discipline-kernel/` 为准。
+>
+> `2026-07-27 Ticket 01` 时态补充：本文件保持为实现前 seam 证据。其关于
+> `account-initialize` 直接确认 opening truth 的描述已由 0015 和账户快照 named
+> tasks 替换；不得把下文旧路径作为当前 caller 指引。当前证明记录在
+> `.scratch/trading-discipline-kernel/evidence/01-account-snapshot-version.md`。
 
 ## 1. 执行摘要
 

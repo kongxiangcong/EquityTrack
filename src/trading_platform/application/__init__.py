@@ -6,10 +6,20 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .account_snapshots import (
+        AccountSnapshotCommands,
+        AccountSnapshotQueries,
+        ConfirmAccountSnapshot,
+        CreateAccountSnapshotDraft,
+        GetAccountSnapshot,
+        UpdateAccountSnapshotDraft,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
-        open_account,
+        open_account_current_export,
+        open_account_snapshot_commands,
+        open_account_snapshot_queries,
         open_account_acceptance,
         open_account_history,
         open_daily_research_cycle,
@@ -59,6 +69,12 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "AccountSnapshotCommands": ".account_snapshots",
+    "AccountSnapshotQueries": ".account_snapshots",
+    "ConfirmAccountSnapshot": ".account_snapshots",
+    "CreateAccountSnapshotDraft": ".account_snapshots",
+    "GetAccountSnapshot": ".account_snapshots",
+    "UpdateAccountSnapshotDraft": ".account_snapshots",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -79,7 +95,9 @@ _EXPORT_MODULES = {
     "decode_research_workflow_request": ".research_request_codec",
     "decode_watchlist_identity": ".command_codecs",
     "open_acceptance_evidence": ".bootstrap",
-    "open_account": ".bootstrap",
+    "open_account_current_export": ".bootstrap",
+    "open_account_snapshot_commands": ".bootstrap",
+    "open_account_snapshot_queries": ".bootstrap",
     "open_account_acceptance": ".bootstrap",
     "open_account_history": ".bootstrap",
     "open_chart_annotations": ".bootstrap",

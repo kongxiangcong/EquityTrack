@@ -49,18 +49,27 @@ class WorkspaceService:
             )
         manifests = [dict(item) for item in workflow_evidence.manifests]
         account_positions = self._all(
-            "SELECT a.base_currency,a.initialized_at,s.cash_decimal,s.as_of_date AS snapshot_as_of,s.reconciliation_status,s.limitations_json,s.portfolio_snapshot_id AS account_snapshot_id,p.position_id,p.quantity_decimal,p.available_decimal,p.frozen_decimal,p.source_type,l.cost_price_decimal,o.source_price_decimal,o.source_market_value_decimal,o.source_day_pnl_decimal,o.source_weight_decimal,o.source_as_of,(SELECT h.reconciliation_status FROM account_history_snapshot h WHERE h.account_id=a.account_id ORDER BY h.created_at DESC LIMIT 1) AS latest_import_status FROM account_position p JOIN account a USING(account_id) JOIN account_position_lot l USING(position_id) JOIN account_position_observation o USING(position_id) JOIN portfolio_snapshot s ON s.portfolio_snapshot_id=(SELECT s2.portfolio_snapshot_id FROM portfolio_snapshot s2 WHERE s2.account_id=a.account_id ORDER BY s2.as_of_date DESC,s2.portfolio_snapshot_id DESC LIMIT 1) WHERE p.security_id=? ORDER BY a.initialized_at,p.position_id",
+            "SELECT a.base_currency,a.initialized_at,"
+            "v.account_snapshot_version_id AS account_snapshot_id,"
+            "v.as_of_at AS snapshot_as_of,v.as_of_precision,"
+            "v.session_semantics,v.source_kind,p.security_id,"
+            "p.total_quantity,p.available_quantity_state,"
+            "p.available_quantity_value,p.cost_state,p.cost_value,"
+            "p.market_value_state,p.market_value_value,"
+            "(SELECT h.reconciliation_status FROM account_history_snapshot h "
+            "WHERE h.account_id=a.account_id ORDER BY h.created_at DESC LIMIT 1) "
+            "AS latest_import_status "
+            "FROM account_snapshot_projection_checkpoint c "
+            "JOIN account a USING(account_id) "
+            "JOIN account_snapshot_version v USING(account_snapshot_version_id) "
+            "JOIN account_snapshot_position p USING(account_snapshot_version_id) "
+            "WHERE p.security_id=? ORDER BY a.initialized_at,a.account_id",
             (security_id,),
         )
         for index, position in enumerate(account_positions, start=1):
             position["account_label"] = f"本地账户 {index}"
-            position["limitations"] = json.loads(position.pop("limitations_json"))
             position["relationship"] = "position"
-            position["freshness"] = (
-                "current_snapshot"
-                if position["reconciliation_status"] != "blocked"
-                else "blocked"
-            )
+            position["freshness"] = "latest_confirmed_snapshot"
         return {
             "task": {
                 "security_id": security_id,
@@ -104,7 +113,7 @@ class WorkspaceService:
                     (security_id,),
                 ),
                 "account_imports": self._all(
-                    "SELECT b.history_import_batch_id,b.window_start,b.window_end,b.result_counts_json,b.quality_issues_json,s.account_history_snapshot_id,s.as_of_date,s.reconciliation_status,s.limitations_json FROM history_import_batch b LEFT JOIN account_history_snapshot s USING(history_import_batch_id) WHERE b.account_id IN (SELECT account_id FROM account_position WHERE security_id=?) ORDER BY b.created_at",
+                    "SELECT b.history_import_batch_id,b.window_start,b.window_end,b.result_counts_json,b.quality_issues_json,s.account_history_snapshot_id,s.as_of_date,s.reconciliation_status,s.limitations_json FROM history_import_batch b LEFT JOIN account_history_snapshot s USING(history_import_batch_id) WHERE b.account_id IN (SELECT c.account_id FROM account_snapshot_projection_checkpoint c JOIN account_snapshot_position p USING(account_snapshot_version_id) WHERE p.security_id=?) ORDER BY b.created_at",
                     (security_id,),
                 ),
                 "market_snapshots": self._all(

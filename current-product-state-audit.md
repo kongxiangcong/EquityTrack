@@ -9,6 +9,16 @@
 > 采集时的历史 Git 事实。实施前清理已删除冲突的旧审计与不可提交的本地连接/raw
 > 材料，并把本文件及其引用的权威规划材料纳入新的文档基线；这些清理不改变下文对
 > runtime 能力的判定。
+>
+> `2026-07-27 Ticket 01` 时态补充：本文件现作为冻结的 pre-TDK 历史证据，不再是
+> 当前命令或 runtime 状态说明。Ticket 01 已删除 `account-initialize`、
+> `account-show`、`open_account` 以及把 `account_position` /
+> `portfolio_snapshot` 当作当前账户真相的读取；当前导出只经
+> `account-current-export-draft` 形成 draft，确认经
+> `open_account_snapshot_commands()` 且要求 `decision_actor_type=user`。
+> 下文旧命令、旧 schema 和“账户没有独立 confirmation”的陈述仅描述
+> `2026-07-26` 基线，不得复制或执行。当前证据见
+> `.scratch/trading-discipline-kernel/evidence/01-account-snapshot-version.md`。
 
 ## 1. 一页执行摘要
 

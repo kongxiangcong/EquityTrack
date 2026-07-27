@@ -10,11 +10,22 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
-from trading_platform.account_import import SCHEMAS, TonghuashunImportPreviewer
+from trading_platform.account_import import TonghuashunImportPreviewer
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence import PlatformStore
 from trading_platform.persistence.locking import PersistenceError
 from trading_platform.application.workflow_ledger import GenericObjectCommit
+from trading_platform.application.account_snapshots import (
+    AccountSnapshotCommands,
+    CreateAccountSnapshotDraft,
+    GetAccountSnapshot,
+)
+from trading_platform.domain.account_snapshots import (
+    AccountSnapshotDraft,
+    AccountSnapshotPosition,
+    AccountSnapshotService,
+)
+from trading_platform.persistence.account_snapshots import SQLiteAccountSnapshotRepository
 
 
 class AccountOpeningError(RuntimeError):
@@ -26,37 +37,16 @@ class AccountOpeningError(RuntimeError):
 class AccountOpeningResult:
     account_id: str
     import_batch_id: str
-    portfolio_snapshot_id: str
-    confirmed_as_of: str
-    cash_decimal: str
-    position_ids: tuple[str, ...]
+    account_snapshot_draft_id: str
+    selected_as_of: str
     quality_issue_count: int
     limitations: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class AccountPositionView:
-    position_id: str
-    security_id: str
-    source_display_name: str
-    quantity_decimal: str
-    available_decimal: str
-    frozen_decimal: str
-    cost_price_decimal: str
-    currency: str
-    source_type: str
-    source_row_identity: str
-    source_price_decimal: str
-    source_market_value_decimal: str
-    source_day_pnl_decimal: str
-    source_weight_decimal: str
-    source_as_of: str
-
-
-@dataclass(frozen=True)
 class AccountOpeningDetail:
     opening: AccountOpeningResult
-    positions: tuple[AccountPositionView, ...]
+    draft: AccountSnapshotDraft
     source_objects: tuple[dict[str, object], ...]
 
 
@@ -79,8 +69,8 @@ class AccountOpeningService:
     def __init__(self, data_root: Path, repo_root: Path, migrations_root: Path | None = None) -> None:
         self.data_root = data_root.resolve(); self.repo_root = repo_root.resolve(); self.migrations_root = (migrations_root or self.repo_root / "migrations").resolve()
 
-    def initialize(self, invocation_id: str, sources: Iterable[Path], account_alias: str, base_currency: str, confirmed_as_of: str, private_root: Path, trading_sessions: Iterable[str]) -> AccountOpeningResult:
-        try: date.fromisoformat(confirmed_as_of)
+    def initialize(self, invocation_id: str, sources: Iterable[Path], account_alias: str, base_currency: str, selected_as_of: str, private_root: Path, trading_sessions: Iterable[str]) -> AccountOpeningResult:
+        try: date.fromisoformat(selected_as_of)
         except ValueError as error: raise AccountOpeningError("ACCOUNT_AS_OF_INVALID") from error
         source_paths = tuple(Path(path).resolve() for path in sources)
         for preview_retry in range(40):
@@ -89,15 +79,15 @@ class AccountOpeningService:
             except PermissionError:
                 if preview_retry == 39: raise
                 time.sleep(0.05)
-        if confirmed_as_of not in preview.current_positions_as_of.candidate_dates: raise AccountOpeningError("ACCOUNT_AS_OF_NOT_CONFIRMED_CANDIDATE")
+        if selected_as_of not in preview.current_positions_as_of.candidate_dates: raise AccountOpeningError("ACCOUNT_AS_OF_NOT_QUALIFIED_CANDIDATE")
         rows = self._rows(preview, private_root)
-        snapshot_hash = canonical_hash({"sources": sorted(item.source_object_sha256 for item in preview.files), "as_of": confirmed_as_of, "currency": base_currency})
+        snapshot_hash = canonical_hash({"sources": sorted(item.source_object_sha256 for item in preview.files), "as_of": selected_as_of, "currency": base_currency})
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
             existing = store.connection.execute("SELECT account_id FROM account_import_batch WHERE invocation_id=? OR source_snapshot_hash=?", (invocation_id, snapshot_hash)).fetchone()
             if existing: return self._result(store.connection, existing[0])
             try:
-                return self._commit(store, invocation_id, preview, base_currency, confirmed_as_of, snapshot_hash, rows, private_root)
+                return self._commit(store, invocation_id, preview, base_currency, selected_as_of, snapshot_hash, rows, private_root)
             except PersistenceError as error:
                 if error.code != "RUNTIME_BUSY": raise
                 for _ in range(40):
@@ -120,9 +110,12 @@ class AccountOpeningService:
         opening = self.get(account_id)
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
-            rows = store.connection.execute("SELECT p.position_id,p.security_id,p.source_display_name,p.quantity_decimal,p.available_decimal,p.frozen_decimal,l.cost_price_decimal,l.currency,l.source_type,l.source_row_identity,o.source_price_decimal,o.source_market_value_decimal,o.source_day_pnl_decimal,o.source_weight_decimal,o.source_as_of FROM account_position p JOIN account_position_lot l USING(position_id) JOIN account_position_observation o USING(position_id) WHERE p.account_id=? ORDER BY p.position_id", (account_id,)).fetchall()
             sources=tuple(dict(row) for row in store.connection.execute("SELECT source_role,source_schema_version,object_sha256,row_count FROM account_import_source WHERE import_batch_id=? ORDER BY source_role",(opening.import_batch_id,)))
-            return AccountOpeningDetail(opening, tuple(AccountPositionView(*tuple(row)) for row in rows), sources)
+            draft = SQLiteAccountSnapshotRepository(
+                store.connection, store.writer_lock
+            ).get(GetAccountSnapshot(draft_id=opening.account_snapshot_draft_id))
+            assert isinstance(draft, AccountSnapshotDraft)
+            return AccountOpeningDetail(opening, draft, sources)
         finally: store.close()
 
     def _commit(self, store: PlatformStore, invocation: str, preview, currency: str, as_of: str, snapshot_hash: str, rows: dict[str, list[list[str]]], private_root: Path) -> AccountOpeningResult:
@@ -166,8 +159,8 @@ class AccountOpeningService:
         for item in prepared:
             expected = item[9] / total * Decimal(100)
             if abs(expected - item[11]) > Decimal("0.01"): raise AccountOpeningError("POSITION_WEIGHT_RECONCILIATION_FAILED")
-        account_id=f"account_{snapshot_hash[:24]}"; batch_id=f"account_import_{snapshot_hash[:24]}"; portfolio_id=f"portfolio_snapshot_{snapshot_hash[:24]}"; now=datetime.now(timezone.utc).isoformat()
-        evidence={"schema_version":"AccountOpeningEvidence@1","confirmation":{"invocation_id":invocation,"confirmed_at":now,"account_alias":alias,"base_currency":currency,"confirmed_as_of":as_of,"candidates":asdict(preview.current_positions_as_of)},"cash_rule":"latest_date_then_file_occurrence_order","cash_source_row_identity":cash_row_id,"cash_source_date":latest_date,"source_snapshot_hash":snapshot_hash,"sources":[{"role":item.role,"sha256":item.source_object_sha256,"schema":item.source_schema_version,"rows":item.row_count} for item in preview.files],"quality_issue_count":len(issues),"limitations":self.LIMITATIONS}
+        account_id=f"account_{snapshot_hash[:24]}"; batch_id=f"account_import_{snapshot_hash[:24]}"; draft_id=f"account_snapshot_draft_{snapshot_hash[:24]}"; now=datetime.now(timezone.utc).isoformat()
+        evidence={"schema_version":"CurrentExportDraftEvidence@1","qualification":{"invocation_id":invocation,"qualified_at":now,"account_alias":alias,"base_currency":currency,"selected_as_of":as_of,"candidates":asdict(preview.current_positions_as_of)},"cash_rule":"latest_date_then_file_occurrence_order","cash_source_row_identity":cash_row_id,"cash_source_date":latest_date,"source_snapshot_hash":snapshot_hash,"sources":[{"role":item.role,"sha256":item.source_object_sha256,"schema":item.source_schema_version,"rows":item.row_count} for item in preview.files],"quality_issue_count":len(issues),"limitations":self.LIMITATIONS}
         try:
             with store.writer_lock.acquire(f"account-opening:{account_id}"):
                 replay = store.connection.execute("SELECT account_id FROM account_import_batch WHERE invocation_id=? OR source_snapshot_hash=?", (invocation, snapshot_hash)).fetchone()
@@ -177,7 +170,7 @@ class AccountOpeningService:
                 store.connection.execute("INSERT INTO account_import_batch VALUES(?,?,?,?,?,?,?)",(batch_id,account_id,invocation,as_of,snapshot_hash,"warning" if issues else "pass",json.dumps(evidence,sort_keys=True)))
                 for item in preview.files: store.connection.execute("INSERT INTO account_import_source VALUES(?,?,?,?,?)",(batch_id,item.role,item.source_schema_version,item.source_object_sha256,item.row_count))
                 store.connection.execute("INSERT INTO account_cash_opening VALUES(?,?,?,?,?,?)",(account_id,_render(cash),currency,cash_row_id,datetime.strptime(latest_date,"%Y%m%d").date().isoformat(),as_of))
-                position_ids=[]
+                draft_positions = []
                 for item in prepared:
                     _,market,code,display_name,quantity,available,frozen,cost,price,value,pnl,weight,row_id=item
                     valid = store.connection.execute("SELECT security_id FROM security_identifier WHERE market=? AND code=? AND valid_from<=? AND (valid_to IS NULL OR valid_to>?)",(market,code,as_of,as_of)).fetchall()
@@ -186,22 +179,69 @@ class AccountOpeningService:
                     else:
                         if store.connection.execute("SELECT 1 FROM security_identifier WHERE market=? AND code=?",(market,code)).fetchone(): raise AccountOpeningError("SECURITY_IDENTIFIER_NOT_VALID_AT_AS_OF")
                         security_id=f"security_{canonical_hash({'market':market,'code':code,'valid_from':as_of})[:24]}"; store.connection.execute("INSERT INTO security VALUES(?,?)",(security_id,currency)); identifier_id=f"security_identifier_{canonical_hash({'security':security_id,'market':market,'code':code,'from':as_of})[:24]}"; store.connection.execute("INSERT INTO security_identifier VALUES(?,?,?,?,?,?,?,?)",(identifier_id,security_id,market,code,as_of,"date",None,None))
-                    position_id=f"position_{canonical_hash({'account':account_id,'security':security_id})[:24]}"; lot_id=f"position_lot_{canonical_hash({'position':position_id,'source':row_id})[:24]}"; position_ids.append(position_id)
-                    store.connection.execute("INSERT INTO account_position VALUES(?,?,?,?,?,?,?,?)",(position_id,account_id,security_id,display_name,_render(quantity),_render(available),_render(frozen),"opening_snapshot"))
-                    store.connection.execute("INSERT INTO account_position_lot VALUES(?,?,?,?,?,?,?)",(lot_id,position_id,_render(quantity),_render(cost),currency,"opening_snapshot",row_id))
-                    store.connection.execute("INSERT INTO account_position_observation VALUES(?,?,?,?,?,?)",(position_id,_render(price),_render(value),_render(pnl),_render(weight),as_of))
+                    draft_positions.append(
+                        AccountSnapshotPosition(
+                            security_id=security_id,
+                            total_quantity=_render(quantity),
+                            available_quantity_state="known",
+                            available_quantity_value=_render(available),
+                            cost_state="known",
+                            cost_value=_render(cost),
+                            market_value_state="known",
+                            market_value_value=_render(value),
+                        )
+                    )
                 for sequence,row,delta in issues:
                     row_id=canonical_hash({"source_object":source_items["cash_ledger"].source_object_sha256,"role":"cash_ledger","sequence":sequence,"row":row}); issue_id=f"account_quality_{canonical_hash({'batch':batch_id,'row':row_id})[:24]}"
                     store.connection.execute("INSERT INTO account_import_quality_issue VALUES(?,?,?,?,?)",(issue_id,batch_id,"CASH_RUNNING_BALANCE_JUMP",row_id,json.dumps({"delta":_render(delta)},sort_keys=True)))
-                store.connection.execute("INSERT INTO portfolio_snapshot VALUES(?,?,?,?,?,?,?,?,?)",(portfolio_id,account_id,as_of,_render(cash),_render(market_value),_render(total),"reconciled",snapshot_hash,json.dumps(self.LIMITATIONS)))
+                draft = AccountSnapshotDraft(
+                    draft_id=draft_id,
+                    account_id=account_id,
+                    revision=1,
+                    status="open",
+                    source_kind="broker_current_export",
+                    redacted_source_ref=f"account-import:{batch_id}",
+                    as_of_at=as_of,
+                    as_of_precision="date",
+                    timezone="Asia/Shanghai",
+                    session_semantics="complete_session",
+                    currency=currency,
+                    cash_state="known",
+                    cash_value=_render(cash),
+                    positions=tuple(sorted(draft_positions,key=lambda item:item.security_id)),
+                    nav_state="known",
+                    nav_value=_render(total),
+                    fees_state="unknown",
+                    fees_value=None,
+                    created_by="adapter:account-current-export",
+                )
+                AccountSnapshotCommands(
+                    SQLiteAccountSnapshotRepository(store.connection,store.writer_lock),
+                    AccountSnapshotService(),
+                ).execute(
+                    CreateAccountSnapshotDraft(
+                        invocation_id=f"{invocation}:snapshot-draft",
+                        draft=draft,
+                        decision_actor_type="user",
+                        decision_actor_id="local-user",
+                        interaction_channel="cli",
+                        transport_actor_type="adapter",
+                        transport_actor_id="account-current-export",
+                    )
+                )
                 store.connection.commit()
         except Exception:
             store.connection.rollback(); raise
-        return AccountOpeningResult(account_id,batch_id,portfolio_id,as_of,_render(cash),tuple(sorted(position_ids)),len(issues),self.LIMITATIONS)
+        return AccountOpeningResult(account_id,batch_id,draft_id,as_of,len(issues),self.LIMITATIONS)
 
     def _result(self, connection: sqlite3.Connection, account_id: str) -> AccountOpeningResult:
-        account=connection.execute("SELECT * FROM account_import_batch WHERE account_id=?",(account_id,)).fetchone(); cash=connection.execute("SELECT * FROM account_cash_opening WHERE account_id=?",(account_id,)).fetchone(); portfolio=connection.execute("SELECT * FROM portfolio_snapshot WHERE account_id=?",(account_id,)).fetchone(); positions=tuple(row[0] for row in connection.execute("SELECT position_id FROM account_position WHERE account_id=? ORDER BY position_id",(account_id,))); count=connection.execute("SELECT count(*) FROM account_import_quality_issue WHERE import_batch_id=?",(account["import_batch_id"],)).fetchone()[0]
-        return AccountOpeningResult(account_id,account["import_batch_id"],portfolio["portfolio_snapshot_id"],account["confirmed_as_of"],cash["amount_decimal"],positions,count,tuple(json.loads(portfolio["limitations_json"])))
+        account=connection.execute("SELECT * FROM account_import_batch WHERE account_id=? ORDER BY rowid DESC LIMIT 1",(account_id,)).fetchone()
+        if account is None: raise AccountOpeningError("ACCOUNT_NOT_FOUND")
+        draft=connection.execute("SELECT draft_id,content_json FROM account_snapshot_draft WHERE account_id=? AND source_kind='broker_current_export' ORDER BY created_at DESC LIMIT 1",(account_id,)).fetchone()
+        if draft is None: raise AccountOpeningError("ACCOUNT_SNAPSHOT_DRAFT_NOT_FOUND")
+        count=connection.execute("SELECT count(*) FROM account_import_quality_issue WHERE import_batch_id=?",(account["import_batch_id"],)).fetchone()[0]
+        content=json.loads(draft["content_json"])
+        return AccountOpeningResult(account_id,account["import_batch_id"],draft["draft_id"],content["as_of_at"],count,self.LIMITATIONS)
 
     @staticmethod
     def _read_private_object(private_root: Path, digest: str) -> bytes:
@@ -233,4 +273,4 @@ class AccountOpeningService:
         return result
 
 
-__all__=["AccountOpeningDetail","AccountOpeningError","AccountOpeningResult","AccountOpeningService","AccountPositionView"]
+__all__=["AccountOpeningDetail","AccountOpeningError","AccountOpeningResult","AccountOpeningService"]

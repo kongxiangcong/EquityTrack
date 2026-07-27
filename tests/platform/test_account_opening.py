@@ -115,15 +115,15 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
 
     assert replay == result == same_source
     assert (
-        result.cash_decimal == "1100"
-        and len(result.position_ids) == 2
+        result.selected_as_of == "2026-07-10"
         and result.quality_issue_count == 4
     )
     detail = service.get_detail(result.account_id)
-    assert detail.opening == result and {
-        item.source_type for item in detail.positions
-    } == {"opening_snapshot"}
-    assert {item.cost_price_decimal for item in detail.positions} == {"8", "18"}
+    assert detail.opening == result
+    assert detail.draft.status == "open"
+    assert detail.draft.cash_value == "1100"
+    assert len(detail.draft.positions) == 2
+    assert {item.cost_value for item in detail.draft.positions} == {"8", "18"}
     composition = PlatformTaskFixture(tmp_path / "data")
     assert composition.accounts.get_detail(result.account_id) == detail
     composition.close()
@@ -134,7 +134,7 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
     assert connection.execute("SELECT count(*) FROM account").fetchone()[0] == 1
     assert (
         connection.execute(
-            "SELECT count(*) FROM account_position_lot WHERE source_type='opening_snapshot'"
+            "SELECT count(*) FROM account_snapshot_draft_position"
         ).fetchone()[0]
         == 2
     )
@@ -151,15 +151,16 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
         == 0
     )
     assert connection.execute(
-        "SELECT reconciliation_status,total_equity_decimal FROM portfolio_snapshot"
-    ).fetchone()[:] == ("reconciled", "6100")
+        "SELECT count(*) FROM account_snapshot_version"
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT count(*) FROM portfolio_snapshot"
+    ).fetchone()[0] == 0
     connection.close()
     chart = chart_root(tmp_path / "data")
-    security_id = detail.positions[0].security_id
+    security_id = detail.draft.positions[0].security_id
     workspace = chart.workspace.build(security_id, "snapshot_chart")
-    assert workspace["account_opening_state"][0]["limitations"] == list(
-        result.limitations
-    )
+    assert workspace["account_opening_state"] == []
     server = LocalChartWorkspaceServer(
         decision_workspace=chart.workspace,
         chart_workspace=chart.chart,
@@ -175,7 +176,7 @@ def test_atomic_opening_state_is_exact_idempotent_and_survives_restart(
 
     base = server.start()
     payload = json.loads(urlopen(base + "/api/workspace").read())
-    assert payload["account_opening_state"][0]["source_type"] == "opening_snapshot"
+    assert payload["account_opening_state"] == []
     server.close()
     chart.close()
     archive = tmp_path / "opening.zip"
@@ -244,7 +245,7 @@ def test_mid_commit_failure_leaves_no_partial_account(tmp_path: Path) -> None:
     store = PlatformStore(tmp_path / "data", Path.cwd() / "migrations")
     store.migrate()
     store.connection.execute(
-        "CREATE TRIGGER reject_portfolio BEFORE INSERT ON portfolio_snapshot BEGIN SELECT RAISE(ABORT,'INJECTED'); END"
+        "CREATE TRIGGER reject_draft BEFORE INSERT ON account_snapshot_draft BEGIN SELECT RAISE(ABORT,'INJECTED'); END"
     )
     store.connection.commit()
     store.close()
@@ -266,9 +267,9 @@ def test_mid_commit_failure_leaves_no_partial_account(tmp_path: Path) -> None:
         for table in (
             "account",
             "account_import_batch",
-            "account_position",
-            "account_position_lot",
-            "portfolio_snapshot",
+            "account_snapshot_draft",
+            "account_snapshot_draft_position",
+            "account_snapshot_version",
         )
     ] == [0, 0, 0, 0, 0]
     connection.close()
@@ -301,8 +302,8 @@ def test_existing_identifier_history_wins_over_display_name(tmp_path: Path) -> N
     )
     position = next(
         item
-        for item in detail.positions
-        if item.source_display_name == "名称不参与身份"
+        for item in detail.draft.positions
+        if item.total_quantity == "100"
     )
     assert position.security_id == "security_existing"
 
@@ -421,8 +422,8 @@ def test_identifier_rollover_uses_half_open_validity_interval(tmp_path: Path) ->
     assert (
         next(
             item
-            for item in detail.positions
-            if item.source_display_name == "名称不参与身份"
+            for item in detail.draft.positions
+            if item.total_quantity == "100"
         ).security_id
         == "security_new"
     )
@@ -449,7 +450,7 @@ def test_rows_without_trailing_tab_match_preview_contract(tmp_path: Path) -> Non
                 tmp_path / "private",
                 ("2026-07-10",),
             )
-            .position_ids
+            .account_snapshot_draft_id
         )
-        == 2
+        > 0
     )

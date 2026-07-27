@@ -13,7 +13,7 @@ from typing import NoReturn
 
 from trading_platform.application import (
     open_acceptance_evidence,
-    open_account,
+    open_account_current_export,
     open_account_acceptance,
     open_account_history,
     open_daily_research_cycle,
@@ -131,17 +131,17 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--private-root", type=Path)
     preview.add_argument("--trading-session", action="append", default=[])
     preview.add_argument("--repo-root", type=Path, default=Path.cwd())
-    initialize = sub.add_parser("account-initialize")
+    initialize = sub.add_parser("account-current-export-draft")
     initialize.add_argument("--data-root", type=Path, required=True)
     initialize.add_argument("--source", type=Path, action="append", required=True)
     initialize.add_argument("--account-alias", required=True)
     initialize.add_argument("--base-currency", required=True)
-    initialize.add_argument("--confirmed-as-of", required=True)
+    initialize.add_argument("--selected-as-of", required=True)
     initialize.add_argument("--private-root", type=Path, required=True)
     initialize.add_argument("--trading-session", action="append", required=True)
     initialize.add_argument("--invocation-id", required=True)
     initialize.add_argument("--repo-root", type=Path, default=Path.cwd())
-    account_show = sub.add_parser("account-show")
+    account_show = sub.add_parser("account-current-export-draft-show")
     account_show.add_argument("--data-root", type=Path, required=True)
     account_show.add_argument("--account-id", required=True)
     account_show.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -328,21 +328,21 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 .to_safe_dict()
             )
-        elif operation == "account-initialize":
+        elif operation == "account-current-export-draft":
             result = asdict(
-                open_account(args.data_root, args.repo_root).initialize(
+                open_account_current_export(args.data_root, args.repo_root).initialize(
                     args.invocation_id,
                     args.source,
                     args.account_alias,
                     args.base_currency,
-                    args.confirmed_as_of,
+                    args.selected_as_of,
                     args.private_root,
                     args.trading_session,
                 )
             )
-        elif operation == "account-show":
+        elif operation == "account-current-export-draft-show":
             result = asdict(
-                open_account(args.data_root, args.repo_root).get_detail(args.account_id)
+                open_account_current_export(args.data_root, args.repo_root).get_detail(args.account_id)
             )
         elif operation == "account-history-import":
             result = asdict(

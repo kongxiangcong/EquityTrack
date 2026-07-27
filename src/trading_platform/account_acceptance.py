@@ -22,7 +22,12 @@ class AccountAcceptanceService:
         store = PlatformStore(self.data_root, self.migrations_root)
         try:
             opening = store.connection.execute(
-                "SELECT b.import_batch_id,b.confirmed_as_of,p.portfolio_snapshot_id,p.reconciliation_status FROM account_import_batch b JOIN portfolio_snapshot p USING(account_id) WHERE b.account_id=?",
+                "SELECT b.import_batch_id,b.confirmed_as_of AS snapshot_as_of,"
+                "v.account_snapshot_version_id,'confirmed' AS reconciliation_status "
+                "FROM account_import_batch b "
+                "JOIN account_snapshot_projection_checkpoint c USING(account_id) "
+                "JOIN account_snapshot_version v USING(account_snapshot_version_id) "
+                "WHERE b.account_id=?",
                 (account_id,),
             ).fetchone()
             history = store.connection.execute(
@@ -56,11 +61,17 @@ class AccountAcceptanceService:
                 (account_id,),
             ).fetchone()
             opening_cash = store.connection.execute(
-                "SELECT amount_decimal FROM account_cash_opening WHERE account_id=?",
+                "SELECT s.cash_value FROM account_snapshot_projection_checkpoint c "
+                "JOIN account_snapshot_cash s USING(account_snapshot_version_id) "
+                "WHERE c.account_id=? AND s.cash_state='known'",
                 (account_id,),
             ).fetchone()
             position_check = store.connection.execute(
-                "SELECT count(*),sum(CASE WHEN CAST(quantity_decimal AS NUMERIC)=CAST(available_decimal AS NUMERIC)+CAST(frozen_decimal AS NUMERIC) THEN 0 ELSE 1 END) FROM account_position WHERE account_id=?",
+                "SELECT count(*),sum(CASE WHEN CAST(total_quantity AS NUMERIC)>=0 "
+                "THEN 0 ELSE 1 END) "
+                "FROM account_snapshot_projection_checkpoint c "
+                "JOIN account_snapshot_position p USING(account_snapshot_version_id) "
+                "WHERE c.account_id=?",
                 (account_id,),
             ).fetchone()
             artifact_refs = []
