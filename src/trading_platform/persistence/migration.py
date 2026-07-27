@@ -294,6 +294,9 @@ class MigrationRunner:
         parsed_mappings: dict[str, tuple[str, str, str]] = {}
         converted_rules: list[tuple[str, int, str, str]] = []
         converted_versions: list[tuple[str, str, str]] = []
+        converted_approvals: list[
+            tuple[str, str, str, str, str, str]
+        ] = []
         for item in mapping["plans"]:
             if not isinstance(item, dict):
                 block("A legacy sleeve mapping entry is invalid.")
@@ -543,15 +546,24 @@ class MigrationRunner:
                     row["plan_version_id"], []
                 ).append(rule.content_hash)
             try:
+                from trading_platform.domain.approvals import (
+                    ActivationIntent,
+                    CanonicalPlanDiff,
+                    PlanConfirmationChallenge,
+                    UserApprovalReceipt,
+                )
                 from trading_platform.domain.plans import PlanGraphSeal
                 from trading_platform.identity import canonical_hash
 
-                for version in self.connection.execute(
+                plan_versions = tuple(
+                    self.connection.execute(
                     "SELECT plan_version_id,content_json "
                     "FROM trade_plan_version WHERE plan_id=? "
                     "ORDER BY version_no",
                     (plan_id,),
-                ):
+                    )
+                )
+                for version in plan_versions:
                     plan_version_id = version["plan_version_id"]
                     content_hash = canonical_hash(
                         json.loads(version["content_json"])
@@ -607,6 +619,117 @@ class MigrationRunner:
                             seal.graph_seal_hash,
                         )
                     )
+                open_activation = self.connection.execute(
+                    "SELECT plan_version_id FROM plan_activation "
+                    "WHERE plan_id=? AND ended_at IS NULL",
+                    (plan_id,),
+                ).fetchone()
+                latest_version_id = (
+                    open_activation["plan_version_id"]
+                    if open_activation is not None
+                    else plan_versions[-1]["plan_version_id"]
+                )
+                _, latest_content_hash, latest_graph_hash = next(
+                    item
+                    for item in converted_versions
+                    if item[0] == latest_version_id
+                )
+                diff = CanonicalPlanDiff.build(
+                    based_on_graph_seal_hash=None,
+                    proposed_graph_seal_hash=latest_graph_hash,
+                    changed_components=(
+                        "evidence",
+                        "rules",
+                        "sleeves",
+                        "version",
+                    ),
+                )
+                suffix = hashlib.sha256(
+                    str(plan_id).encode("utf-8")
+                ).hexdigest()[:24]
+                challenge_id = (
+                    f"plan_confirmation_challenge_migration_{suffix}"
+                )
+                receipt_id = (
+                    f"user_approval_receipt_migration_{suffix}"
+                )
+                challenge_prototype = PlanConfirmationChallenge(
+                    challenge_id=challenge_id,
+                    plan_id=str(plan_id),
+                    draft_id=(
+                        f"trade_plan_draft_migration_{suffix}"
+                    ),
+                    expected_revision=1,
+                    expected_draft_hash=latest_content_hash,
+                    expected_graph_seal_hash=latest_graph_hash,
+                    canonical_diff=diff,
+                    activation_intent=(
+                        ActivationIntent.CONFIRM_AND_ACTIVATE
+                    ),
+                    decision_actor=str(approved_by),
+                    interaction_channel="cli",
+                    transport_actor="adapter:migration-0016",
+                    issued_at=str(approved_at),
+                    expires_at=None,
+                    status="consumed",
+                    content_hash="",
+                )
+                challenge_hash = canonical_hash(
+                    challenge_prototype.identity_payload()
+                )
+                receipt_prototype = UserApprovalReceipt(
+                    approval_receipt_id=receipt_id,
+                    challenge_id=challenge_id,
+                    plan_id=str(plan_id),
+                    draft_id=(
+                        f"trade_plan_draft_migration_{suffix}"
+                    ),
+                    approved_revision=1,
+                    approved_draft_hash=latest_content_hash,
+                    approved_graph_seal_hash=latest_graph_hash,
+                    approved_diff_hash=diff.content_hash,
+                    activation_intent=(
+                        ActivationIntent.CONFIRM_AND_ACTIVATE
+                    ),
+                    decision_actor=str(approved_by),
+                    interaction_channel="cli",
+                    transport_actor="adapter:migration-0016",
+                    command_invocation_id=(
+                        f"migration-0016:approve:{plan_id}"
+                    ),
+                    approved_at=str(approved_at),
+                    content_hash="",
+                )
+                receipt_hash = canonical_hash(
+                    receipt_prototype.identity_payload()
+                )
+                converted_approvals.append(
+                    (
+                        str(plan_id),
+                        latest_version_id,
+                        json.dumps(
+                            {
+                                "schema_version": diff.schema_version,
+                                "based_on_graph_seal_hash": (
+                                    diff.based_on_graph_seal_hash
+                                ),
+                                "proposed_graph_seal_hash": (
+                                    diff.proposed_graph_seal_hash
+                                ),
+                                "changed_components": (
+                                    diff.changed_components
+                                ),
+                                "content_hash": diff.content_hash,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        diff.content_hash,
+                        challenge_hash,
+                        receipt_hash,
+                    )
+                )
             except (json.JSONDecodeError, TypeError) as error:
                 raise PersistenceError(
                     "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
@@ -689,6 +812,19 @@ class MigrationRunner:
         self.connection.executemany(
             "INSERT INTO migration_0016_version_conversion VALUES(?,?,?)",
             converted_versions,
+        )
+        self.connection.execute(
+            "CREATE TEMP TABLE migration_0016_approval_conversion("
+            "plan_id TEXT PRIMARY KEY,"
+            "target_plan_version_id TEXT NOT NULL,"
+            "diff_json TEXT NOT NULL,"
+            "diff_hash TEXT NOT NULL,challenge_hash TEXT NOT NULL,"
+            "receipt_hash TEXT NOT NULL)"
+        )
+        self.connection.executemany(
+            "INSERT INTO migration_0016_approval_conversion "
+            "VALUES(?,?,?,?,?,?)",
+            converted_approvals,
         )
 
         inconsistent_activation = self.connection.execute(

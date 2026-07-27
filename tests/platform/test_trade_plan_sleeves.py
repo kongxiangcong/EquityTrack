@@ -11,7 +11,6 @@ from trading_platform.domain.plans import (
     GridSleeve,
     PlanValidationError,
     PositionSleeveKind,
-    TradePlanMaster,
     TradePlanMasterId,
     TradePlanRule,
     build_plan_version,
@@ -27,12 +26,9 @@ from trading_platform.domain.rules import (
     RuleScope,
 )
 from trading_platform.application import (
-    CreateTradePlanMaster,
     GetTradePlanGraph,
-    SealTradePlanGraph,
     open_trade_plan,
 )
-from trading_platform.identity import canonical_hash
 from trading_platform.domain.strategies import (
     CorePlusGridParameters,
     StrategyContractError,
@@ -40,7 +36,7 @@ from trading_platform.domain.strategies import (
 )
 from tests.platform.test_trade_plan_model_b import (
     _authority_root,
-    _seed_approval,
+    _confirm_graph,
 )
 
 
@@ -232,27 +228,6 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
         "purpose": "core-grid-round-trip",
     }
     with open_trade_plan(data_root) as tasks:
-        tasks.execute(
-            CreateTradePlanMaster(
-                TradePlanMaster(
-                    plan_id=plan_id,
-                    strategy_version_id=(
-                        "strategy_version_core_plus_grid_1"
-                    ),
-                    lifecycle_status="inactive",
-                    transition_seq=0,
-                    created_at="2026-07-27T00:00:00+08:00",
-                )
-            )
-        )
-        connection = sqlite3.connect(data_root / "platform.sqlite3")
-        receipt = _seed_approval(
-            connection,
-            plan_id=plan_id.value,
-            suffix="core_grid_round_trip",
-            content_hash=canonical_hash(content),
-        )
-        connection.close()
         rule = TradePlanRule.build(
             rule_id="rule_core_grid_round_trip",
             rule_class=RuleClass.HARD,
@@ -292,9 +267,11 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
             evidence_references=(),
             adjusted_price_evidence=(),
             confirmed_at="2026-07-27T00:00:00+08:00",
-            user_approval_receipt_id=receipt,
+            user_approval_receipt_id="pending-user-approval",
         )
-        sealed = tasks.execute(SealTradePlanGraph(graph))
+        sealed = _confirm_graph(
+            tasks, graph, "core_grid_round_trip"
+        ).graph
         assert tasks.get(
             GetTradePlanGraph(graph.version.plan_version_id)
         ) == sealed

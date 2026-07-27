@@ -131,9 +131,11 @@ CREATE TABLE trade_plan_draft (
   strategy_version_id TEXT NOT NULL REFERENCES strategy_version(strategy_version_id),
   based_on_version_id TEXT,
   revision INTEGER NOT NULL CHECK(revision > 0),
-  status TEXT NOT NULL CHECK(status IN ('open','rejected','confirmed')),
+  status TEXT NOT NULL CHECK(status IN ('open','rejected','discarded','confirmed')),
   parameters_json TEXT NOT NULL,
   content_json TEXT NOT NULL,
+  proposed_graph_json TEXT NOT NULL,
+  proposed_graph_seal_hash TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -152,10 +154,11 @@ CREATE TABLE user_approval_receipt (
   challenge_id TEXT NOT NULL UNIQUE,
   plan_id TEXT NOT NULL REFERENCES trade_plan_master(plan_id),
   draft_id TEXT NOT NULL REFERENCES trade_plan_draft(draft_id),
-  expected_revision INTEGER NOT NULL CHECK(expected_revision > 0),
-  expected_content_hash TEXT NOT NULL,
-  canonical_diff_hash TEXT NOT NULL,
-  activation_intent TEXT NOT NULL CHECK(activation_intent IN ('confirm_and_enable','confirm_without_enable')),
+  approved_revision INTEGER NOT NULL CHECK(approved_revision > 0),
+  approved_draft_hash TEXT NOT NULL,
+  approved_graph_seal_hash TEXT NOT NULL,
+  approved_diff_hash TEXT NOT NULL,
+  activation_intent TEXT NOT NULL CHECK(activation_intent IN ('confirm_only','confirm_and_activate')),
   decision_actor TEXT NOT NULL,
   interaction_channel TEXT NOT NULL,
   transport_actor TEXT NOT NULL,
@@ -327,14 +330,16 @@ CREATE TABLE plan_confirmation_challenge (
   draft_id TEXT NOT NULL REFERENCES trade_plan_draft(draft_id),
   expected_revision INTEGER NOT NULL CHECK(expected_revision > 0),
   expected_content_hash TEXT NOT NULL,
+  expected_graph_seal_hash TEXT NOT NULL,
   canonical_diff_json TEXT NOT NULL,
   canonical_diff_hash TEXT NOT NULL,
-  allowed_activation_intents_json TEXT NOT NULL,
+  activation_intent TEXT NOT NULL CHECK(activation_intent IN ('confirm_only','confirm_and_activate')),
   decision_actor TEXT NOT NULL,
   interaction_channel TEXT NOT NULL,
   transport_actor TEXT NOT NULL,
   issued_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
+  expires_at TEXT,
+  status TEXT NOT NULL CHECK(status IN ('issued','consumed','superseded','cancelled','expired')),
   consumed_at TEXT,
   consumed_by_receipt_id TEXT UNIQUE,
   content_hash TEXT NOT NULL UNIQUE
@@ -410,11 +415,14 @@ INSERT INTO trade_plan_draft
 SELECT
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   m.plan_id,r.account_id,p.security_id,m.strategy_version_id,NULL,1,'confirmed',
-  '{}',v.content_json,qv.content_hash,v.confirmed_at,v.confirmed_at,
-  meta.approved_by,'migration','system:migration-0016'
+  '{}',v.content_json,'{}',qv.graph_seal_hash,qv.content_hash,
+  v.confirmed_at,v.confirmed_at,
+  meta.approved_by,'cli','adapter:migration-0016'
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_legacy_0016 p USING(plan_id)
-JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_approval_conversion a USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v
+  ON v.plan_version_id=a.target_plan_version_id
 JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
@@ -425,16 +433,17 @@ SELECT
   'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   'PlanConfirmationChallenge@1',m.plan_id,
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  1,qv.content_hash,
-  '{"migration":"0016","legacy_mapping":"explicit"}',
-  canonical_sha256('0016-diff:' || m.plan_id || ':' || qv.content_hash),
-  '["confirm_and_enable"]',
-  meta.approved_by,'migration','system:migration-0016',
-  meta.approved_at,meta.approved_at,meta.approved_at,
+  1,qv.content_hash,qv.graph_seal_hash,
+  a.diff_json,a.diff_hash,
+  'confirm_and_activate',
+  meta.approved_by,'cli','adapter:migration-0016',
+  meta.approved_at,NULL,'consumed',meta.approved_at,
   'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  canonical_sha256('0016-challenge:' || m.plan_id || ':' || qv.content_hash || ':' || meta.artifact_hash)
+  a.challenge_hash
 FROM migration_0016_legacy_mapping m
-JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_approval_conversion a USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v
+  ON v.plan_version_id=a.target_plan_version_id
 JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
@@ -446,14 +455,16 @@ SELECT
   'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   m.plan_id,
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  1,qv.content_hash,
-  canonical_sha256('0016-diff:' || m.plan_id || ':' || qv.content_hash),
-  'confirm_and_enable',
-  meta.approved_by,'migration','system:migration-0016',
+  1,qv.content_hash,qv.graph_seal_hash,
+  a.diff_hash,
+  'confirm_and_activate',
+  meta.approved_by,'cli','adapter:migration-0016',
   'migration-0016:approve:' || m.plan_id,meta.approved_at,
-  canonical_sha256('0016-receipt:' || m.plan_id || ':' || qv.content_hash || ':' || meta.artifact_hash)
+  a.receipt_hash
 FROM migration_0016_legacy_mapping m
-JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_approval_conversion a USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v
+  ON v.plan_version_id=a.target_plan_version_id
 JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
@@ -647,7 +658,9 @@ SELECT
   'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   'migration-0016:activate:' || m.plan_id
 FROM migration_0016_legacy_mapping m
-JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_approval_conversion a USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v
+  ON v.plan_version_id=a.target_plan_version_id
 JOIN migration_0016_mapping_meta meta
 WHERE NOT EXISTS(
   SELECT 1 FROM plan_activation_legacy_0016 a
@@ -672,7 +685,9 @@ SELECT
   canonical_sha256('0016-mapped-transition:' || m.plan_id || ':' || meta.artifact_hash)
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_legacy_0016 p USING(plan_id)
-JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_approval_conversion a USING(plan_id)
+JOIN trade_plan_version_legacy_0016 v
+  ON v.plan_version_id=a.target_plan_version_id
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
 
@@ -707,6 +722,7 @@ DROP TABLE migration_0016_legacy_mapping;
 DROP TABLE migration_0016_mapping_meta;
 DROP TABLE migration_0016_rule_conversion;
 DROP TABLE migration_0016_version_conversion;
+DROP TABLE migration_0016_approval_conversion;
 
 CREATE TRIGGER investment_thesis_version_no_update BEFORE UPDATE ON investment_thesis_version
 BEGIN SELECT RAISE(ABORT,'INVESTMENT_THESIS_VERSION_IMMUTABLE'); END;
@@ -816,6 +832,36 @@ WHEN (SELECT count(*) FROM plan_evaluation_evidence
       WHERE plan_evaluation_id=NEW.plan_evaluation_id AND rule_order=NEW.rule_order)
 BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
 CREATE TRIGGER plan_confirmation_challenge_no_delete BEFORE DELETE ON plan_confirmation_challenge
+BEGIN SELECT RAISE(ABORT,'PLAN_CONFIRMATION_CHALLENGE_IMMUTABLE'); END;
+CREATE TRIGGER plan_confirmation_challenge_guard_update
+BEFORE UPDATE ON plan_confirmation_challenge
+WHEN NOT (
+  OLD.status='issued'
+  AND NEW.status IN ('consumed','superseded','cancelled','expired')
+  AND OLD.challenge_id=NEW.challenge_id
+  AND OLD.schema_version=NEW.schema_version
+  AND OLD.plan_id=NEW.plan_id
+  AND OLD.draft_id=NEW.draft_id
+  AND OLD.expected_revision=NEW.expected_revision
+  AND OLD.expected_content_hash=NEW.expected_content_hash
+  AND OLD.expected_graph_seal_hash=NEW.expected_graph_seal_hash
+  AND OLD.canonical_diff_json=NEW.canonical_diff_json
+  AND OLD.canonical_diff_hash=NEW.canonical_diff_hash
+  AND OLD.activation_intent=NEW.activation_intent
+  AND OLD.decision_actor=NEW.decision_actor
+  AND OLD.interaction_channel=NEW.interaction_channel
+  AND OLD.transport_actor=NEW.transport_actor
+  AND OLD.issued_at=NEW.issued_at
+  AND OLD.expires_at IS NEW.expires_at
+  AND OLD.content_hash=NEW.content_hash
+  AND (
+    (NEW.status='consumed' AND NEW.consumed_at IS NOT NULL
+      AND NEW.consumed_by_receipt_id IS NOT NULL)
+    OR
+    (NEW.status<>'consumed' AND NEW.consumed_at IS NULL
+      AND NEW.consumed_by_receipt_id IS NULL)
+  )
+)
 BEGIN SELECT RAISE(ABORT,'PLAN_CONFIRMATION_CHALLENGE_IMMUTABLE'); END;
 CREATE TRIGGER user_approval_receipt_no_update BEFORE UPDATE ON user_approval_receipt
 BEGIN SELECT RAISE(ABORT,'USER_APPROVAL_RECEIPT_IMMUTABLE'); END;

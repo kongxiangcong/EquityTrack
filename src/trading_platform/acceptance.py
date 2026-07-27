@@ -90,6 +90,7 @@ class AcceptanceEvidenceService:
             "tests/platform/test_chart_annotations.py",
         ),
         "application_journey": (
+            "tests/platform/test_plan_confirmation.py",
             "tests/platform/test_research_workflow.py",
             "tests/platform/test_secure_workspace.py",
         ),

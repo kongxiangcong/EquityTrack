@@ -1,31 +1,102 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Mapping, Protocol, TypeAlias
 
+from trading_platform.domain.approvals import (
+    ActivationIntent,
+    PlanConfirmationChallenge,
+    UserApprovalReceipt,
+)
 from trading_platform.domain.plans import (
     ActiveTradePlan,
+    PlanDraftRejected,
+    PlanValidationError,
+    TradePlanDraft,
     TradePlanGraph,
-    TradePlanMaster,
 )
 
 
 @dataclass(frozen=True)
-class CreateTradePlanMaster:
-    master: TradePlanMaster
+class PlanCommandActor:
+    decision_actor: str
+    interaction_channel: str
+    transport_actor: str
+
+    def validate(self, *, confirmation: bool = False) -> None:
+        if (
+            not any(
+                self.decision_actor.startswith(prefix)
+                for prefix in ("user:", "agent:")
+            )
+            or self.interaction_channel not in {"skill", "cli", "web"}
+            or not any(
+                self.transport_actor.startswith(prefix)
+                for prefix in ("user:", "agent:", "adapter:")
+            )
+            or (
+                confirmation
+                and not self.decision_actor.startswith("user:")
+            )
+        ):
+            raise PlanValidationError("PLAN_COMMAND_ACTOR_INVALID")
 
 
 @dataclass(frozen=True)
-class SealTradePlanGraph:
+class CreateTradePlanDraft:
+    invocation_id: str
+    draft: TradePlanDraft
+    actor: PlanCommandActor
+
+
+@dataclass(frozen=True)
+class ReviseTradePlanDraft:
+    invocation_id: str
+    draft_id: str
+    expected_revision: int
+    proposed_graph: TradePlanGraph
+    parameters: Mapping[str, object]
+    updated_at: str
+    actor: PlanCommandActor
+
+
+@dataclass(frozen=True)
+class RejectTradePlanDraft:
+    invocation_id: str
+    draft_id: str
+    expected_revision: int
+    rejected_at: str
+    actor: PlanCommandActor
+
+
+@dataclass(frozen=True)
+class IssuePlanConfirmationChallenge:
+    invocation_id: str
+    draft_id: str
+    expected_revision: int
+    activation_intent: ActivationIntent
+    issued_at: str
+    expires_at: str | None
+    actor: PlanCommandActor
+
+
+@dataclass(frozen=True)
+class ConfirmTradePlanVersion:
+    invocation_id: str
+    challenge_id: str
+    expected_revision: int
+    expected_draft_hash: str
+    expected_diff_hash: str
+    activation_intent: ActivationIntent
+    approved_at: str
+    actor: PlanCommandActor
+
+
+@dataclass(frozen=True)
+class PlanConfirmationResult:
     graph: TradePlanGraph
-
-
-@dataclass(frozen=True)
-class ActivateTradePlanVersion:
-    plan_id: str
-    plan_version_id: str
-    user_approval_receipt_id: str
-    command_invocation_id: str
+    receipt: UserApprovalReceipt
+    active_plan: ActiveTradePlan | None
 
 
 @dataclass(frozen=True)
@@ -40,24 +111,35 @@ class GetTradePlanGraph:
 
 
 TradePlanCommand: TypeAlias = (
-    CreateTradePlanMaster | SealTradePlanGraph | ActivateTradePlanVersion
+    CreateTradePlanDraft
+    | ReviseTradePlanDraft
+    | RejectTradePlanDraft
+    | IssuePlanConfirmationChallenge
+    | ConfirmTradePlanVersion
 )
 TradePlanQuery: TypeAlias = GetActiveTradePlan | GetTradePlanGraph
 
 
 class TradePlanStore(Protocol):
-    def create_master(self, master: TradePlanMaster) -> TradePlanMaster: ...
+    def create_draft(
+        self, command: CreateTradePlanDraft
+    ) -> TradePlanDraft: ...
 
-    def seal_version(self, graph: TradePlanGraph) -> TradePlanGraph: ...
+    def revise_draft(
+        self, command: ReviseTradePlanDraft
+    ) -> TradePlanDraft: ...
 
-    def activate_version(
-        self,
-        *,
-        plan_id: str,
-        plan_version_id: str,
-        user_approval_receipt_id: str,
-        command_invocation_id: str,
-    ) -> ActiveTradePlan: ...
+    def reject_draft(
+        self, command: RejectTradePlanDraft
+    ) -> PlanDraftRejected: ...
+
+    def issue_challenge(
+        self, command: IssuePlanConfirmationChallenge
+    ) -> PlanConfirmationChallenge: ...
+
+    def confirm_plan(
+        self, command: ConfirmTradePlanVersion
+    ) -> PlanConfirmationResult: ...
 
     def get_active_master(
         self, account_id: str, security_id: str
@@ -67,24 +149,33 @@ class TradePlanStore(Protocol):
 
 
 class TradePlanTasks:
-    """Owns complete Model B graph and activation tasks at one seam."""
+    """Owns draft-to-confirmed-plan tasks behind one application seam."""
 
     def __init__(self, store: TradePlanStore) -> None:
         self._store = store
 
     def execute(
         self, command: TradePlanCommand
-    ) -> TradePlanMaster | TradePlanGraph | ActiveTradePlan:
-        if isinstance(command, CreateTradePlanMaster):
-            return self._store.create_master(command.master)
-        if isinstance(command, SealTradePlanGraph):
-            return self._store.seal_version(command.graph)
-        return self._store.activate_version(
-            plan_id=command.plan_id,
-            plan_version_id=command.plan_version_id,
-            user_approval_receipt_id=command.user_approval_receipt_id,
-            command_invocation_id=command.command_invocation_id,
+    ) -> (
+        TradePlanDraft
+        | PlanDraftRejected
+        | PlanConfirmationChallenge
+        | PlanConfirmationResult
+    ):
+        if not command.invocation_id:
+            raise PlanValidationError("COMMAND_INVOCATION_ID_REQUIRED")
+        command.actor.validate(
+            confirmation=isinstance(command, ConfirmTradePlanVersion)
         )
+        if isinstance(command, CreateTradePlanDraft):
+            return self._store.create_draft(command)
+        if isinstance(command, ReviseTradePlanDraft):
+            return self._store.revise_draft(command)
+        if isinstance(command, RejectTradePlanDraft):
+            return self._store.reject_draft(command)
+        if isinstance(command, IssuePlanConfirmationChallenge):
+            return self._store.issue_challenge(command)
+        return self._store.confirm_plan(command)
 
     def get(
         self, query: TradePlanQuery
@@ -97,10 +188,14 @@ class TradePlanTasks:
 
 
 __all__ = [
-    "ActivateTradePlanVersion",
-    "CreateTradePlanMaster",
+    "ConfirmTradePlanVersion",
+    "CreateTradePlanDraft",
     "GetActiveTradePlan",
     "GetTradePlanGraph",
-    "SealTradePlanGraph",
+    "IssuePlanConfirmationChallenge",
+    "PlanCommandActor",
+    "PlanConfirmationResult",
+    "RejectTradePlanDraft",
+    "ReviseTradePlanDraft",
     "TradePlanTasks",
 ]

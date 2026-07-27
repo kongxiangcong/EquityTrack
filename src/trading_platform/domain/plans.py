@@ -277,6 +277,7 @@ class TradePlanDraft:
     status: str
     parameters: Mapping[str, object]
     content: Mapping[str, object]
+    proposed_graph: "TradePlanGraph"
     content_hash: str
     created_at: str
     updated_at: str
@@ -286,6 +287,8 @@ class TradePlanDraft:
     schema_version: str = "TradePlanDraft@1"
 
     def validate(self) -> None:
+        self.proposed_graph.validate()
+        version = self.proposed_graph.version
         if (
             self.schema_version != "TradePlanDraft@1"
             or not self.draft_id
@@ -293,10 +296,24 @@ class TradePlanDraft:
             or not self.security_id
             or not self.strategy_version_id
             or self.revision < 1
-            or self.status not in {"open", "rejected", "confirmed"}
-            or not self.decision_actor
-            or not self.interaction_channel
-            or not self.transport_actor
+            or self.status
+            not in {"open", "rejected", "discarded", "confirmed"}
+            or self.plan_id is None
+            or version.plan_id != self.plan_id
+            or version.strategy_version_id != self.strategy_version_id
+            or version.supersedes_version_id
+            != self.based_on_version_id
+            or version.content != self.content
+            or not any(
+                self.decision_actor.startswith(prefix)
+                for prefix in ("user:", "agent:")
+            )
+            or self.interaction_channel
+            not in {"skill", "cli", "web"}
+            or not any(
+                self.transport_actor.startswith(prefix)
+                for prefix in ("user:", "agent:", "adapter:")
+            )
             or self.content_hash
             != canonical_hash(
                 {
@@ -306,10 +323,58 @@ class TradePlanDraft:
                     "based_on_version_id": self.based_on_version_id,
                     "parameters": self.parameters,
                     "content": self.content,
+                    "proposed_graph": _draft_graph_identity(
+                        self.proposed_graph
+                    ),
                 }
             )
         ):
             raise PlanValidationError("PLAN_DRAFT_INVALID")
+
+
+def build_trade_plan_draft(
+    *,
+    draft_id: str,
+    account_id: str,
+    security_id: str,
+    proposed_graph: "TradePlanGraph",
+    parameters: Mapping[str, object],
+    created_at: str,
+    decision_actor: str,
+    interaction_channel: str,
+    transport_actor: str,
+) -> TradePlanDraft:
+    version = proposed_graph.version
+    payload = {
+        "account_id": account_id,
+        "security_id": security_id,
+        "strategy_version_id": version.strategy_version_id,
+        "based_on_version_id": version.supersedes_version_id,
+        "parameters": parameters,
+        "content": version.content,
+        "proposed_graph": _draft_graph_identity(proposed_graph),
+    }
+    draft = TradePlanDraft(
+        draft_id=draft_id,
+        plan_id=version.plan_id,
+        account_id=account_id,
+        security_id=security_id,
+        strategy_version_id=version.strategy_version_id,
+        based_on_version_id=version.supersedes_version_id,
+        revision=1,
+        status="open",
+        parameters=parameters,
+        content=version.content,
+        proposed_graph=proposed_graph,
+        content_hash=canonical_hash(payload),
+        created_at=created_at,
+        updated_at=created_at,
+        decision_actor=decision_actor,
+        interaction_channel=interaction_channel,
+        transport_actor=transport_actor,
+    )
+    draft.validate()
+    return draft
 
 
 @dataclass(frozen=True)
@@ -563,6 +628,37 @@ class PlanActivation:
 
 
 @dataclass(frozen=True)
+class PlanVersionConfirmed:
+    event_id: str
+    plan_id: str
+    plan_version_id: str
+    approval_receipt_id: str
+    occurred_at: str
+    schema_version: str = "PlanVersionConfirmed@1"
+
+
+@dataclass(frozen=True)
+class PlanActivated:
+    event_id: str
+    plan_id: str
+    plan_version_id: str
+    activation_id: str
+    approval_receipt_id: str
+    occurred_at: str
+    schema_version: str = "PlanActivated@1"
+
+
+@dataclass(frozen=True)
+class PlanDraftRejected:
+    event_id: str
+    draft_id: str
+    plan_id: str
+    revision: int
+    occurred_at: str
+    schema_version: str = "PlanDraftRejected@1"
+
+
+@dataclass(frozen=True)
 class ActiveTradePlan:
     master: TradePlanMaster
     activation: PlanActivation | None
@@ -695,6 +791,39 @@ def _rule_hashes(
     return tuple(rule.content_hash for rule in rules)
 
 
+def _draft_graph_identity(
+    graph: TradePlanGraph,
+) -> Mapping[str, object]:
+    version = graph.version
+    return {
+        "schema_version": graph.schema_version,
+        "plan_version_id": version.plan_version_id,
+        "plan_id": version.plan_id,
+        "version_no": version.version_no,
+        "supersedes_version_id": version.supersedes_version_id,
+        "strategy_version_id": version.strategy_version_id,
+        "investment_thesis_version_id": (
+            version.investment_thesis_version_id
+        ),
+        "account_snapshot_version_id": (
+            version.account_snapshot_version_id
+        ),
+        "data_snapshot_id": version.data_snapshot_id,
+        "horizon_start": version.horizon_start,
+        "horizon_end": version.horizon_end,
+        "review_by": version.review_by,
+        "risk_policy_version_id": version.risk_policy_version_id,
+        "metric_catalog_version": version.metric_catalog_version,
+        "evaluator_policy_version": (
+            version.evaluator_policy_version
+        ),
+        "conflict_policy_version": version.conflict_policy_version,
+        "ast_version": version.ast_version,
+        "version_content_hash": version.content_hash,
+        "graph_seal_hash": version.graph_seal_hash,
+    }
+
+
 def _exact_decimal(value: object, *, positive: bool) -> bool:
     if not isinstance(value, Decimal) or not value.is_finite():
         return False
@@ -714,7 +843,10 @@ __all__ = [
     "CoreSleeve",
     "GridSleeve",
     "PlanActivation",
+    "PlanActivated",
+    "PlanDraftRejected",
     "PlanGraphSeal",
+    "PlanVersionConfirmed",
     "PlanValidationError",
     "PositionSleeve",
     "PositionSleeveKind",
@@ -725,6 +857,7 @@ __all__ = [
     "TradePlanRule",
     "TradePlanVersion",
     "build_plan_version",
+    "build_trade_plan_draft",
     "validate_sleeve_contract",
     "validate_sleeve_quantities",
 ]

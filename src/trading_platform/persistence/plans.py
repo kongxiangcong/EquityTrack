@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime
 from decimal import Decimal
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
+
+from trading_platform.domain.approvals import (
+    ActivationIntent,
+    CanonicalPlanDiff,
+    PlanConfirmationChallenge,
+    UserApprovalReceipt,
+)
 
 from trading_platform.domain.plans import (
     ActiveTradePlan,
@@ -12,12 +20,17 @@ from trading_platform.domain.plans import (
     CoreSleeve,
     GridSleeve,
     PlanActivation,
+    PlanActivated,
+    PlanDraftRejected,
     PlanValidationError,
+    PlanVersionConfirmed,
+    TradePlanDraft,
     TradePlanGraph,
     TradePlanMaster,
     TradePlanMasterId,
     TradePlanRule,
     TradePlanVersion,
+    build_trade_plan_draft,
 )
 from trading_platform.domain.rules import (
     GridConstraint,
@@ -33,10 +46,15 @@ from trading_platform.identity import canonical_hash
 
 from .locking import DataRootWriterLock
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
+if TYPE_CHECKING:
+    from trading_platform.application.trade_plan_authoring import (
+        ConfirmTradePlanVersion,
+        CreateTradePlanDraft,
+        IssuePlanConfirmationChallenge,
+        PlanConfirmationResult,
+        RejectTradePlanDraft,
+        ReviseTradePlanDraft,
+    )
 
 class SQLiteTradePlanRepository:
     """Owns atomic Model B graph sealing, activation, and exact reconstruction."""
@@ -49,250 +67,493 @@ class SQLiteTradePlanRepository:
         self._connection = connection
         self._writer_lock = writer_lock
 
-    def create_master(self, master: TradePlanMaster) -> TradePlanMaster:
-        master.validate()
-        values = (
-            master.plan_id.value,
-            master.plan_id.account_id,
-            master.plan_id.security_id,
-            master.strategy_version_id,
-            master.lifecycle_status,
-            master.transition_seq,
-            master.created_at,
-            0,
+    def create_draft(
+        self, command: "CreateTradePlanDraft"
+    ) -> TradePlanDraft:
+        draft = command.draft
+        draft.validate()
+        if (
+            draft.status != "open"
+            or draft.decision_actor != command.actor.decision_actor
+            or draft.interaction_channel
+            != command.actor.interaction_channel
+            or draft.transport_actor != command.actor.transport_actor
+        ):
+            raise PlanValidationError("PLAN_DRAFT_CREATE_INVALID")
+        request_hash = canonical_hash(
+            {
+                "command": "CreateTradePlanDraft",
+                "draft_hash": draft.content_hash,
+                "actor": command.actor,
+            }
         )
+        replay = self._command_receipt(
+            command.invocation_id, request_hash
+        )
+        if replay is not None:
+            return self._load_draft(replay["aggregate_id"])
         with self._writer_lock.acquire(
-            f"trade-plan-master:{master.plan_id.value}"
+            f"trade-plan-draft:{draft.plan_id}"
         ):
-            existing = self._connection.execute(
-                "SELECT * FROM trade_plan_master WHERE plan_id=?",
-                (master.plan_id.value,),
-            ).fetchone()
-            if existing is not None:
-                if tuple(existing) != values:
-                    raise PlanValidationError("PLAN_MASTER_IDENTITY_CONFLICT")
-                return master
+            replay = self._command_receipt(
+                command.invocation_id, request_hash
+            )
+            if replay is not None:
+                return self._load_draft(replay["aggregate_id"])
+            master = TradePlanMaster(
+                plan_id=TradePlanMasterId(
+                    draft.account_id,
+                    draft.security_id,
+                    str(draft.plan_id),
+                ),
+                strategy_version_id=draft.strategy_version_id,
+                lifecycle_status="inactive",
+                transition_seq=0,
+                created_at=draft.created_at,
+            )
+            master.validate()
             try:
                 with self._connection:
-                    self._connection.execute(
-                        "INSERT INTO trade_plan_master VALUES(?,?,?,?,?,?,?,?)",
-                        values,
-                    )
-            except sqlite3.IntegrityError as error:
-                raise PlanValidationError("PLAN_MASTER_STORAGE_CONFLICT") from error
-        return self.get_master(master.plan_id.value)
-
-    def seal_version(self, graph: TradePlanGraph) -> TradePlanGraph:
-        graph.validate()
-        version = graph.version
-        with self._writer_lock.acquire(
-            f"trade-plan-version:{version.plan_id}"
-        ):
-            existing = self._connection.execute(
-                "SELECT graph_seal_hash FROM trade_plan_version "
-                "WHERE plan_version_id=?",
-                (version.plan_version_id,),
-            ).fetchone()
-            if existing is not None:
-                if existing["graph_seal_hash"] != version.graph_seal_hash:
-                    raise PlanValidationError(
-                        "PLAN_VERSION_IDENTITY_CONFLICT"
-                    )
-                return self.get_graph(version.plan_version_id)
-            self._validate_seal_authority(graph)
-            try:
-                with self._connection:
-                    self._insert_version(version)
-                    self._insert_graph_children(graph)
-                    changed = self._connection.execute(
-                        "UPDATE trade_plan_version SET graph_sealed=1 "
-                        "WHERE plan_version_id=? AND graph_sealed=0",
-                        (version.plan_version_id,),
-                    ).rowcount
-                    if changed != 1:
-                        raise PlanValidationError(
-                            "PLAN_GRAPH_SEAL_CONFLICT"
+                    existing_master = self._connection.execute(
+                        "SELECT * FROM trade_plan_master WHERE plan_id=?",
+                        (draft.plan_id,),
+                    ).fetchone()
+                    if existing_master is None:
+                        self._connection.execute(
+                            "INSERT INTO trade_plan_master "
+                            "VALUES(?,?,?,?,?,?,?,?)",
+                            (
+                                draft.plan_id,
+                                draft.account_id,
+                                draft.security_id,
+                                draft.strategy_version_id,
+                                "inactive",
+                                0,
+                                draft.created_at,
+                                0,
+                            ),
                         )
-                    self._connection.execute(
-                        "UPDATE trade_plan_draft "
-                        "SET status='confirmed',updated_at=? "
-                        "WHERE draft_id=("
-                        "SELECT draft_id FROM user_approval_receipt "
-                        "WHERE user_approval_receipt_id=?"
-                        ") AND status='open'",
-                        (_now(), version.user_approval_receipt_id),
+                    elif (
+                        existing_master["account_id"] != draft.account_id
+                        or existing_master["security_id"]
+                        != draft.security_id
+                        or existing_master["strategy_version_id"]
+                        != draft.strategy_version_id
+                        or existing_master["legacy_read_only"]
+                    ):
+                        raise PlanValidationError(
+                            "PLAN_MASTER_IDENTITY_CONFLICT"
+                        )
+                    self._insert_draft(draft)
+                    self._insert_command_receipt(
+                        invocation_id=command.invocation_id,
+                        command_name="CreateTradePlanDraft",
+                        request_hash=request_hash,
+                        result_type="TradePlanDraft",
+                        aggregate_id=draft.draft_id,
+                        revision_or_version_id=str(draft.revision),
+                        actor=command.actor,
+                        created_at=draft.created_at,
                     )
             except sqlite3.IntegrityError as error:
                 raise PlanValidationError(
-                    "PLAN_GRAPH_STORAGE_CONFLICT"
+                    "PLAN_DRAFT_STORAGE_CONFLICT"
                 ) from error
-        return self.get_graph(version.plan_version_id)
+        return self._load_draft(draft.draft_id)
 
-    def activate_version(
-        self,
-        *,
-        plan_id: str,
-        plan_version_id: str,
-        user_approval_receipt_id: str,
-        command_invocation_id: str,
-    ) -> ActiveTradePlan:
-        if not command_invocation_id:
-            raise PlanValidationError("COMMAND_INVOCATION_ID_REQUIRED")
+    def revise_draft(
+        self, command: "ReviseTradePlanDraft"
+    ) -> TradePlanDraft:
+        current = self._load_draft(command.draft_id)
+        candidate = self._revised_draft(current, command)
+        request_hash = canonical_hash(
+            {
+                "command": "ReviseTradePlanDraft",
+                "draft_id": command.draft_id,
+                "expected_revision": command.expected_revision,
+                "candidate_hash": candidate.content_hash,
+                "actor": command.actor,
+            }
+        )
+        replay = self._command_receipt(
+            command.invocation_id, request_hash
+        )
+        if replay is not None:
+            return self._load_draft(command.draft_id)
         with self._writer_lock.acquire(
-            f"trade-plan-activation:{plan_id}"
+            f"trade-plan-draft:{command.draft_id}"
         ):
-            replay = self._connection.execute(
-                "SELECT plan_id FROM plan_activation "
-                "WHERE command_invocation_id=?",
-                (command_invocation_id,),
-            ).fetchone()
-            if replay is not None:
-                if replay["plan_id"] != plan_id:
-                    raise PlanValidationError("INVOCATION_CONFLICT")
-                return self.get_active_master_by_plan(plan_id)
-            version = self.get_version(plan_version_id)
-            if version.plan_id != plan_id:
-                raise PlanValidationError("PLAN_VERSION_OWNERSHIP_CONFLICT")
-            receipt = self._approval_receipt(user_approval_receipt_id)
+            current = self._load_draft(command.draft_id)
             if (
-                receipt["plan_id"] != plan_id
-                or receipt["expected_content_hash"] != version.content_hash
-                or receipt["activation_intent"] != "confirm_and_enable"
-                or user_approval_receipt_id
-                != version.user_approval_receipt_id
+                current.status != "open"
+                or current.revision != command.expected_revision
             ):
-                raise PlanValidationError("PLAN_ACTIVATION_AUTHORITY_INVALID")
-            now = _now()
-            event_id = (
-                "application_event_"
-                + canonical_hash(
-                    {
-                        "event_type": "PlanActivated",
-                        "plan_id": plan_id,
-                        "plan_version_id": plan_version_id,
-                        "command_invocation_id": command_invocation_id,
-                    }
-                )[:24]
-            )
-            activation_id = (
-                "plan_activation_"
-                + canonical_hash(
-                    {
-                        "plan_id": plan_id,
-                        "plan_version_id": plan_version_id,
-                        "command_invocation_id": command_invocation_id,
-                    }
-                )[:24]
-            )
+                raise PlanValidationError("PLAN_DRAFT_REVISION_CONFLICT")
+            candidate = self._revised_draft(current, command)
             try:
                 with self._connection:
-                    current = self._connection.execute(
-                        "SELECT activation_id FROM plan_activation "
-                        "WHERE plan_id=? AND ended_at IS NULL",
-                        (plan_id,),
-                    ).fetchone()
-                    if current is not None:
-                        ended_event_id = (
-                            "application_event_"
-                            + canonical_hash(
-                                {
-                                    "event_type": "PlanActivationEnded",
-                                    "activation_id": current["activation_id"],
-                                    "next_plan_version_id": plan_version_id,
-                                }
-                            )[:24]
-                        )
-                        self._insert_event(
-                            ended_event_id,
-                            "PlanActivationEnded",
-                            "PlanActivation",
-                            current["activation_id"],
-                            {
-                                "next_plan_version_id": plan_version_id,
-                                "reason": "superseded_by_new_version",
-                            },
-                            now,
-                        )
-                        self._connection.execute(
-                            "UPDATE plan_activation "
-                            "SET ended_event_id=?,ended_at=?,end_reason=? "
-                            "WHERE activation_id=? AND ended_at IS NULL",
-                            (
-                                ended_event_id,
-                                now,
-                                "superseded_by_new_version",
-                                current["activation_id"],
+                    self._connection.execute(
+                        "UPDATE plan_confirmation_challenge "
+                        "SET status='superseded' "
+                        "WHERE draft_id=? AND status='issued'",
+                        (command.draft_id,),
+                    )
+                    changed = self._connection.execute(
+                        "UPDATE trade_plan_draft SET revision=?,"
+                        "parameters_json=?,content_json=?,"
+                        "proposed_graph_json=?,"
+                        "proposed_graph_seal_hash=?,content_hash=?,"
+                        "updated_at=?,decision_actor=?,"
+                        "interaction_channel=?,transport_actor=? "
+                        "WHERE draft_id=? AND status='open' "
+                        "AND revision=?",
+                        (
+                            candidate.revision,
+                            self._json(candidate.parameters),
+                            self._json(candidate.content),
+                            self._json(
+                                self._encode_graph(
+                                    candidate.proposed_graph
+                                )
                             ),
+                            candidate.proposed_graph.version.graph_seal_hash,
+                            candidate.content_hash,
+                            candidate.updated_at,
+                            candidate.decision_actor,
+                            candidate.interaction_channel,
+                            candidate.transport_actor,
+                            candidate.draft_id,
+                            command.expected_revision,
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise PlanValidationError(
+                            "PLAN_DRAFT_REVISION_CONFLICT"
                         )
-                    self._connection.execute(
-                        "UPDATE trade_plan_master "
-                        "SET lifecycle_status='active',transition_seq=transition_seq+1 "
-                        "WHERE plan_id=? AND lifecycle_status<>'ended' "
-                        "AND legacy_read_only=0",
-                        (plan_id,),
-                    )
-                    master = self._master_row(plan_id)
-                    if master["lifecycle_status"] != "active":
-                        raise PlanValidationError("PLAN_MASTER_NOT_ACTIVATABLE")
-                    self._insert_event(
-                        event_id,
-                        "PlanActivated",
-                        "TradePlanMaster",
-                        plan_id,
-                        {"plan_version_id": plan_version_id},
-                        now,
-                    )
-                    self._connection.execute(
-                        "INSERT INTO plan_activation "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            activation_id,
-                            plan_id,
-                            plan_version_id,
-                            event_id,
-                            now,
-                            None,
-                            None,
-                            None,
-                            user_approval_receipt_id,
-                            command_invocation_id,
+                    self._insert_command_receipt(
+                        invocation_id=command.invocation_id,
+                        command_name="ReviseTradePlanDraft",
+                        request_hash=request_hash,
+                        result_type="TradePlanDraft",
+                        aggregate_id=candidate.draft_id,
+                        revision_or_version_id=str(
+                            candidate.revision
                         ),
-                    )
-                    transition_seq = master["transition_seq"]
-                    transition_hash = canonical_hash(
-                        {
-                            "plan_id": plan_id,
-                            "transition_seq": transition_seq,
-                            "to_status": "active",
-                            "plan_version_id": plan_version_id,
-                            "command_invocation_id": command_invocation_id,
-                        }
-                    )
-                    self._connection.execute(
-                        "INSERT INTO trade_plan_transition "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            f"trade_plan_transition_{transition_hash[:24]}",
-                            plan_id,
-                            transition_seq,
-                            "inactive" if transition_seq == 1 else "active",
-                            "active",
-                            plan_version_id,
-                            "version_activated",
-                            command_invocation_id,
-                            now,
-                            transition_hash,
-                        ),
+                        actor=command.actor,
+                        created_at=candidate.updated_at,
                     )
             except sqlite3.IntegrityError as error:
-                if "trade_plan_master.account_id" in str(error):
+                raise PlanValidationError(
+                    "PLAN_DRAFT_STORAGE_CONFLICT"
+                ) from error
+        return self._load_draft(command.draft_id)
+
+    def reject_draft(
+        self, command: "RejectTradePlanDraft"
+    ) -> PlanDraftRejected:
+        request_hash = canonical_hash(
+            {
+                "command": "RejectTradePlanDraft",
+                "draft_id": command.draft_id,
+                "expected_revision": command.expected_revision,
+                "rejected_at": command.rejected_at,
+                "actor": command.actor,
+            }
+        )
+        replay = self._command_receipt(
+            command.invocation_id, request_hash
+        )
+        if replay is not None:
+            draft = self._load_draft(command.draft_id)
+            return self._rejected_event(
+                command.draft_id,
+                str(draft.plan_id),
+                command.expected_revision,
+                command.rejected_at,
+            )
+        with self._writer_lock.acquire(
+            f"trade-plan-draft:{command.draft_id}"
+        ):
+            draft = self._load_draft(command.draft_id)
+            if (
+                draft.status != "open"
+                or draft.revision != command.expected_revision
+                or not command.actor.decision_actor.startswith("user:")
+            ):
+                raise PlanValidationError("PLAN_DRAFT_REJECTION_DENIED")
+            event = self._rejected_event(
+                draft.draft_id,
+                str(draft.plan_id),
+                draft.revision,
+                command.rejected_at,
+            )
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE plan_confirmation_challenge "
+                    "SET status='cancelled' "
+                    "WHERE draft_id=? AND status='issued'",
+                    (draft.draft_id,),
+                )
+                self._connection.execute(
+                    "UPDATE trade_plan_draft SET status='rejected',"
+                    "updated_at=? WHERE draft_id=? AND status='open'",
+                    (command.rejected_at, draft.draft_id),
+                )
+                self._insert_event(
+                    event.event_id,
+                    "PlanDraftRejected",
+                    "TradePlanDraft",
+                    draft.draft_id,
+                    {
+                        "plan_id": draft.plan_id,
+                        "revision": draft.revision,
+                    },
+                    command.rejected_at,
+                )
+                self._insert_command_receipt(
+                    invocation_id=command.invocation_id,
+                    command_name="RejectTradePlanDraft",
+                    request_hash=request_hash,
+                    result_type="PlanDraftRejected",
+                    aggregate_id=draft.draft_id,
+                    revision_or_version_id=str(draft.revision),
+                    actor=command.actor,
+                    created_at=command.rejected_at,
+                )
+        return event
+
+    def issue_challenge(
+        self, command: "IssuePlanConfirmationChallenge"
+    ) -> PlanConfirmationChallenge:
+        draft = self._load_draft(command.draft_id)
+        request_hash = canonical_hash(
+            {
+                "command": "IssuePlanConfirmationChallenge",
+                "draft_id": command.draft_id,
+                "expected_revision": command.expected_revision,
+                "activation_intent": command.activation_intent,
+                "issued_at": command.issued_at,
+                "expires_at": command.expires_at,
+                "actor": command.actor,
+            }
+        )
+        replay = self._command_receipt(
+            command.invocation_id, request_hash
+        )
+        if replay is not None:
+            return self._load_challenge(
+                replay["revision_or_version_id"]
+            )
+        if (
+            draft.status != "open"
+            or draft.revision != command.expected_revision
+            or not command.actor.decision_actor.startswith("user:")
+        ):
+            raise PlanValidationError("PLAN_CHALLENGE_ISSUE_DENIED")
+        diff = self._canonical_diff(draft)
+        challenge_id = (
+            "plan_confirmation_challenge_"
+            + canonical_hash(
+                {
+                    "draft_id": draft.draft_id,
+                    "revision": draft.revision,
+                    "intent": command.activation_intent,
+                    "invocation_id": command.invocation_id,
+                }
+            )[:24]
+        )
+        prototype = PlanConfirmationChallenge(
+            challenge_id=challenge_id,
+            plan_id=str(draft.plan_id),
+            draft_id=draft.draft_id,
+            expected_revision=draft.revision,
+            expected_draft_hash=draft.content_hash,
+            expected_graph_seal_hash=(
+                draft.proposed_graph.version.graph_seal_hash
+            ),
+            canonical_diff=diff,
+            activation_intent=command.activation_intent,
+            decision_actor=command.actor.decision_actor,
+            interaction_channel=command.actor.interaction_channel,
+            transport_actor=command.actor.transport_actor,
+            issued_at=command.issued_at,
+            expires_at=command.expires_at,
+            status="issued",
+            content_hash="",
+        )
+        challenge = replace(
+            prototype,
+            content_hash=canonical_hash(prototype.identity_payload()),
+        )
+        challenge.validate()
+        with self._writer_lock.acquire(
+            f"trade-plan-draft:{draft.draft_id}"
+        ):
+            current = self._load_draft(draft.draft_id)
+            if (
+                current.status != "open"
+                or current.revision != draft.revision
+                or current.content_hash != draft.content_hash
+            ):
+                raise PlanValidationError(
+                    "PLAN_DRAFT_REVISION_CONFLICT"
+                )
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE plan_confirmation_challenge "
+                    "SET status='superseded' "
+                    "WHERE draft_id=? AND status='issued'",
+                    (draft.draft_id,),
+                )
+                self._insert_challenge(challenge)
+                self._insert_command_receipt(
+                    invocation_id=command.invocation_id,
+                    command_name="IssuePlanConfirmationChallenge",
+                    request_hash=request_hash,
+                    result_type="PlanConfirmationChallenge",
+                    aggregate_id=draft.draft_id,
+                    revision_or_version_id=challenge.challenge_id,
+                    actor=command.actor,
+                    created_at=command.issued_at,
+                )
+        return self._load_challenge(challenge.challenge_id)
+
+    def confirm_plan(
+        self, command: "ConfirmTradePlanVersion"
+    ) -> "PlanConfirmationResult":
+        from trading_platform.application.trade_plan_authoring import (
+            PlanConfirmationResult,
+        )
+
+        request_hash = canonical_hash(
+            {
+                "command": "ConfirmTradePlanVersion",
+                "challenge_id": command.challenge_id,
+                "expected_revision": command.expected_revision,
+                "expected_draft_hash": command.expected_draft_hash,
+                "expected_diff_hash": command.expected_diff_hash,
+                "activation_intent": command.activation_intent,
+                "approved_at": command.approved_at,
+                "actor": command.actor,
+            }
+        )
+        replay = self._command_receipt(
+            command.invocation_id, request_hash
+        )
+        if replay is not None:
+            graph = self.get_graph(replay["revision_or_version_id"])
+            receipt = self._load_approval_by_invocation(
+                command.invocation_id
+            )
+            active = (
+                self._activation_result(
+                    command.invocation_id, graph
+                )
+                if receipt.activation_intent
+                is ActivationIntent.CONFIRM_AND_ACTIVATE
+                else None
+            )
+            return PlanConfirmationResult(graph, receipt, active)
+        challenge = self._load_challenge(command.challenge_id)
+        draft = self._load_draft(challenge.draft_id)
+        self._validate_confirmation(command, challenge, draft)
+        receipt = self._build_approval_receipt(
+            command, challenge
+        )
+        version = replace(
+            draft.proposed_graph.version,
+            confirmed_at=command.approved_at,
+            user_approval_receipt_id=receipt.approval_receipt_id,
+        )
+        graph = replace(draft.proposed_graph, version=version)
+        graph.validate()
+        with self._writer_lock.acquire(
+            f"trade-plan-confirm:{challenge.plan_id}"
+        ):
+            try:
+                with self._connection:
+                    self._insert_approval_receipt(receipt)
+                    consumed = self._connection.execute(
+                        "UPDATE plan_confirmation_challenge "
+                        "SET status='consumed',consumed_at=?,"
+                        "consumed_by_receipt_id=? "
+                        "WHERE challenge_id=? AND status='issued'",
+                        (
+                            command.approved_at,
+                            receipt.approval_receipt_id,
+                            challenge.challenge_id,
+                        ),
+                    ).rowcount
+                    if consumed != 1:
+                        raise PlanValidationError(
+                            "PLAN_CHALLENGE_NOT_ISSUED"
+                        )
+                    self._validate_seal_authority(graph)
+                    self._insert_version(version)
+                    self._insert_graph_children(graph)
+                    self._connection.execute(
+                        "UPDATE trade_plan_version SET graph_sealed=1 "
+                        "WHERE plan_version_id=?",
+                        (version.plan_version_id,),
+                    )
+                    self._connection.execute(
+                        "UPDATE trade_plan_draft SET status='confirmed',"
+                        "updated_at=? WHERE draft_id=? AND status='open'",
+                        (command.approved_at, draft.draft_id),
+                    )
+                    confirmed_event = self._confirmed_event(
+                        graph, receipt, command.approved_at
+                    )
+                    self._insert_event(
+                        confirmed_event.event_id,
+                        "PlanVersionConfirmed",
+                        "TradePlanMaster",
+                        challenge.plan_id,
+                        {
+                            "plan_version_id": version.plan_version_id,
+                            "approval_receipt_id": (
+                                receipt.approval_receipt_id
+                            ),
+                        },
+                        command.approved_at,
+                    )
+                    active = (
+                        self._activate_confirmed_version(
+                            graph, receipt, command
+                        )
+                        if command.activation_intent
+                        is ActivationIntent.CONFIRM_AND_ACTIVATE
+                        else None
+                    )
+                    self._insert_command_receipt(
+                        invocation_id=command.invocation_id,
+                        command_name="ConfirmTradePlanVersion",
+                        request_hash=request_hash,
+                        result_type="PlanConfirmationResult",
+                        aggregate_id=challenge.plan_id,
+                        revision_or_version_id=(
+                            version.plan_version_id
+                        ),
+                        actor=command.actor,
+                        created_at=command.approved_at,
+                    )
+            except sqlite3.IntegrityError as error:
+                if (
+                    "trade_plan_master.account_id" in str(error)
+                    or "one_active_master_per_account_security"
+                    in str(error)
+                ):
                     raise PlanValidationError(
                         "ACTIVE_MASTER_OWNERSHIP_CONFLICT"
                     ) from error
                 raise PlanValidationError(
-                    "PLAN_ACTIVATION_STORAGE_CONFLICT"
+                    "PLAN_CONFIRMATION_STORAGE_CONFLICT"
                 ) from error
-        return self.get_active_master_by_plan(plan_id)
+        return PlanConfirmationResult(
+            self.get_graph(version.plan_version_id),
+            receipt,
+            active,
+        )
 
     def get_master(self, plan_id: str) -> TradePlanMaster:
         row = self._master_row(plan_id)
@@ -461,6 +722,697 @@ class SQLiteTradePlanRepository:
             )
         )
 
+    def _insert_draft(self, draft: TradePlanDraft) -> None:
+        self._connection.execute(
+            "INSERT INTO trade_plan_draft VALUES("
+            "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                draft.draft_id,
+                draft.plan_id,
+                draft.account_id,
+                draft.security_id,
+                draft.strategy_version_id,
+                draft.based_on_version_id,
+                draft.revision,
+                draft.status,
+                self._json(draft.parameters),
+                self._json(draft.content),
+                self._json(self._encode_graph(draft.proposed_graph)),
+                draft.proposed_graph.version.graph_seal_hash,
+                draft.content_hash,
+                draft.created_at,
+                draft.updated_at,
+                draft.decision_actor,
+                draft.interaction_channel,
+                draft.transport_actor,
+            ),
+        )
+
+    def _load_draft(self, draft_id: str) -> TradePlanDraft:
+        row = self._connection.execute(
+            "SELECT * FROM trade_plan_draft WHERE draft_id=?",
+            (draft_id,),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("PLAN_DRAFT_NOT_FOUND")
+        if not row["proposed_graph_json"] or row["proposed_graph_json"] == "{}":
+            raise PlanValidationError("LEGACY_PLAN_DRAFT_READ_ONLY")
+        draft = TradePlanDraft(
+            draft_id=row["draft_id"],
+            plan_id=row["plan_id"],
+            account_id=row["account_id"],
+            security_id=row["security_id"],
+            strategy_version_id=row["strategy_version_id"],
+            based_on_version_id=row["based_on_version_id"],
+            revision=row["revision"],
+            status=row["status"],
+            parameters=json.loads(row["parameters_json"]),
+            content=json.loads(row["content_json"]),
+            proposed_graph=self._decode_graph(
+                json.loads(row["proposed_graph_json"])
+            ),
+            content_hash=row["content_hash"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            decision_actor=row["decision_actor"],
+            interaction_channel=row["interaction_channel"],
+            transport_actor=row["transport_actor"],
+        )
+        draft.validate()
+        if (
+            draft.proposed_graph.version.graph_seal_hash
+            != row["proposed_graph_seal_hash"]
+        ):
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_MISMATCH")
+        return draft
+
+    def _revised_draft(
+        self,
+        current: TradePlanDraft,
+        command: "ReviseTradePlanDraft",
+    ) -> TradePlanDraft:
+        graph = command.proposed_graph
+        graph.validate()
+        if (
+            graph.version.plan_id != current.plan_id
+            or graph.version.strategy_version_id
+            != current.strategy_version_id
+            or graph.version.supersedes_version_id
+            != current.based_on_version_id
+        ):
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_MISMATCH")
+        prepared = build_trade_plan_draft(
+            draft_id=current.draft_id,
+            account_id=current.account_id,
+            security_id=current.security_id,
+            proposed_graph=graph,
+            parameters=command.parameters,
+            created_at=command.updated_at,
+            decision_actor=command.actor.decision_actor,
+            interaction_channel=command.actor.interaction_channel,
+            transport_actor=command.actor.transport_actor,
+        )
+        candidate = replace(
+            prepared,
+            revision=current.revision + 1,
+            created_at=current.created_at,
+        )
+        candidate.validate()
+        return candidate
+
+    def _insert_challenge(
+        self, challenge: PlanConfirmationChallenge
+    ) -> None:
+        self._connection.execute(
+            "INSERT INTO plan_confirmation_challenge VALUES("
+            "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                challenge.challenge_id,
+                challenge.schema_version,
+                challenge.plan_id,
+                challenge.draft_id,
+                challenge.expected_revision,
+                challenge.expected_draft_hash,
+                challenge.expected_graph_seal_hash,
+                self._json(
+                    {
+                        "schema_version": (
+                            challenge.canonical_diff.schema_version
+                        ),
+                        "based_on_graph_seal_hash": (
+                            challenge.canonical_diff
+                            .based_on_graph_seal_hash
+                        ),
+                        "proposed_graph_seal_hash": (
+                            challenge.canonical_diff
+                            .proposed_graph_seal_hash
+                        ),
+                        "changed_components": (
+                            challenge.canonical_diff.changed_components
+                        ),
+                        "content_hash": (
+                            challenge.canonical_diff.content_hash
+                        ),
+                    }
+                ),
+                challenge.canonical_diff.content_hash,
+                challenge.activation_intent.value,
+                challenge.decision_actor,
+                challenge.interaction_channel,
+                challenge.transport_actor,
+                challenge.issued_at,
+                challenge.expires_at,
+                challenge.status,
+                None,
+                None,
+                challenge.content_hash,
+            ),
+        )
+
+    def _canonical_diff(
+        self, draft: TradePlanDraft
+    ) -> CanonicalPlanDiff:
+        proposed = draft.proposed_graph
+        if draft.based_on_version_id is None:
+            changed = (
+                "version",
+                "sleeves",
+                "rules",
+                "evidence",
+            )
+            base_hash = None
+        else:
+            base = self.get_graph(draft.based_on_version_id)
+            base_hash = base.version.graph_seal_hash
+            changed = tuple(
+                name
+                for name, different in (
+                    (
+                        "version",
+                        base.version.content_hash
+                        != proposed.version.content_hash,
+                    ),
+                    (
+                        "sleeves",
+                        tuple(
+                            item.content_hash
+                            for item in base.sleeves
+                        )
+                        != tuple(
+                            item.content_hash
+                            for item in proposed.sleeves
+                        ),
+                    ),
+                    (
+                        "rules",
+                        tuple(
+                            item.content_hash for item in base.rules
+                        )
+                        != tuple(
+                            item.content_hash
+                            for item in proposed.rules
+                        ),
+                    ),
+                    (
+                        "evidence",
+                        (
+                            base.evidence_references,
+                            base.adjusted_price_evidence,
+                        )
+                        != (
+                            proposed.evidence_references,
+                            proposed.adjusted_price_evidence,
+                        ),
+                    ),
+                )
+                if different
+            )
+        return CanonicalPlanDiff.build(
+            based_on_graph_seal_hash=base_hash,
+            proposed_graph_seal_hash=(
+                proposed.version.graph_seal_hash
+            ),
+            changed_components=changed,
+        )
+
+    def _load_challenge(
+        self, challenge_id: str
+    ) -> PlanConfirmationChallenge:
+        row = self._connection.execute(
+            "SELECT * FROM plan_confirmation_challenge "
+            "WHERE challenge_id=?",
+            (challenge_id,),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("PLAN_CHALLENGE_NOT_FOUND")
+        payload = json.loads(row["canonical_diff_json"])
+        diff = CanonicalPlanDiff(
+            based_on_graph_seal_hash=payload[
+                "based_on_graph_seal_hash"
+            ],
+            proposed_graph_seal_hash=payload[
+                "proposed_graph_seal_hash"
+            ],
+            changed_components=tuple(payload["changed_components"]),
+            content_hash=payload["content_hash"],
+            schema_version=payload["schema_version"],
+        )
+        challenge = PlanConfirmationChallenge(
+            challenge_id=row["challenge_id"],
+            plan_id=row["plan_id"],
+            draft_id=row["draft_id"],
+            expected_revision=row["expected_revision"],
+            expected_draft_hash=row["expected_content_hash"],
+            expected_graph_seal_hash=row[
+                "expected_graph_seal_hash"
+            ],
+            canonical_diff=diff,
+            activation_intent=ActivationIntent(
+                row["activation_intent"]
+            ),
+            decision_actor=row["decision_actor"],
+            interaction_channel=row["interaction_channel"],
+            transport_actor=row["transport_actor"],
+            issued_at=row["issued_at"],
+            expires_at=row["expires_at"],
+            status=row["status"],
+            content_hash=row["content_hash"],
+        )
+        challenge.validate()
+        return challenge
+
+    def _build_approval_receipt(
+        self,
+        command: "ConfirmTradePlanVersion",
+        challenge: PlanConfirmationChallenge,
+    ) -> UserApprovalReceipt:
+        receipt_id = (
+            "user_approval_receipt_"
+            + canonical_hash(
+                {
+                    "challenge_id": challenge.challenge_id,
+                    "invocation_id": command.invocation_id,
+                }
+            )[:24]
+        )
+        prototype = UserApprovalReceipt(
+            approval_receipt_id=receipt_id,
+            challenge_id=challenge.challenge_id,
+            plan_id=challenge.plan_id,
+            draft_id=challenge.draft_id,
+            approved_revision=challenge.expected_revision,
+            approved_draft_hash=challenge.expected_draft_hash,
+            approved_graph_seal_hash=(
+                challenge.expected_graph_seal_hash
+            ),
+            approved_diff_hash=(
+                challenge.canonical_diff.content_hash
+            ),
+            activation_intent=challenge.activation_intent,
+            decision_actor=command.actor.decision_actor,
+            interaction_channel=command.actor.interaction_channel,
+            transport_actor=command.actor.transport_actor,
+            command_invocation_id=command.invocation_id,
+            approved_at=command.approved_at,
+            content_hash="",
+        )
+        receipt = replace(
+            prototype,
+            content_hash=canonical_hash(prototype.identity_payload()),
+        )
+        receipt.validate()
+        return receipt
+
+    def _insert_approval_receipt(
+        self, receipt: UserApprovalReceipt
+    ) -> None:
+        self._connection.execute(
+            "INSERT INTO user_approval_receipt VALUES("
+            "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                receipt.approval_receipt_id,
+                receipt.schema_version,
+                receipt.challenge_id,
+                receipt.plan_id,
+                receipt.draft_id,
+                receipt.approved_revision,
+                receipt.approved_draft_hash,
+                receipt.approved_graph_seal_hash,
+                receipt.approved_diff_hash,
+                receipt.activation_intent.value,
+                receipt.decision_actor,
+                receipt.interaction_channel,
+                receipt.transport_actor,
+                receipt.command_invocation_id,
+                receipt.approved_at,
+                receipt.content_hash,
+            ),
+        )
+
+    def _load_approval_by_invocation(
+        self, invocation_id: str
+    ) -> UserApprovalReceipt:
+        row = self._connection.execute(
+            "SELECT * FROM user_approval_receipt "
+            "WHERE command_invocation_id=?",
+            (invocation_id,),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("USER_APPROVAL_RECEIPT_NOT_FOUND")
+        receipt = UserApprovalReceipt(
+            approval_receipt_id=row["user_approval_receipt_id"],
+            challenge_id=row["challenge_id"],
+            plan_id=row["plan_id"],
+            draft_id=row["draft_id"],
+            approved_revision=row["approved_revision"],
+            approved_draft_hash=row["approved_draft_hash"],
+            approved_graph_seal_hash=row[
+                "approved_graph_seal_hash"
+            ],
+            approved_diff_hash=row["approved_diff_hash"],
+            activation_intent=ActivationIntent(
+                row["activation_intent"]
+            ),
+            decision_actor=row["decision_actor"],
+            interaction_channel=row["interaction_channel"],
+            transport_actor=row["transport_actor"],
+            command_invocation_id=row["command_invocation_id"],
+            approved_at=row["approved_at"],
+            content_hash=row["content_hash"],
+        )
+        receipt.validate()
+        return receipt
+
+    def _validate_confirmation(
+        self,
+        command: "ConfirmTradePlanVersion",
+        challenge: PlanConfirmationChallenge,
+        draft: TradePlanDraft,
+    ) -> None:
+        try:
+            approved = datetime.fromisoformat(command.approved_at)
+            issued = datetime.fromisoformat(challenge.issued_at)
+            expires = (
+                datetime.fromisoformat(challenge.expires_at)
+                if challenge.expires_at is not None
+                else None
+            )
+        except ValueError as error:
+            raise PlanValidationError(
+                "PLAN_CONFIRMATION_TIME_INVALID"
+            ) from error
+        if challenge.status != "issued":
+            raise PlanValidationError("PLAN_CHALLENGE_NOT_ISSUED")
+        if expires is not None and approved > expires:
+            with self._connection:
+                self._insert_challenge_expiry(
+                    challenge.challenge_id
+                )
+            raise PlanValidationError("PLAN_CHALLENGE_EXPIRED")
+        if (
+            draft.status != "open"
+            or draft.revision != challenge.expected_revision
+            or draft.content_hash != challenge.expected_draft_hash
+            or draft.proposed_graph.version.graph_seal_hash
+            != challenge.expected_graph_seal_hash
+            or command.expected_revision
+            != challenge.expected_revision
+            or command.expected_draft_hash
+            != challenge.expected_draft_hash
+            or command.expected_diff_hash
+            != challenge.canonical_diff.content_hash
+            or command.activation_intent
+            is not challenge.activation_intent
+            or command.actor.decision_actor
+            != challenge.decision_actor
+            or command.actor.interaction_channel
+            != challenge.interaction_channel
+            or command.actor.transport_actor
+            != challenge.transport_actor
+            or approved.tzinfo is None
+            or approved < issued
+        ):
+            raise PlanValidationError(
+                "PLAN_CONFIRMATION_CHALLENGE_MISMATCH"
+            )
+
+    def _activate_confirmed_version(
+        self,
+        graph: TradePlanGraph,
+        receipt: UserApprovalReceipt,
+        command: "ConfirmTradePlanVersion",
+    ) -> ActiveTradePlan:
+        plan_id = graph.version.plan_id
+        plan_version_id = graph.version.plan_version_id
+        now = command.approved_at
+        current = self._connection.execute(
+            "SELECT activation_id FROM plan_activation "
+            "WHERE plan_id=? AND ended_at IS NULL",
+            (plan_id,),
+        ).fetchone()
+        if current is not None:
+            ended_event_id = (
+                "application_event_"
+                + canonical_hash(
+                    {
+                        "event_type": "PlanActivationEnded",
+                        "activation_id": current["activation_id"],
+                        "next_plan_version_id": plan_version_id,
+                    }
+                )[:24]
+            )
+            self._insert_event(
+                ended_event_id,
+                "PlanActivationEnded",
+                "PlanActivation",
+                current["activation_id"],
+                {
+                    "next_plan_version_id": plan_version_id,
+                    "reason": "superseded_by_new_version",
+                },
+                now,
+            )
+            self._connection.execute(
+                "UPDATE plan_activation SET ended_event_id=?,"
+                "ended_at=?,end_reason=? WHERE activation_id=? "
+                "AND ended_at IS NULL",
+                (
+                    ended_event_id,
+                    now,
+                    "superseded_by_new_version",
+                    current["activation_id"],
+                ),
+            )
+        master = self._master_row(plan_id)
+        from_status = master["lifecycle_status"]
+        changed = self._connection.execute(
+            "UPDATE trade_plan_master SET lifecycle_status='active',"
+            "transition_seq=transition_seq+1 "
+            "WHERE plan_id=? AND lifecycle_status<>'ended' "
+            "AND legacy_read_only=0",
+            (plan_id,),
+        ).rowcount
+        if changed != 1:
+            raise PlanValidationError("PLAN_MASTER_NOT_ACTIVATABLE")
+        master = self._master_row(plan_id)
+        activation_id = (
+            "plan_activation_"
+            + canonical_hash(
+                {
+                    "plan_id": plan_id,
+                    "plan_version_id": plan_version_id,
+                    "invocation_id": command.invocation_id,
+                }
+            )[:24]
+        )
+        event = self._activated_event(
+            graph, receipt, activation_id, now
+        )
+        self._insert_event(
+            event.event_id,
+            "PlanActivated",
+            "TradePlanMaster",
+            plan_id,
+            {
+                "plan_version_id": plan_version_id,
+                "activation_id": activation_id,
+                "approval_receipt_id": receipt.approval_receipt_id,
+            },
+            now,
+        )
+        self._connection.execute(
+            "INSERT INTO plan_activation VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                activation_id,
+                plan_id,
+                plan_version_id,
+                event.event_id,
+                now,
+                None,
+                None,
+                None,
+                receipt.approval_receipt_id,
+                command.invocation_id,
+            ),
+        )
+        transition_hash = canonical_hash(
+            {
+                "plan_id": plan_id,
+                "transition_seq": master["transition_seq"],
+                "from_status": from_status,
+                "to_status": "active",
+                "plan_version_id": plan_version_id,
+                "command_invocation_id": command.invocation_id,
+            }
+        )
+        self._connection.execute(
+            "INSERT INTO trade_plan_transition "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"trade_plan_transition_{transition_hash[:24]}",
+                plan_id,
+                master["transition_seq"],
+                from_status,
+                "active",
+                plan_version_id,
+                "version_confirmed_and_activated",
+                command.invocation_id,
+                now,
+                transition_hash,
+            ),
+        )
+        return self._activation_result(
+            command.invocation_id, graph
+        )
+
+    def _activation_result(
+        self, invocation_id: str, graph: TradePlanGraph
+    ) -> ActiveTradePlan:
+        row = self._connection.execute(
+            "SELECT * FROM plan_activation "
+            "WHERE command_invocation_id=?",
+            (invocation_id,),
+        ).fetchone()
+        if row is None:
+            raise PlanValidationError("PLAN_ACTIVATION_NOT_FOUND")
+        activation = PlanActivation(
+            activation_id=row["activation_id"],
+            plan_id=row["plan_id"],
+            plan_version_id=row["plan_version_id"],
+            activated_event_id=row["activated_event_id"],
+            activated_at=row["activated_at"],
+            ended_event_id=row["ended_event_id"],
+            ended_at=row["ended_at"],
+            end_reason=row["end_reason"],
+            user_approval_receipt_id=row[
+                "user_approval_receipt_id"
+            ],
+            command_invocation_id=row["command_invocation_id"],
+        )
+        return ActiveTradePlan(
+            self.get_master(graph.version.plan_id),
+            activation,
+            graph.version,
+        )
+
+    @staticmethod
+    def _confirmed_event(
+        graph: TradePlanGraph,
+        receipt: UserApprovalReceipt,
+        occurred_at: str,
+    ) -> PlanVersionConfirmed:
+        event_id = "application_event_" + canonical_hash(
+            {
+                "event_type": "PlanVersionConfirmed",
+                "plan_version_id": graph.version.plan_version_id,
+                "approval_receipt_id": receipt.approval_receipt_id,
+            }
+        )[:24]
+        return PlanVersionConfirmed(
+            event_id,
+            graph.version.plan_id,
+            graph.version.plan_version_id,
+            receipt.approval_receipt_id,
+            occurred_at,
+        )
+
+    @staticmethod
+    def _activated_event(
+        graph: TradePlanGraph,
+        receipt: UserApprovalReceipt,
+        activation_id: str,
+        occurred_at: str,
+    ) -> PlanActivated:
+        event_id = "application_event_" + canonical_hash(
+            {
+                "event_type": "PlanActivated",
+                "plan_version_id": graph.version.plan_version_id,
+                "approval_receipt_id": receipt.approval_receipt_id,
+                "activation_id": activation_id,
+            }
+        )[:24]
+        return PlanActivated(
+            event_id,
+            graph.version.plan_id,
+            graph.version.plan_version_id,
+            activation_id,
+            receipt.approval_receipt_id,
+            occurred_at,
+        )
+
+    @staticmethod
+    def _rejected_event(
+        draft_id: str,
+        plan_id: str,
+        revision: int,
+        occurred_at: str,
+    ) -> PlanDraftRejected:
+        event_id = "application_event_" + canonical_hash(
+            {
+                "event_type": "PlanDraftRejected",
+                "draft_id": draft_id,
+                "revision": revision,
+            }
+        )[:24]
+        return PlanDraftRejected(
+            event_id,
+            draft_id,
+            plan_id,
+            revision,
+            occurred_at,
+        )
+
+    def _command_receipt(
+        self, invocation_id: str, request_hash: str
+    ) -> sqlite3.Row | None:
+        row = self._connection.execute(
+            "SELECT * FROM application_command_receipt "
+            "WHERE invocation_id=?",
+            (invocation_id,),
+        ).fetchone()
+        if row is not None and row["request_hash"] != request_hash:
+            raise PlanValidationError("INVOCATION_CONFLICT")
+        return row
+
+    def _insert_command_receipt(
+        self,
+        *,
+        invocation_id: str,
+        command_name: str,
+        request_hash: str,
+        result_type: str,
+        aggregate_id: str,
+        revision_or_version_id: str,
+        actor,
+        created_at: str,
+    ) -> None:
+        self._connection.execute(
+            "INSERT INTO application_command_receipt VALUES("
+            "?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                invocation_id,
+                command_name,
+                request_hash,
+                result_type,
+                aggregate_id,
+                revision_or_version_id,
+                "succeeded",
+                actor.decision_actor,
+                actor.interaction_channel,
+                actor.transport_actor,
+                created_at,
+            ),
+        )
+
+    def _insert_challenge_expiry(
+        self, challenge_id: str
+    ) -> None:
+        self._connection.execute(
+            "UPDATE plan_confirmation_challenge SET status='expired' "
+            "WHERE challenge_id=? AND status='issued'",
+            (challenge_id,),
+        )
+
     def _validate_seal_authority(self, graph: TradePlanGraph) -> None:
         version = graph.version
         master = self._master_row(version.plan_id)
@@ -481,7 +1433,8 @@ class SQLiteTradePlanRepository:
         )
         if (
             receipt["plan_id"] != version.plan_id
-            or receipt["expected_content_hash"] != version.content_hash
+            or receipt["approved_graph_seal_hash"]
+            != version.graph_seal_hash
         ):
             raise PlanValidationError("PLAN_CONFIRMATION_AUTHORITY_INVALID")
         latest = self._connection.execute(
@@ -816,6 +1769,277 @@ class SQLiteTradePlanRepository:
             "algorithm_version": row["algorithm_version"],
             "content_hash": row["content_hash"],
         }
+
+    @staticmethod
+    def _json(value: object) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _encode_graph(
+        cls, graph: TradePlanGraph
+    ) -> Mapping[str, object]:
+        version = graph.version
+        return {
+            "schema_version": graph.schema_version,
+            "version": {
+                "plan_version_id": version.plan_version_id,
+                "plan_id": version.plan_id,
+                "version_no": version.version_no,
+                "supersedes_version_id": (
+                    version.supersedes_version_id
+                ),
+                "strategy_version_id": version.strategy_version_id,
+                "investment_thesis_version_id": (
+                    version.investment_thesis_version_id
+                ),
+                "account_snapshot_version_id": (
+                    version.account_snapshot_version_id
+                ),
+                "data_snapshot_id": version.data_snapshot_id,
+                "horizon_start": version.horizon_start,
+                "horizon_end": version.horizon_end,
+                "review_by": version.review_by,
+                "risk_policy_version_id": (
+                    version.risk_policy_version_id
+                ),
+                "metric_catalog_version": (
+                    version.metric_catalog_version
+                ),
+                "evaluator_policy_version": (
+                    version.evaluator_policy_version
+                ),
+                "conflict_policy_version": (
+                    version.conflict_policy_version
+                ),
+                "ast_version": version.ast_version,
+                "content": version.content,
+                "content_hash": version.content_hash,
+                "graph_seal_hash": version.graph_seal_hash,
+                "confirmed_at": version.confirmed_at,
+                "user_approval_receipt_id": (
+                    version.user_approval_receipt_id
+                ),
+            },
+            "sleeves": tuple(
+                {
+                    **sleeve.canonical_content,
+                    "grid_constraint": (
+                        sleeve.constraint.canonical_content
+                        if isinstance(sleeve, GridSleeve)
+                        else None
+                    ),
+                }
+                for sleeve in graph.sleeves
+            ),
+            "rules": tuple(
+                {
+                    "rule_id": rule.rule_id,
+                    "rule_class": rule.rule_class.value,
+                    "rule_kind": rule.rule_kind,
+                    "priority": rule.priority.value,
+                    "scope": rule.scope.value,
+                    "sleeve_id": rule.sleeve_id,
+                    "effect": rule.effect,
+                    "applies_to": rule.applies_to,
+                    "candidate_intent": candidate_to_dict(
+                        rule.candidate_intent
+                    ),
+                    "input_applicability": rule.input_applicability,
+                    "condition": ast_to_dict(rule.condition),
+                    "content_hash": rule.content_hash,
+                    "ast_version": rule.ast_version,
+                }
+                for rule in graph.rules
+            ),
+            "evidence_references": graph.evidence_references,
+            "adjusted_price_evidence": (
+                graph.adjusted_price_evidence
+            ),
+        }
+
+    @classmethod
+    def _decode_graph(
+        cls, payload: Mapping[str, object]
+    ) -> TradePlanGraph:
+        raw_version = payload["version"]
+        if not isinstance(raw_version, Mapping):
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_INVALID")
+        version = TradePlanVersion(
+            plan_version_id=str(raw_version["plan_version_id"]),
+            plan_id=str(raw_version["plan_id"]),
+            version_no=int(raw_version["version_no"]),
+            supersedes_version_id=(
+                str(raw_version["supersedes_version_id"])
+                if raw_version.get("supersedes_version_id")
+                is not None
+                else None
+            ),
+            strategy_version_id=str(
+                raw_version["strategy_version_id"]
+            ),
+            investment_thesis_version_id=(
+                str(raw_version["investment_thesis_version_id"])
+                if raw_version.get("investment_thesis_version_id")
+                is not None
+                else None
+            ),
+            account_snapshot_version_id=str(
+                raw_version["account_snapshot_version_id"]
+            ),
+            data_snapshot_id=str(raw_version["data_snapshot_id"]),
+            horizon_start=str(raw_version["horizon_start"]),
+            horizon_end=str(raw_version["horizon_end"]),
+            review_by=str(raw_version["review_by"]),
+            risk_policy_version_id=(
+                str(raw_version["risk_policy_version_id"])
+                if raw_version.get("risk_policy_version_id")
+                is not None
+                else None
+            ),
+            metric_catalog_version=str(
+                raw_version["metric_catalog_version"]
+            ),
+            evaluator_policy_version=str(
+                raw_version["evaluator_policy_version"]
+            ),
+            conflict_policy_version=str(
+                raw_version["conflict_policy_version"]
+            ),
+            ast_version=str(raw_version["ast_version"]),
+            content=raw_version["content"],
+            content_hash=str(raw_version["content_hash"]),
+            graph_seal_hash=str(raw_version["graph_seal_hash"]),
+            confirmed_at=str(raw_version["confirmed_at"]),
+            user_approval_receipt_id=str(
+                raw_version["user_approval_receipt_id"]
+            ),
+        )
+        sleeves = []
+        for raw in payload.get("sleeves", ()):
+            if not isinstance(raw, Mapping):
+                raise PlanValidationError(
+                    "PLAN_DRAFT_GRAPH_INVALID"
+                )
+
+            def decimal_value(
+                state_key: str, value_key: str
+            ) -> Decimal | None:
+                return (
+                    Decimal(str(raw[value_key]))
+                    if raw[state_key] == "known"
+                    else None
+                )
+
+            common = {
+                "sleeve_id": str(raw["sleeve_id"]),
+                "quantity_budget": decimal_value(
+                    "quantity_budget_state",
+                    "quantity_budget_value",
+                ),
+                "core_floor": CoreFloor(
+                    Decimal(str(raw["core_floor_value"]))
+                ),
+                "max_notional": decimal_value(
+                    "max_notional_state", "max_notional_value"
+                ),
+                "max_loss": decimal_value(
+                    "max_loss_state", "max_loss_value"
+                ),
+            }
+            if raw["sleeve_kind"] == "core":
+                sleeves.append(CoreSleeve(**common))
+            elif raw["sleeve_kind"] == "grid":
+                grid = raw["grid_constraint"]
+                if not isinstance(grid, Mapping):
+                    raise PlanValidationError(
+                        "PLAN_DRAFT_GRAPH_INVALID"
+                    )
+                sleeves.append(
+                    GridSleeve(
+                        **common,
+                        constraint=GridConstraint(
+                            grid_constraint_id=str(
+                                grid["grid_constraint_id"]
+                            ),
+                            lower_price=Decimal(
+                                str(grid["lower_price"])
+                            ),
+                            upper_price=Decimal(
+                                str(grid["upper_price"])
+                            ),
+                            level_count=int(grid["level_count"]),
+                            quantity_per_level=Decimal(
+                                str(grid["quantity_per_level"])
+                            ),
+                            total_quantity_budget=Decimal(
+                                str(
+                                    grid[
+                                        "total_quantity_budget"
+                                    ]
+                                )
+                            ),
+                            price_basis=str(grid["price_basis"]),
+                            trigger_mode=str(grid["trigger_mode"]),
+                            cooldown_trading_sessions=int(
+                                grid[
+                                    "cooldown_trading_sessions"
+                                ]
+                            ),
+                            lot_size=Decimal(
+                                str(grid["lot_size"])
+                            ),
+                        ),
+                    )
+                )
+            else:
+                raise PlanValidationError(
+                    "PLAN_DRAFT_GRAPH_INVALID"
+                )
+        rules = tuple(
+            TradePlanRule(
+                rule_id=str(raw["rule_id"]),
+                rule_class=RuleClass(str(raw["rule_class"])),
+                rule_kind=str(raw["rule_kind"]),
+                priority=RulePriority(str(raw["priority"])),
+                scope=RuleScope(str(raw["scope"])),
+                sleeve_id=(
+                    str(raw["sleeve_id"])
+                    if raw.get("sleeve_id") is not None
+                    else None
+                ),
+                effect=str(raw["effect"]),
+                applies_to=str(raw["applies_to"]),
+                candidate_intent=candidate_from_dict(
+                    raw.get("candidate_intent")
+                ),
+                input_applicability=tuple(
+                    raw.get("input_applicability", ())
+                ),
+                condition=ast_from_dict(raw["condition"]),
+                content_hash=str(raw["content_hash"]),
+                ast_version=str(raw["ast_version"]),
+            )
+            for raw in payload.get("rules", ())
+        )
+        graph = TradePlanGraph(
+            version=version,
+            sleeves=tuple(sleeves),
+            rules=rules,
+            evidence_references=tuple(
+                payload.get("evidence_references", ())
+            ),
+            adjusted_price_evidence=tuple(
+                payload.get("adjusted_price_evidence", ())
+            ),
+            schema_version=str(payload["schema_version"]),
+        )
+        graph.validate()
+        return graph
 
 
 __all__ = ["SQLiteTradePlanRepository"]

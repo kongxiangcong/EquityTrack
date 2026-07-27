@@ -7,13 +7,15 @@ from decimal import Decimal
 import pytest
 
 from trading_platform.application import (
-    ActivateTradePlanVersion,
-    CreateTradePlanMaster,
+    ConfirmTradePlanVersion,
+    CreateTradePlanDraft,
     GetActiveTradePlan,
     GetTradePlanGraph,
-    SealTradePlanGraph,
+    IssuePlanConfirmationChallenge,
+    PlanCommandActor,
     open_trade_plan,
 )
+from trading_platform.domain.approvals import ActivationIntent
 from trading_platform.domain.account_snapshots import AccountSnapshotVersion
 from trading_platform.domain.plans import (
     CoreFloor,
@@ -23,6 +25,7 @@ from trading_platform.domain.plans import (
     TradePlanMasterId,
     TradePlanRule,
     build_plan_version,
+    build_trade_plan_draft,
 )
 from trading_platform.domain.rules import (
     RuleAstV2,
@@ -132,102 +135,6 @@ def _seed_data_snapshot(connection: sqlite3.Connection) -> None:
     )
 
 
-def _seed_approval(
-    connection: sqlite3.Connection,
-    *,
-    plan_id: str,
-    suffix: str,
-    content_hash: str,
-    activation_intent: str = "confirm_and_enable",
-) -> str:
-    draft_id = f"plan_draft_{suffix}"
-    challenge_id = f"plan_challenge_{suffix}"
-    receipt_id = f"user_approval_receipt_{suffix}"
-    now = "2026-07-27T00:00:00+08:00"
-    connection.execute(
-        "INSERT INTO trade_plan_draft VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            draft_id,
-            plan_id,
-            "account_local",
-            "security_600000",
-            "strategy_version_trend_hold_break_exit_1",
-            None,
-            1,
-            "open",
-            "{}",
-            "{}",
-            content_hash,
-            now,
-            now,
-            "user:local-user",
-            "skill",
-            "agent:codex",
-        ),
-    )
-    diff_hash = canonical_hash({"initial": True, "suffix": suffix})
-    challenge_hash = canonical_hash(
-        {
-            "challenge_id": challenge_id,
-            "content_hash": content_hash,
-            "diff_hash": diff_hash,
-        }
-    )
-    connection.execute(
-        "INSERT INTO plan_confirmation_challenge "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            challenge_id,
-            "PlanConfirmationChallenge@1",
-            plan_id,
-            draft_id,
-            1,
-            content_hash,
-            '{"initial":true}',
-            diff_hash,
-            '["confirm_and_enable","confirm_without_enable"]',
-            "user:local-user",
-            "skill",
-            "agent:codex",
-            now,
-            "2026-07-28T00:00:00+08:00",
-            now,
-            receipt_id,
-            challenge_hash,
-        ),
-    )
-    receipt_hash = canonical_hash(
-        {
-            "receipt_id": receipt_id,
-            "challenge_id": challenge_id,
-            "content_hash": content_hash,
-            "activation_intent": activation_intent,
-        }
-    )
-    connection.execute(
-        "INSERT INTO user_approval_receipt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            receipt_id,
-            "UserApprovalReceipt@1",
-            challenge_id,
-            plan_id,
-            draft_id,
-            1,
-            content_hash,
-            diff_hash,
-            activation_intent,
-            "user:local-user",
-            "skill",
-            "agent:codex",
-            f"approve:{suffix}",
-            now,
-            receipt_hash,
-        ),
-    )
-    connection.commit()
-    return receipt_id
-
-
 def _graph(
     *,
     plan_id: str,
@@ -235,13 +142,15 @@ def _graph(
     suffix: str,
     version_no: int,
     supersedes: str | None,
-    receipt_id: str,
+    receipt_id: str = "pending-user-approval",
 ) -> object:
     sleeve = CoreSleeve(
         sleeve_id=f"core_{suffix}",
         quantity_budget=Decimal("100"),
         core_floor=CoreFloor(Decimal("80")),
     )
+
+
     rule = TradePlanRule.build(
         rule_id=f"rule_{suffix}",
         rule_class=RuleClass.HARD,
@@ -296,6 +205,65 @@ def _graph(
     )
 
 
+_PLAN_ACTOR = PlanCommandActor(
+    "user:local-user", "skill", "agent:codex"
+)
+
+
+def _prepare_confirmation(
+    tasks,
+    graph,
+    suffix: str,
+    intent: ActivationIntent = ActivationIntent.CONFIRM_AND_ACTIVATE,
+):
+    draft = build_trade_plan_draft(
+        draft_id=f"trade_plan_draft_{suffix}",
+        account_id="account_local",
+        security_id="security_600000",
+        proposed_graph=graph,
+        parameters={"fixture": suffix},
+        created_at="2026-07-27T00:00:00+08:00",
+        decision_actor=_PLAN_ACTOR.decision_actor,
+        interaction_channel=_PLAN_ACTOR.interaction_channel,
+        transport_actor=_PLAN_ACTOR.transport_actor,
+    )
+    created = tasks.execute(
+        CreateTradePlanDraft(f"create:{suffix}", draft, _PLAN_ACTOR)
+    )
+    challenge = tasks.execute(
+        IssuePlanConfirmationChallenge(
+            invocation_id=f"challenge:{suffix}",
+            draft_id=created.draft_id,
+            expected_revision=created.revision,
+            activation_intent=intent,
+            issued_at="2026-07-27T00:05:00+08:00",
+            expires_at="2026-07-27T01:05:00+08:00",
+            actor=_PLAN_ACTOR,
+        )
+    )
+    return ConfirmTradePlanVersion(
+        invocation_id=f"confirm:{suffix}",
+        challenge_id=challenge.challenge_id,
+        expected_revision=challenge.expected_revision,
+        expected_draft_hash=challenge.expected_draft_hash,
+        expected_diff_hash=challenge.canonical_diff.content_hash,
+        activation_intent=intent,
+        approved_at="2026-07-27T00:10:00+08:00",
+        actor=_PLAN_ACTOR,
+    )
+
+
+def _confirm_graph(
+    tasks,
+    graph,
+    suffix: str,
+    intent: ActivationIntent = ActivationIntent.CONFIRM_AND_ACTIVATE,
+):
+    return tasks.execute(
+        _prepare_confirmation(tasks, graph, suffix, intent)
+    )
+
+
 def _authority_root(tmp_path) -> tuple[object, str]:
     data_root = _ready_root(tmp_path)
     confirmed = _confirmed(
@@ -312,111 +280,53 @@ def _authority_root(tmp_path) -> tuple[object, str]:
     return data_root, confirmed.account_snapshot_version_id
 
 
-def _create_master(tasks, seed: str) -> TradePlanMaster:
-    identity = TradePlanMasterId.derive(
-        "account_local", "security_600000", seed
-    )
-    result = tasks.execute(
-        CreateTradePlanMaster(
-            TradePlanMaster(
-                plan_id=identity,
-                strategy_version_id=(
-                    "strategy_version_trend_hold_break_exit_1"
-                ),
-                lifecycle_status="inactive",
-                transition_seq=0,
-                created_at="2026-07-27T00:00:00+08:00",
-            )
-        )
-    )
-    assert isinstance(result, TradePlanMaster)
-    return result
-
-
 def test_database_allows_one_active_master_per_account_security(
     tmp_path,
 ) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
     with open_trade_plan(data_root) as tasks:
-        first = _create_master(tasks, "first")
-        second = _create_master(tasks, "second")
-        connection = sqlite3.connect(data_root / "platform.sqlite3")
-        first_content_hash = canonical_hash(
-            {
-                "schema_version": "TradePlanContent@1",
-                "purpose": "synthetic-first",
-            }
-        )
-        first_receipt = _seed_approval(
-            connection,
-            plan_id=first.plan_id.value,
-            suffix="first",
-            content_hash=first_content_hash,
-        )
+        first_plan_id = TradePlanMasterId.derive(
+            "account_local", "security_600000", "first"
+        ).value
         first_graph = _graph(
-            plan_id=first.plan_id.value,
+            plan_id=first_plan_id,
             snapshot_id=snapshot_id,
             suffix="first",
             version_no=1,
             supersedes=None,
-            receipt_id=first_receipt,
         )
-        tasks.execute(SealTradePlanGraph(first_graph))
-
-        second_content_hash = canonical_hash(
-            {
-                "schema_version": "TradePlanContent@1",
-                "purpose": "synthetic-second",
-            }
-        )
-        second_receipt = _seed_approval(
-            connection,
-            plan_id=second.plan_id.value,
-            suffix="second",
-            content_hash=second_content_hash,
-        )
-        connection.close()
+        second_plan_id = TradePlanMasterId.derive(
+            "account_local", "security_600000", "second"
+        ).value
         second_graph = _graph(
-            plan_id=second.plan_id.value,
+            plan_id=second_plan_id,
             snapshot_id=snapshot_id,
             suffix="second",
             version_no=1,
             supersedes=None,
-            receipt_id=second_receipt,
         )
-        tasks.execute(SealTradePlanGraph(second_graph))
+        commands = (
+            _prepare_confirmation(tasks, first_graph, "first"),
+            _prepare_confirmation(tasks, second_graph, "second"),
+        )
 
-    commands = (
-        ActivateTradePlanVersion(
-            first.plan_id.value,
-            first_graph.version.plan_version_id,
-            first_receipt,
-            "activate:first",
-        ),
-        ActivateTradePlanVersion(
-            second.plan_id.value,
-            second_graph.version.plan_version_id,
-            second_receipt,
-            "activate:second",
-        ),
-    )
-
-    def activate(command):
+    def confirm(command):
         try:
             with open_trade_plan(data_root) as concurrent_tasks:
                 result = concurrent_tasks.execute(command)
-            return result.master.plan_id.value
+            return result.graph.version.plan_id
         except PlanValidationError as error:
             return error.code
         except PersistenceError as error:
             return error.code
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = tuple(executor.map(activate, commands))
+        outcomes = tuple(executor.map(confirm, commands))
 
     failure_codes = {
         "RUNTIME_BUSY",
         "ACTIVE_MASTER_OWNERSHIP_CONFLICT",
+        "PLAN_CONFIRMATION_STORAGE_CONFLICT",
     }
     assert sum(outcome in failure_codes for outcome in outcomes) == 1
     winning_plan_id = next(
@@ -445,29 +355,17 @@ def test_database_allows_one_active_master_per_account_security(
 def test_confirmed_plan_graph_rejects_late_mutation(tmp_path) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
     with open_trade_plan(data_root) as tasks:
-        master = _create_master(tasks, "sealed")
-        connection = sqlite3.connect(data_root / "platform.sqlite3")
-        receipt = _seed_approval(
-            connection,
-            plan_id=master.plan_id.value,
-            suffix="sealed",
-            content_hash=canonical_hash(
-                {
-                    "schema_version": "TradePlanContent@1",
-                    "purpose": "synthetic-sealed",
-                }
-            ),
-        )
-        connection.close()
+        plan_id = TradePlanMasterId.derive(
+            "account_local", "security_600000", "sealed"
+        ).value
         graph = _graph(
-            plan_id=master.plan_id.value,
+            plan_id=plan_id,
             snapshot_id=snapshot_id,
             suffix="sealed",
             version_no=1,
             supersedes=None,
-            receipt_id=receipt,
         )
-        sealed = tasks.execute(SealTradePlanGraph(graph))
+        sealed = _confirm_graph(tasks, graph, "sealed").graph
         assert tasks.get(
             GetTradePlanGraph(sealed.version.plan_version_id)
         ) == sealed
@@ -490,71 +388,39 @@ def test_confirmed_plan_graph_rejects_late_mutation(tmp_path) -> None:
 def test_new_activation_preserves_old_version_history(tmp_path) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
     with open_trade_plan(data_root) as tasks:
-        master = _create_master(tasks, "history")
-        connection = sqlite3.connect(data_root / "platform.sqlite3")
-        first_receipt = _seed_approval(
-            connection,
-            plan_id=master.plan_id.value,
-            suffix="history_v1",
-            content_hash=canonical_hash(
-                {
-                    "schema_version": "TradePlanContent@1",
-                    "purpose": "synthetic-history_v1",
-                }
-            ),
-        )
+        plan_id = TradePlanMasterId.derive(
+            "account_local", "security_600000", "history"
+        ).value
         first = _graph(
-            plan_id=master.plan_id.value,
+            plan_id=plan_id,
             snapshot_id=snapshot_id,
             suffix="history_v1",
             version_no=1,
             supersedes=None,
-            receipt_id=first_receipt,
         )
-        tasks.execute(SealTradePlanGraph(first))
-        tasks.execute(
-            ActivateTradePlanVersion(
-                master.plan_id.value,
-                first.version.plan_version_id,
-                first_receipt,
-                "activate:history:v1",
-            )
+        first_command = _prepare_confirmation(
+            tasks, first, "history_v1"
         )
+        first_result = tasks.execute(first_command)
+        first = first_result.graph
         old_graph = tasks.get(GetTradePlanGraph(first.version.plan_version_id))
+        connection = sqlite3.connect(data_root / "platform.sqlite3")
         old_activation = connection.execute(
             "SELECT * FROM plan_activation WHERE plan_version_id=?",
             (first.version.plan_version_id,),
         ).fetchone()
 
-        second_receipt = _seed_approval(
-            connection,
-            plan_id=master.plan_id.value,
-            suffix="history_v2",
-            content_hash=canonical_hash(
-                {
-                    "schema_version": "TradePlanContent@1",
-                    "purpose": "synthetic-history_v2",
-                }
-            ),
-        )
         connection.close()
         second = _graph(
-            plan_id=master.plan_id.value,
+            plan_id=plan_id,
             snapshot_id=snapshot_id,
             suffix="history_v2",
             version_no=2,
             supersedes=first.version.plan_version_id,
-            receipt_id=second_receipt,
         )
-        tasks.execute(SealTradePlanGraph(second))
-        tasks.execute(
-            ActivateTradePlanVersion(
-                master.plan_id.value,
-                second.version.plan_version_id,
-                second_receipt,
-                "activate:history:v2",
-            )
-        )
+        second = _confirm_graph(
+            tasks, second, "history_v2"
+        ).graph
         assert tasks.get(
             GetTradePlanGraph(first.version.plan_version_id)
         ) == old_graph
@@ -562,6 +428,9 @@ def test_new_activation_preserves_old_version_history(tmp_path) -> None:
             GetActiveTradePlan("account_local", "security_600000")
         )
         assert active.version == second.version
+        replay = tasks.execute(first_command)
+        assert replay.graph == old_graph
+        assert replay.active_plan.activation.ended_at is not None
 
     connection = sqlite3.connect(data_root / "platform.sqlite3")
     after = connection.execute(
@@ -581,6 +450,6 @@ def test_new_activation_preserves_old_version_history(tmp_path) -> None:
     )
     assert connection.execute(
         "SELECT count(*) FROM plan_activation WHERE plan_id=?",
-        (master.plan_id.value,),
+        (plan_id,),
     ).fetchone()[0] == 2
     connection.close()

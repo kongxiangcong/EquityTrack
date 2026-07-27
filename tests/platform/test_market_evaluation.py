@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-import sqlite3
 
 import pytest
 
@@ -10,12 +9,9 @@ from tests.platform.owning_adapter_fixture import (
 )
 from tests.platform.test_trade_plan_model_b import (
     _authority_root,
-    _seed_approval,
+    _confirm_graph,
 )
 from trading_platform.application import (
-    ActivateTradePlanVersion,
-    CreateTradePlanMaster,
-    SealTradePlanGraph,
     open_market,
     open_trade_plan,
 )
@@ -31,7 +27,6 @@ from trading_platform.domain.plans import (
     CoreFloor,
     CoreSleeve,
     GridSleeve,
-    TradePlanMaster,
     TradePlanMasterId,
     TradePlanRule,
     build_plan_version,
@@ -46,7 +41,6 @@ from trading_platform.domain.rules import (
     RulePriority,
     RuleScope,
 )
-from trading_platform.identity import canonical_hash
 from trading_platform.market import MarketError
 
 
@@ -121,27 +115,6 @@ def _active_grid_plan(data_root, snapshot_id: str) -> str:
         "account_local", "security_600000", "market-evaluation"
     )
     with open_trade_plan(data_root) as tasks:
-        tasks.execute(
-            CreateTradePlanMaster(
-                TradePlanMaster(
-                    plan_id=plan_id,
-                    strategy_version_id=(
-                        "strategy_version_core_plus_grid_1"
-                    ),
-                    lifecycle_status="inactive",
-                    transition_seq=0,
-                    created_at="2026-07-27T00:00:00+08:00",
-                )
-            )
-        )
-        connection = sqlite3.connect(data_root / "platform.sqlite3")
-        receipt = _seed_approval(
-            connection,
-            plan_id=plan_id.value,
-            suffix="market_evaluation",
-            content_hash=canonical_hash(content),
-        )
-        connection.close()
         graph = build_plan_version(
             plan_version_id="trade_plan_version_market_evaluation",
             plan_id=plan_id.value,
@@ -175,17 +148,11 @@ def _active_grid_plan(data_root, snapshot_id: str) -> str:
             evidence_references=(),
             adjusted_price_evidence=(),
             confirmed_at="2026-07-27T00:00:00+08:00",
-            user_approval_receipt_id=receipt,
+            user_approval_receipt_id="pending-user-approval",
         )
-        tasks.execute(SealTradePlanGraph(graph))
-        tasks.execute(
-            ActivateTradePlanVersion(
-                plan_id.value,
-                graph.version.plan_version_id,
-                receipt,
-                "activate:market-evaluation",
-            )
-        )
+        graph = _confirm_graph(
+            tasks, graph, "market_evaluation"
+        ).graph
     return graph.version.plan_version_id
 
 
