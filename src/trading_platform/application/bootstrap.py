@@ -54,6 +54,7 @@ from .trade_plan_authoring import TradePlanTasks
 from .commands import ApplicationCommandDispatcher
 from .manual_portfolio_review import ManualPortfolioReview
 from .decision_tasks import DecisionTasks
+from .decision_journal import DecisionJournal
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -62,6 +63,9 @@ from trading_platform.persistence.manual_portfolio_review import (
 )
 from trading_platform.persistence.decision_tasks import (
     SQLiteDecisionTaskRepository,
+)
+from trading_platform.persistence.decision_journal import (
+    SQLiteDecisionJournalRepository,
 )
 
 
@@ -227,7 +231,10 @@ def open_decision_workspace(
     with _store(data_root, migrations_root) as store:
         yield EstimatedAccountWorkspace(
             AccountStateQueries(
-                SQLiteAccountSnapshotProjection(store.connection)
+                SQLiteAccountSnapshotProjection(store.connection),
+                SQLiteDecisionJournalRepository(
+                    store.connection, store.writer_lock
+                ),
             ),
             WorkspaceService(
                 store.connection, _ledger(store), store.writer_lock
@@ -266,6 +273,10 @@ def open_application_commands(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[ApplicationCommandDispatcher]:
     with _store(data_root, migrations_root) as store:
+        journal_repository = SQLiteDecisionJournalRepository(
+            store.connection, store.writer_lock
+        )
+        journal = DecisionJournal(journal_repository)
         yield ApplicationCommandDispatcher(
             AccountSnapshotCommands(
                 SQLiteAccountSnapshotRepository(
@@ -283,15 +294,18 @@ def open_application_commands(
                     store.connection, store.writer_lock
                 ),
                 AccountStateQueries(
-                    SQLiteAccountSnapshotProjection(store.connection)
+                    SQLiteAccountSnapshotProjection(store.connection),
+                    journal_repository,
                 ),
                 _ledger(store),
             ),
             DecisionTasks(
                 SQLiteDecisionTaskRepository(
                     store.connection, store.writer_lock
-                )
+                ),
+                journal_repository,
             ),
+            journal,
         )
 
 
@@ -310,7 +324,10 @@ def open_manual_portfolio_review(
         yield ManualPortfolioReview(
             repository,
             AccountStateQueries(
-                SQLiteAccountSnapshotProjection(store.connection)
+                SQLiteAccountSnapshotProjection(store.connection),
+                SQLiteDecisionJournalRepository(
+                    store.connection, store.writer_lock
+                ),
             ),
             _ledger(store),
         )
@@ -318,14 +335,37 @@ def open_manual_portfolio_review(
 
 @contextmanager
 def open_decision_tasks(
-    data_root: Path, migrations_root: Path | None = None
+    data_root: Path,
+    migrations_root: Path | None = None,
+    *,
+    fault_injector=None,
 ) -> Iterator[DecisionTasks]:
     with _store(data_root, migrations_root) as store:
+        journal_repository = SQLiteDecisionJournalRepository(
+            store.connection, store.writer_lock
+        )
+        journal_repository.fault_injector = fault_injector
         yield DecisionTasks(
             SQLiteDecisionTaskRepository(
                 store.connection, store.writer_lock
-            )
+            ),
+            journal_repository,
         )
+
+
+@contextmanager
+def open_decision_journal(
+    data_root: Path,
+    migrations_root: Path | None = None,
+    *,
+    fault_injector=None,
+) -> Iterator[DecisionJournal]:
+    with _store(data_root, migrations_root) as store:
+        repository = SQLiteDecisionJournalRepository(
+            store.connection, store.writer_lock
+        )
+        repository.fault_injector = fault_injector
+        yield DecisionJournal(repository)
 
 
 @contextmanager
@@ -419,7 +459,13 @@ def open_account_state_queries(
     with _store(data_root, migrations_root) as store:
         yield AccountStateQueries(
             SQLiteAccountSnapshotProjection(store.connection),
-            execution_reader,
+            (
+                execution_reader
+                if execution_reader is not None
+                else SQLiteDecisionJournalRepository(
+                    store.connection, store.writer_lock
+                )
+            ),
         )
 
 
@@ -489,6 +535,7 @@ __all__ = [
     "open_market",
     "open_manual_portfolio_review",
     "open_decision_tasks",
+    "open_decision_journal",
     "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",

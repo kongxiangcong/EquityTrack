@@ -82,7 +82,8 @@ Replace transient evaluation-task presentation with persisted DecisionTask ident
 - The focused gate passed `49 passed in 32.74s`; the final task/manual/restart
   gate passed `29 passed in 24.11s`; the final wider current-state regression
   passed `140 passed in 76.96s`.
-- Cohort `0017` remains unapplied to both known persistent roots. Its current
-  SHA-256 is
+- Cohort `0017` remained unapplied to both known persistent roots. Its
+  SHA-256 at the ticket-10 boundary, before tickets 11–13 complete the same
+  cohort in place, was
   `6A8D9F2DAA222DACDF07D7CA6BB4F3AF1B92538A2BEEFAE7AF320E10F7757DA2`;
   `0016` remains unchanged.

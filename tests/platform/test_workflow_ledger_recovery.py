@@ -33,9 +33,13 @@ from tests.platform.test_plan_confirmation import _authority_root
 from trading_platform.application import (
     GetManualPortfolioReview,
     ListDecisionTasks,
+    ListDecisionJournal,
+    open_decision_journal,
     open_decision_tasks,
     open_manual_portfolio_review,
 )
+from tests.platform.test_decision_tasks import _task_review
+from tests.platform.test_execution_records import _declare
 
 
 class InjectedCrash(RuntimeError):
@@ -57,9 +61,7 @@ def test_estimated_account_state_rebuilds_identically_after_restart(
     with open_account_state_queries(data_root) as restarted_process:
         after = restarted_process.get(GetEstimatedAccountState("account_local"))
     assert after == before
-    assert after.unverified_evidence == (
-        "EXECUTION_RECORD_READER_UNAVAILABLE",
-    )
+    assert after.unverified_evidence == ()
 
 
 def test_manual_review_checkpoint_and_manifest_survive_restart(
@@ -94,6 +96,30 @@ def test_manual_review_checkpoint_and_manifest_survive_restart(
         )
     assert len(tasks) == 1
     assert tasks[0].review_run_id == before.review_run_id
+
+
+def test_execution_journal_and_estimate_survive_restart(
+    tmp_path: Path,
+) -> None:
+    data_root, _, task = _task_review(
+        tmp_path,
+        suffix="restart-execution",
+        invocation_id="restart:execution-review",
+    )
+    with open_decision_journal(data_root) as journal:
+        execution = journal.declare(
+            _declare(task.decision_task_id, "restart:execution")
+        )
+    with open_decision_journal(data_root) as restarted_journal:
+        view = restarted_journal.list(
+            ListDecisionJournal("account_local")
+        )
+    with open_account_state_queries(data_root) as restarted_state:
+        state = restarted_state.get(
+            GetEstimatedAccountState("account_local")
+        )
+    assert view.executions == (execution,)
+    assert state.execution_record_ids == (execution.execution_record_id,)
 
 
 class CrashAt:

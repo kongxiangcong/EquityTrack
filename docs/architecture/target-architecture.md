@@ -72,6 +72,14 @@ crosses the shared application envelope; typed workflow transitions may reopen
 the same deferred task or supersede it, but no adapter maintains an in-memory
 or broker-derived task state.
 
+`DecisionJournal` is the sole immutable behavior/execution path. Its SQLite
+adapter commits the user action, optional user-declared execution, linked task
+transition, and application receipt in one transaction. The same adapter
+implements the `ExecutionRecordReader` consumed by estimated account state;
+corrections replace projection inputs through immutable links and never update
+the confirmed account snapshot. Missing broker evidence stays explicitly
+unverified.
+
 ## Data, privacy, and financial boundaries
 
 - Official disclosures are canonical for critical financial facts.

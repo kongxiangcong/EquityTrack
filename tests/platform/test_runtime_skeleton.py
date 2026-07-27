@@ -43,10 +43,12 @@ from trading_platform.identity import CanonicalDate, build_code_identity, canoni
 ROOT = Path(__file__).resolve().parents[2]
 
 OWNING_SQLITE_TESTS = {
+    "test_action_log.py",
     "test_chart_annotations.py",
     "test_data_sync_pit.py",
     "test_decision_tasks.py",
     "test_external_official_disclosure.py",
+    "test_execution_records.py",
     "test_market_evaluation.py",
     "test_manual_portfolio_review.py",
     "test_plan_confirmation.py",

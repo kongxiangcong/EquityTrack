@@ -145,6 +145,10 @@ def test_projection_uses_latest_snapshot_and_confirmed_executions_only(
     assert state.positions[0].total_quantity == "105"
     assert (state.cash_state, state.cash_value) == ("known", "957")
     assert state.unverified_evidence == ("execution_a", "execution_b")
+    assert all(
+        "NOT_EXECUTED" not in evidence
+        for evidence in state.unverified_evidence
+    )
 
     with open_account_state_queries(
         data_root,

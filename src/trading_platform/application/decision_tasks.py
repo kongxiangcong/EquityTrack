@@ -11,6 +11,7 @@ from trading_platform.domain.decision_tasks import (
     UserDisposition,
 )
 from trading_platform.identity import canonical_hash
+from .decision_journal import RecordTaskAction
 
 
 @dataclass(frozen=True)
@@ -97,11 +98,22 @@ class DecisionTaskRepository(Protocol):
     ) -> tuple[DecisionTask, ...]: ...
 
 
+class DecisionActionWriter(Protocol):
+    def record_action(
+        self, command: RecordTaskAction
+    ) -> DecisionTask: ...
+
+
 class DecisionTasks:
     """Owns complete user and workflow task-lifecycle operations."""
 
-    def __init__(self, repository: DecisionTaskRepository) -> None:
+    def __init__(
+        self,
+        repository: DecisionTaskRepository,
+        journal: DecisionActionWriter,
+    ) -> None:
         self._repository = repository
+        self._journal = journal
 
     def list(
         self, query: ListDecisionTasks
@@ -123,20 +135,18 @@ class DecisionTasks:
         ):
             raise DecisionTaskError("DECISION_TASK_COMMAND_INVALID")
         command.condition.validate()
-        return self._repository.append(
-            AppendDecisionTaskTransition(
+        return self._journal.record_action(
+            RecordTaskAction(
+                invocation_id=command.invocation_id,
                 decision_task_id=command.decision_task_id,
-                allowed_from=(DecisionTaskState.OPEN,),
-                to_status=DecisionTaskState.DEFERRED,
-                trigger_kind="user_disposition",
                 disposition=UserDisposition.DEFERRED,
-                deferral_condition=command.condition,
-                evidence_ref=None,
+                reason="user deferred decision task",
                 occurred_at=command.occurred_at,
+                recorded_at=command.occurred_at,
                 decision_actor=command.decision_actor,
                 interaction_channel=command.interaction_channel,
                 transport_actor=command.transport_actor,
-                invocation_id=command.invocation_id,
+                deferral_condition=command.condition,
                 command_name="decision_task.defer@1",
                 request_hash=canonical_hash(command),
             )
@@ -158,20 +168,17 @@ class DecisionTasks:
             raise DecisionTaskError("DECISION_TASK_COMMAND_INVALID")
         if command.disposition is UserDisposition.EXECUTED:
             raise DecisionTaskError("EXECUTION_RECORD_REQUIRED")
-        return self._repository.append(
-            AppendDecisionTaskTransition(
+        return self._journal.record_action(
+            RecordTaskAction(
+                invocation_id=command.invocation_id,
                 decision_task_id=command.decision_task_id,
-                allowed_from=(DecisionTaskState.OPEN,),
-                to_status=DecisionTaskState.RESOLVED,
-                trigger_kind="user_disposition",
                 disposition=command.disposition,
-                deferral_condition=None,
-                evidence_ref=command.reason,
+                reason=command.reason,
                 occurred_at=command.occurred_at,
+                recorded_at=command.occurred_at,
                 decision_actor=command.decision_actor,
                 interaction_channel=command.interaction_channel,
                 transport_actor=command.transport_actor,
-                invocation_id=command.invocation_id,
                 command_name="decision_task.resolve@1",
                 request_hash=canonical_hash(command),
             )

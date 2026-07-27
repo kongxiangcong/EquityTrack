@@ -883,6 +883,22 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
         "plan_impact_no_update",
         "plan_change_proposal_no_update",
     } <= triggers
+    action_sql = store.connection.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='action_log_entry'"
+    ).fetchone()[0]
+    execution_sql = store.connection.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='execution_record'"
+    ).fetchone()[0]
+    assert "decision_actor LIKE 'user:%'" in action_sql
+    assert "corrects_entry_id TEXT UNIQUE" in action_sql
+    assert (
+        "corrects_execution_record_id TEXT UNIQUE"
+        in execution_sql
+    )
+    assert "price_state='known' AND price_value IS NOT NULL" in execution_sql
+    assert "fee_state='known' AND fee_value IS NOT NULL" in execution_sql
     store.migrate()
     assert store.connection.execute(
         "SELECT count(*) FROM schema_migration WHERE version=17"

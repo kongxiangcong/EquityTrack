@@ -1,6 +1,6 @@
 # 11 — ActionLogEntry and ExecutionRecord
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 02, 10
@@ -42,3 +42,50 @@ Broker transaction import as authority, automatic fills, order lifecycle, fee in
 ## One-way cutover
 
 Replace any free-form/transient behavior history used for formal discipline decisions. Do not dual-write action/execution facts to annotations or account-opening tables.
+
+## Claim record
+
+- External seams: the shared `execution_record.declare@1` and
+  `execution_record.correct@1` envelopes plus named journal list/action tasks;
+  executed task disposition crosses the same application transaction.
+- Deep-module ownership: `domain/decision_journal.py` owns immutable action and
+  execution facts, correction rules, verification state, decimal quantity/
+  price/fee invariants, and deterministic projection inputs;
+  `application/decision_journal.py` owns complete record/declare/correct/list
+  operations and user capability; the SQLite adapter owns atomic
+  action/execution/task-transition/receipt persistence and
+  `ExecutionRecordReader` protocol conversion.
+- Old paths to replace: free-form behavior history, transient execution truth,
+  account-state execution-reader unavailability as the normal production path,
+  and task resolution that writes a transition without its action log.
+- Superseded artifacts to delete: annotation/account-opening execution facts,
+  direct task-only executed resolution, inferred fees/fills, broker-evidence
+  fallback, duplicate execution DTO/schema, compatibility aliases, and private
+  tests for retired transient seams.
+
+## Resolution evidence
+
+- Added immutable `ActionLogEntry@1`, `ExecutionRecord@1`, linked correction,
+  verification-state, and decimal quantity/price/fee domain contracts.
+- `DecisionJournal` is the sole declare/correct/list execution task.
+  `DecisionTasks` writes defer/resolve actions through one narrow transaction
+  port, so no duplicate application entry exists.
+- SQLite atomically commits action, optional execution, task transition, and
+  canonical command receipt. Fault injection proves all four roll back
+  together; duplicate envelope replay returns the same record and conflicting
+  content fails closed.
+- The production `ExecutionRecordReader` now feeds every account-state,
+  manual-review, and decision-workspace composition. Corrections replace the
+  original projection input without changing confirmed snapshots.
+- Unknown fee/price leaves dependent cash unknown. User declarations remain
+  `user_declared_unverified`; absent broker evidence never becomes
+  `not_executed`. No broker adapter, automatic fill, order lifecycle, fee
+  inference, or account-opening/annotation dual write was added.
+- Current focused architecture/journal/state/restart gate passed
+  `41 passed in 32.91s`; the final wider regression passed
+  `149 passed in 82.79s`; after removal of the duplicate application Protocol
+  surface, the affected compile/architecture/journal/task group passed
+  `32 passed in 23.83s`.
+- `0017` remains unapplied to both known persistent roots. Its current SHA-256
+  is `16608B72C45F53325FCEAD6D119577EBBD307D7186AEDC572C4051F50DE2EA51`;
+  `0016` remains unchanged.

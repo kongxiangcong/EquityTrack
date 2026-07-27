@@ -153,14 +153,14 @@ CREATE TABLE decision_task_transition (
 CREATE TABLE action_log_entry (
   action_log_entry_id TEXT PRIMARY KEY,
   decision_task_id TEXT NOT NULL REFERENCES decision_task(decision_task_id),
-  decision_actor TEXT NOT NULL,
+  decision_actor TEXT NOT NULL CHECK(decision_actor LIKE 'user:%'),
   interaction_channel TEXT NOT NULL,
   transport_actor TEXT NOT NULL,
   disposition TEXT NOT NULL CHECK(disposition IN ('executed','deferred','skipped','overridden','not_applicable')),
   reason TEXT NOT NULL,
   occurred_at TEXT NOT NULL,
   recorded_at TEXT NOT NULL,
-  corrects_entry_id TEXT REFERENCES action_log_entry(action_log_entry_id),
+  corrects_entry_id TEXT UNIQUE REFERENCES action_log_entry(action_log_entry_id),
   content_hash TEXT NOT NULL UNIQUE,
   schema_version TEXT NOT NULL CHECK(schema_version='ActionLogEntry@1')
 );
@@ -182,10 +182,18 @@ CREATE TABLE execution_record (
   fee_value TEXT,
   currency TEXT NOT NULL CHECK(length(currency)=3),
   verification_status TEXT NOT NULL CHECK(verification_status IN ('user_declared_unverified','broker_matched','conflicted')),
-  corrects_execution_record_id TEXT REFERENCES execution_record(execution_record_id),
+  corrects_execution_record_id TEXT UNIQUE REFERENCES execution_record(execution_record_id),
   content_hash TEXT NOT NULL UNIQUE,
   confirmed_at TEXT NOT NULL,
-  schema_version TEXT NOT NULL CHECK(schema_version='ExecutionRecord@1')
+  schema_version TEXT NOT NULL CHECK(schema_version='ExecutionRecord@1'),
+  CHECK(
+    (price_state='known' AND price_value IS NOT NULL)
+    OR (price_state IN ('unknown','not_applicable') AND price_value IS NULL)
+  ),
+  CHECK(
+    (fee_state='known' AND fee_value IS NOT NULL)
+    OR (fee_state IN ('unknown','not_applicable') AND fee_value IS NULL)
+  )
 );
 
 CREATE TABLE discipline_review_version (

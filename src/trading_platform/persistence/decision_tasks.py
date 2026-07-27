@@ -101,6 +101,39 @@ class SQLiteDecisionTaskRepository:
             tasks = tuple(task for task in tasks if task.state in allowed)
         return tasks
 
+    def get(
+        self,
+        decision_task_id: str,
+        *,
+        through_seq: int | None = None,
+    ) -> DecisionTask:
+        return self._project(
+            decision_task_id, through_seq=through_seq
+        )
+
+    def project_in_transaction(
+        self,
+        decision_task_id: str,
+        *,
+        through_seq: int | None = None,
+    ) -> DecisionTask:
+        if not self._connection.in_transaction:
+            raise DecisionTaskError(
+                "DECISION_TASK_TRANSACTION_REQUIRED"
+            )
+        return self._project(
+            decision_task_id, through_seq=through_seq
+        )
+
+    def append_in_transaction(
+        self, transition: DecisionTaskTransition
+    ) -> None:
+        if not self._connection.in_transaction:
+            raise DecisionTaskError(
+                "DECISION_TASK_TRANSACTION_REQUIRED"
+            )
+        self._insert_transition(transition)
+
     def append(
         self, request: "AppendDecisionTaskTransition"
     ) -> DecisionTask:

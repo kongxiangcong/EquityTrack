@@ -34,7 +34,8 @@
 
 - `migrations/0016_strategy_plan_model_b.sql` SHA-256:
   `732FAC8AB6DBE393E8B62595D57730247A8929F5EE271CCE380C28E0FF58AA62`
-- Current `migrations/0017_manual_review_journal.sql` SHA-256:
+- `migrations/0017_manual_review_journal.sql` SHA-256 at the ticket-10
+  boundary, before tickets 11–13 complete the same unapplied cohort:
   `6A8D9F2DAA222DACDF07D7CA6BB4F3AF1B92538A2BEEFAE7AF320E10F7757DA2`
 - Both known persistent roots remain at schema 11:
   - `outputs/live-tushare-qualification-20260714/data/platform.sqlite3`

@@ -59,6 +59,11 @@ from .decision_tasks import (
     DeferDecisionTask,
     ResolveDecisionTask,
 )
+from .decision_journal import (
+    CorrectExecution,
+    DecisionJournal,
+    DeclareExecution,
+)
 from trading_platform.domain.decision_tasks import (
     DeferralCondition,
     UserDisposition,
@@ -122,6 +127,8 @@ _IMPLEMENTED = {
     "manual_portfolio_review.run@1",
     "decision_task.defer@1",
     "decision_task.resolve@1",
+    "execution_record.declare@1",
+    "execution_record.correct@1",
 }
 
 
@@ -134,11 +141,13 @@ class ApplicationCommandDispatcher:
         trade_plans: TradePlanTasks,
         manual_reviews: ManualPortfolioReview,
         decision_tasks: DecisionTasks,
+        decision_journal: DecisionJournal,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._trade_plans = trade_plans
         self._manual_reviews = manual_reviews
         self._decision_tasks = decision_tasks
+        self._decision_journal = decision_journal
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -283,6 +292,64 @@ class ApplicationCommandDispatcher:
                 transport_actor=transport.identity,
             )
             return command, self._decision_tasks.resolve(command)
+        if envelope.command_name == "execution_record.declare@1":
+            command = DeclareExecution(
+                invocation_id=envelope.invocation_id,
+                decision_task_id=str(payload["decision_task_id"]),
+                reason=str(payload["reason"]),
+                effective_at=str(payload["effective_at"]),
+                effective_session=str(payload["effective_session"]),
+                intent_type=str(payload["intent_type"]),
+                quantity=str(payload["quantity"]),
+                price_state=str(payload["price_state"]),
+                price_value=(
+                    str(payload["price_value"])
+                    if payload.get("price_value") is not None
+                    else None
+                ),
+                fee_state=str(payload["fee_state"]),
+                fee_value=(
+                    str(payload["fee_value"])
+                    if payload.get("fee_value") is not None
+                    else None
+                ),
+                currency=str(payload["currency"]),
+                confirmed_at=str(payload["confirmed_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._decision_journal.declare(command)
+        if envelope.command_name == "execution_record.correct@1":
+            command = CorrectExecution(
+                invocation_id=envelope.invocation_id,
+                original_execution_record_id=str(
+                    payload["original_execution_record_id"]
+                ),
+                reason=str(payload["reason"]),
+                effective_at=str(payload["effective_at"]),
+                effective_session=str(payload["effective_session"]),
+                intent_type=str(payload["intent_type"]),
+                quantity=str(payload["quantity"]),
+                price_state=str(payload["price_state"]),
+                price_value=(
+                    str(payload["price_value"])
+                    if payload.get("price_value") is not None
+                    else None
+                ),
+                fee_state=str(payload["fee_state"]),
+                fee_value=(
+                    str(payload["fee_value"])
+                    if payload.get("fee_value") is not None
+                    else None
+                ),
+                currency=str(payload["currency"]),
+                confirmed_at=str(payload["confirmed_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._decision_journal.correct(command)
         plan_actor = PlanCommandActor(
             actor.identity,
             envelope.interaction_channel.value,
@@ -550,6 +617,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
                 "plan_id",
                 "draft_id",
                 "decision_task_id",
+                "execution_record_id",
             )
             if payload.get(key)
         ),

@@ -63,6 +63,13 @@ if TYPE_CHECKING:
         ResolveDecisionTask,
         SupersedeDecisionTask,
     )
+    from .decision_journal import (
+        CorrectExecution,
+        DecisionJournal,
+        DeclareExecution,
+        ListDecisionJournal,
+        RecordTaskAction,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
@@ -81,6 +88,7 @@ if TYPE_CHECKING:
         open_browser_acceptance_fixture,
         open_decision_workspace,
         open_decision_tasks,
+        open_decision_journal,
         open_market,
         open_manual_portfolio_review,
         open_platform_health,
@@ -159,6 +167,11 @@ _EXPORT_MODULES = {
     "ReopenDecisionTasks": ".decision_tasks",
     "ResolveDecisionTask": ".decision_tasks",
     "SupersedeDecisionTask": ".decision_tasks",
+    "CorrectExecution": ".decision_journal",
+    "DecisionJournal": ".decision_journal",
+    "DeclareExecution": ".decision_journal",
+    "ListDecisionJournal": ".decision_journal",
+    "RecordTaskAction": ".decision_journal",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -188,6 +201,7 @@ _EXPORT_MODULES = {
     "open_browser_acceptance_fixture": ".bootstrap",
     "open_decision_workspace": ".bootstrap",
     "open_decision_tasks": ".bootstrap",
+    "open_decision_journal": ".bootstrap",
     "open_data_synchronization": ".bootstrap",
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",
