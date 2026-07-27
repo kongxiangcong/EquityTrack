@@ -17,7 +17,7 @@ python -m trading_platform.cli migrate --data-root <root>
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
-python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest <manifest.json> --live-qualification-artifact-id <artifact_id>
+python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest tests/fixtures/trading_discipline_kernel/expected-manifest.json
 python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --account-id <id> --security-id <id>
 python -m trading_platform.cli test --repo-root <repo>
 python -m trading_platform.cli inventory --repo-root <repo>

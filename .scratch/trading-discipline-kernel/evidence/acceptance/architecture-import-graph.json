@@ -1,0 +1,23 @@
+{
+  "edge_count": 588,
+  "file_count": 73,
+  "forbidden_execution_symbols": [
+    "auto_order",
+    "broker_client",
+    "cancel_order",
+    "order_router",
+    "place_order",
+    "schedule_order",
+    "submit_order"
+  ],
+  "forbidden_import_roots": [
+    "anthropic",
+    "apscheduler",
+    "celery",
+    "deepseek",
+    "google.generativeai",
+    "openai"
+  ],
+  "schema_version": "BusinessImportGraphEvidence@1",
+  "violations": []
+}

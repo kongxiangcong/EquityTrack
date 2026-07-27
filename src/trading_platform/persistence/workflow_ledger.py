@@ -769,6 +769,15 @@ class WorkflowLedger:
                         }
                     )[:24]
                 )
+                membership_hash = canonical_hash(
+                    [
+                        {
+                            "artifact_id": artifact_id,
+                            "role": "manual_review_manifest",
+                            "direction": "output",
+                        }
+                    ]
+                )
                 self.__connection.execute(
                     "INSERT OR IGNORE INTO artifact_manifest("
                     "artifact_manifest_id,manifest_role,producer_type,"
@@ -779,7 +788,7 @@ class WorkflowLedger:
                         "manual_portfolio_review",
                         "WorkflowRun",
                         command.workflow_run_id,
-                        canonical_hash((artifact_id,)),
+                        membership_hash,
                         _now(),
                         1,
                     ),
@@ -814,7 +823,7 @@ class WorkflowLedger:
                         "manual_portfolio_review",
                         "WorkflowRun",
                         command.workflow_run_id,
-                        canonical_hash((artifact_id,)),
+                        membership_hash,
                         1,
                     )
                     or stored_member is None

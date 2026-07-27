@@ -1,0 +1,56 @@
+{
+  "execution_replay_equal": true,
+  "identity_sets": {
+    "account_snapshot_versions": [
+      "account_snapshot_version_3b08c9235848dba427a7330c"
+    ],
+    "decision_tasks": [
+      "decision_task_56eb6677f4c3f1c7e0751b6e",
+      "decision_task_7ab557e0634115a4bed05273"
+    ],
+    "executions": [
+      "execution_378905119f0fa68414bf9aa0"
+    ],
+    "plan_versions": [
+      "trade_plan_version_31730bbea5c737bbff9e2bc5",
+      "trade_plan_version_tdk_002897_1",
+      "trade_plan_version_tdk_600183_1"
+    ],
+    "review_runs": [
+      "manual_review_b2eb3bbd9301da6e9dcd2493",
+      "manual_review_d7a4c422278c297341141544"
+    ]
+  },
+  "read_model_content_hashes": [
+    "c17e6389f44e8a1addee67ab37c8f65fc39f14c3ee005d212fb6ce351b046a81",
+    "9967c8483fa98d8bb7c3ff916678f252c6c41abebba87f0501f0273774c7d2f9",
+    "554109b1dbd0da3f70637fe1c2dae447c524ab8582ff3fbcd649f9e29905fe89",
+    "9e588e6a9e481bac15b5630096fc9fc5f142772dd80430a03fb37f5e916bf291",
+    "93a4f2ad5240f59e0edd8f4ca1ea066c57afb9823ce53746c468d3fbe447dff9",
+    "e0386e4ded902044a728cce52d8b4bd269c006440644a4f2e6db07a7cd21086f"
+  ],
+  "schema_version": "KernelRestartReplayEvidence@1",
+  "status": "passed",
+  "steps": [
+    "agent_snapshot_draft",
+    "user_snapshot_confirmation",
+    "two_agent_plan_drafts",
+    "agent_plan_confirmation_denied",
+    "user_challenge_confirmation",
+    "one_active_plan_per_security",
+    "grid_core_floor_preserved",
+    "multi_session_manual_review",
+    "no_change_creates_no_task",
+    "grid_trigger_creates_one_task",
+    "execution_updates_estimated_state",
+    "deferred_task_reappears",
+    "overridden_discipline_review",
+    "proposal_is_draft_only",
+    "rejected_proposal_does_not_pollute_active_plan",
+    "new_plan_version_preserves_history",
+    "web_skill_read_model_parity",
+    "restart_replay_idempotent",
+    "backup_restore_rebuild",
+    "missing_broker_evidence_is_unverified"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "browser_status": "failed",
+  "external_status": "external_blocked",
+  "overall_status": "failed",
+  "schema_version": "AcceptanceStatusSemanticsEvidence@1",
+  "suite_statuses": [
+    "passed",
+    "failed",
+    "timeout",
+    "passed"
+  ]
+}

@@ -230,7 +230,9 @@ def test_source_policy_migration_rejects_ambiguous_attempt_lineage_atomically(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-2]:
+    for source in migration_files:
+        if int(source.name[:4]) >= 13:
+            continue
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "ambiguous-lineage"
     store = PlatformStore(live, prior_migrations)
@@ -341,7 +343,7 @@ def test_source_policy_migration_rejects_ambiguous_attempt_lineage_atomically(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 2
+        == 12
     )
     assert (
         upgraded.connection.execute(
@@ -358,7 +360,9 @@ def test_source_policy_migration_preserves_provable_populated_lineage(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-2]:
+    for source in migration_files:
+        if int(source.name[:4]) >= 13:
+            continue
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "provable-populated-lineage"
     store = PlatformStore(live, prior_migrations)
@@ -498,7 +502,9 @@ def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-2]:
+    for source in migration_files:
+        if int(source.name[:4]) >= 13:
+            continue
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "faulted-migration"
     prior = PlatformStore(live, prior_migrations)
@@ -513,7 +519,7 @@ def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 2
+        == 12
     )
     assert (
         upgraded.connection.execute(
@@ -534,7 +540,9 @@ def test_source_policy_migration_rejects_unproved_legacy_source_rights(
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
     migration_files = sorted((Path.cwd() / "migrations").glob("*.sql"))
-    for source in migration_files[:-2]:
+    for source in migration_files:
+        if int(source.name[:4]) >= 13:
+            continue
         shutil.copyfile(source, prior_migrations / source.name)
     live = tmp_path / "unproved-source-rights"
     prior = PlatformStore(live, prior_migrations)
@@ -575,7 +583,7 @@ def test_source_policy_migration_rejects_unproved_legacy_source_rights(
         upgraded.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == len(migration_files) - 2
+        == 12
     )
     assert (
         upgraded.connection.execute(
@@ -600,7 +608,9 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
     live = tmp_path / "live"
     prior_migrations = tmp_path / "prior-migrations"
     prior_migrations.mkdir()
-    for source in sorted((Path.cwd() / "migrations").glob("*.sql"))[:-1]:
+    for source in sorted((Path.cwd() / "migrations").glob("*.sql")):
+        if int(source.name[:4]) >= 17:
+            continue
         shutil.copyfile(source, prior_migrations / source.name)
     object_store = PlatformStore(live, prior_migrations)
     object_store.migrate()
@@ -614,7 +624,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
     with pytest.raises(OperationError, match="BACKUP_TARGET_EXISTS"):
         operations.backup(archive)
     migrated = operations.migrate()
-    full_backup = tmp_path / "live-pre-migrate-v0013.zip"
+    full_backup = tmp_path / "live-pre-migrate-v0016.zip"
     assert migrated["status"] == "passed" and full_backup.is_file()
     with zipfile.ZipFile(full_backup) as bundle:
         assert "platform.sqlite3" in bundle.namelist() and any(
@@ -1169,7 +1179,6 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
         "doctor",
         "migrate",
         "sync",
-        "daily",
         "serve",
         "test",
         "inventory",

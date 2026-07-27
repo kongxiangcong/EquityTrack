@@ -1,6 +1,6 @@
 # 16 — Canonical E2E and acceptance refresh
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 15
@@ -45,3 +45,39 @@ User real data, live orders, external broker transactions, automatic scheduler, 
 ## One-way cutover
 
 Delete all superseded runtime code, tests, docs, assets, schemas, flags, dependencies, and commands named by the ticket-00 inventory. Git history is the archive; the active tree contains only the canonical kernel paths.
+
+## Claim record
+
+- External seams: one synthetic fixture manifest, one canonical acceptance
+  command/report, public named application tasks, canonical maintenance
+  backup/restore, six read-model queries, and production CDP evidence.
+- Deep-module ownership: the E2E fixture owns only fixed synthetic inputs and
+  expected identities; application/domain/persistence modules retain all
+  behavior; acceptance owns suite execution, exact status accounting,
+  evidence hashing, and fail-closed completion judgment.
+- Old paths to replace: the 51-row pre-kernel acceptance ledger/suite list,
+  browser evidence assumptions tied to the retired chart workspace, partial
+  current-product completion language, and any tests/docs that still treat old
+  commands, AST@1, `user_fixture_input`, opening rows, or prototype routes as
+  active authority.
+- Superseded artifacts to delete: every runtime/test/doc/dependency hit named
+  by the Ticket 00 retirement inventory that is not a migration-only legacy
+  input, explicit absence assertion, or immutable historical evidence;
+  obsolete acceptance artifacts and stale fixed counts are regenerated rather
+  than retained.
+
+## Answer
+
+The canonical two-security fixture, 20-step E2E, restart/replay identity proof,
+distinct-root backup/restore reconstruction, migration hash ledger,
+architecture import graph, exact status-semantics evidence, production CDP,
+and all 35 TDK criteria are frozen under
+[`evidence/acceptance/`](../evidence/acceptance/). The canonical manifest is
+`acceptance-7ce3c3637c07a34dbc80dc53bff0b75442aeb488550ebd4cc3877c0320c19968.json`;
+it reports `35/35` criteria and `168/168` suite tests passed, with no failures,
+skips, xfails, or timeouts. Live provider qualification is explicitly
+`not_applicable` to the synthetic offline kernel gate and is not represented
+as a passed external check.
+
+The implementation and verification narrative is recorded in
+[`evidence/16-canonical-e2e-and-acceptance-refresh.md`](../evidence/16-canonical-e2e-and-acceptance-refresh.md).

@@ -8,42 +8,28 @@ import sqlite3
 import stat
 import subprocess
 import tempfile
-from datetime import datetime, timedelta, timezone
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
-from trading_platform.provider_qualification import decode_provider_qualification_receipt
-from trading_platform.data.providers import tushare_compatible_code_identity
+from typing import Any, Callable, Mapping, Sequence
 
-from trading_platform.provider_config import production_transport_identity
-from trading_platform.identity.canonical import CANONICALIZATION_VERSION, canonical_hash
+from trading_platform.identity.canonical import (
+    CANONICALIZATION_VERSION,
+    canonical_hash,
+)
 from trading_platform.identity.code import build_code_identity
+from trading_platform.provider_qualification import (
+    decode_provider_qualification_receipt,
+)
 from trading_platform.verification import VerificationOutputRedactor
 
 
 @dataclass(frozen=True)
 class AcceptanceEvidenceResult:
-    slice_acceptance: str
+    status: str
     manifest_sha256: str
     manifest_path: Path
-
-
-class BrowserAcceptanceError(RuntimeError):
-    code = "BROWSER_ACCEPTANCE_FAILED"
-    substep = "acceptance.browser_cdp"
-    cause_type = "SubprocessExit"
-
-    def __init__(
-        self,
-        exit_code: int,
-        command_identity: str,
-        output_tail: str,
-    ) -> None:
-        super().__init__(self.code)
-        self.exit_code = exit_code
-        self.command_identity = command_identity
-        self.output_tail = output_tail
 
 
 def _sha256(path: Path) -> str:
@@ -55,169 +41,98 @@ def _sha256(path: Path) -> str:
 
 
 class AcceptanceEvidenceService:
-    """Validate and freeze evidence without creating a test-only business facade."""
+    """Run and freeze the one canonical trading-discipline-kernel gate."""
 
-    SCHEMA_VERSION = "VerticalSliceAcceptance@1"
+    SCHEMA_VERSION = "TradingDisciplineKernelAcceptance@1"
+    FIXTURE_SCHEMA_VERSION = "TradingDisciplineKernelFixtureManifest@1"
     REQUIRED_SUITES = (
-        "domain",
-        "provider_contract",
-        "persistence_migration",
-        "application_journey",
-        "fault_recovery",
-        "browser",
-        "windows_maintenance",
-        "architecture_security",
-        "legacy_regression",
+        "contract",
+        "workflow_and_journal",
+        "presentation",
+        "migration_and_operations",
     )
-    REQUIRED_APPLICABILITY = {
-        "position_accounting": "not_applicable",
-        "full_trade_backtest": "not_applicable",
-        "valuation_formula_regression": "passed",
-        "adapter_financial_invariants": "passed",
-    }
     SUITE_PLAN = {
-        "domain": (
+        "contract": (
+            "tests/platform/test_account_snapshots.py",
+            "tests/platform/test_estimated_account_state.py",
+            "tests/platform/test_strategy_catalog.py",
             "tests/platform/test_trade_plan_model_b.py",
             "tests/platform/test_trade_plan_sleeves.py",
-            "tests/platform/test_strategy_catalog.py",
             "tests/platform/test_rule_ast_v2.py",
             "tests/platform/test_conflict_resolver.py",
-            "tests/platform/test_market_evaluation.py",
-        ),
-        "provider_contract": ("tests/platform/test_data_sync_pit.py",),
-        "persistence_migration": (
-            "tests/platform/test_watchlist_persistence.py",
-            "tests/platform/test_chart_annotations.py",
-        ),
-        "application_journey": (
             "tests/platform/test_plan_confirmation.py",
-            "tests/platform/test_research_workflow.py",
+            "tests/platform/test_application_command_envelope.py",
+        ),
+        "workflow_and_journal": (
+            "tests/platform/test_manual_portfolio_review.py",
+            "tests/platform/test_decision_tasks.py",
+            "tests/platform/test_execution_records.py",
+            "tests/platform/test_discipline_reviews.py",
+            "tests/platform/test_plan_change_proposals.py",
+        ),
+        "presentation": (
+            "tests/platform/test_versioned_read_models.py",
+            "tests/platform/test_web_application_tasks.py",
             "tests/platform/test_secure_workspace.py",
+            "tests/platform/test_production_web.py",
+            "tests/platform/test_skill_contract.py",
         ),
-        "fault_recovery": ("tests/platform/test_workflow_ledger_recovery.py",),
-        "windows_maintenance": ("tests/platform/test_operations_backup_restore.py",),
-        "architecture_security": ("tests/platform/test_runtime_skeleton.py",),
-        "legacy_regression": ("tests", "--ignore=tests/platform"),
+        "migration_and_operations": (
+            "tests/platform/test_migration_0015_0017.py",
+            "tests/platform/test_trading_discipline_kernel_e2e.py",
+            "tests/platform/test_trading_discipline_kernel_backup_restore.py",
+            "tests/platform/test_operations_backup_restore.py",
+            "tests/platform/test_workflow_ledger_recovery.py",
+            "tests/platform/test_architecture_boundaries.py",
+            "tests/platform/test_acceptance_evidence.py",
+            "-m",
+            "not release_acceptance",
+        ),
     }
-    CRITERION_SUITE = {
-        **{
-            number: "provider_contract"
-            for number in (4, 5, 6, 7, 17, 18, 19, 20, 21, 39, 41, 42, 51)
-        },
-        **{number: "application_journey" for number in (3, 8, 15, 34, 40, 49)},
-        **{number: "domain" for number in (11, 12, 13, 14, 22, 23, 25, 26, 43)},
-        **{number: "persistence_migration" for number in (2, 9, 10, 24)},
-        **{number: "fault_recovery" for number in (27, 28)},
-        **{number: "browser" for number in (31, 32, 37, 45)},
-        **{number: "windows_maintenance" for number in (1, 16, 29, 30, 33, 46, 47, 48)},
-        **{number: "architecture_security" for number in (35, 36, 38, 44, 50)},
-    }
-    CRITERION_SUITE.update(
-        {
-            1: "persistence_migration",
-            29: "persistence_migration",
-            34: "architecture_security",
-            39: "application_journey",
-        }
+    CRITERIA = (
+        ("TDK-AC-001", "migration_and_operations", "test_fresh_and_populated_roots_upgrade_idempotently"),
+        ("TDK-AC-002", "migration_and_operations", "test_legacy_account_values_unknowns_and_refs_migrate_losslessly"),
+        ("TDK-AC-003", "migration_and_operations", "test_active_legacy_plan_requires_explicit_sleeve_mapping"),
+        ("TDK-AC-004", "contract", "test_agent_draft_and_user_confirmation_capabilities"),
+        ("TDK-AC-005", "contract", "test_optional_unknowns_only_disable_dependent_capabilities"),
+        ("TDK-AC-006", "contract", "test_projection_uses_latest_snapshot_and_confirmed_executions_only"),
+        ("TDK-AC-007", "contract", "test_new_snapshot_assesses_drift_without_rewriting_history"),
+        ("TDK-AC-008", "contract", "test_only_two_builtin_strategy_versions_are_available"),
+        ("TDK-AC-009", "contract", "test_database_allows_one_active_master_per_account_security"),
+        ("TDK-AC-010", "contract", "test_confirmed_plan_graph_rejects_late_mutation"),
+        ("TDK-AC-011", "contract", "test_only_strategy_compatible_core_and_grid_sleeves_are_accepted"),
+        ("TDK-AC-012", "contract", "test_grid_sell_cannot_cross_core_floor"),
+        ("TDK-AC-013", "contract", "test_ast_v2_operands_sessions_events_and_grid_replay"),
+        ("TDK-AC-014", "contract", "test_conflict_precedence_table"),
+        ("TDK-AC-015", "contract", "test_agent_denied_and_stale_or_mismatched_challenge_rejected"),
+        ("TDK-AC-016", "contract", "test_confirm_and_enable_emits_events_and_receipt_atomically"),
+        ("TDK-AC-017", "contract", "test_confirm_only_and_rejected_draft_leave_active_slot_unchanged"),
+        ("TDK-AC-018", "contract", "test_skill_cli_and_web_codecs_share_request_hash_and_result_schema"),
+        ("TDK-AC-019", "workflow_and_journal", "test_window_uses_last_successful_cutoff_to_selected_complete_session"),
+        ("TDK-AC-020", "workflow_and_journal", "test_no_change_creates_no_task"),
+        ("TDK-AC-021", "workflow_and_journal", "test_single_grid_trigger_creates_one_persistent_task"),
+        ("TDK-AC-022", "workflow_and_journal", "test_all_deferral_conditions_reopen_the_same_task"),
+        ("TDK-AC-023", "workflow_and_journal", "test_executed_disposition_updates_estimated_state"),
+        ("TDK-AC-024", "workflow_and_journal", "test_overridden_is_identified_and_unrecorded_is_not_skipped"),
+        ("TDK-AC-025", "workflow_and_journal", "test_accept_or_reject_proposal_has_only_draft_side_effects"),
+        ("TDK-AC-026", "contract", "test_new_activation_preserves_old_version_history"),
+        ("TDK-AC-027", "presentation", "test_web_and_skill_serialize_identical_application_dtos"),
+        ("TDK-AC-028", "migration_and_operations", "test_restart_replay_is_idempotent"),
+        ("TDK-AC-029", "migration_and_operations", "test_full_chain_rebuilds_after_restore"),
+        ("TDK-AC-030", "workflow_and_journal", "test_missing_broker_evidence_is_unverified_not_not_executed"),
+        ("TDK-AC-031", "presentation", "test_navigation_home_allowlist_progressive_disclosure_and_accessibility"),
+        ("TDK-AC-032", "presentation", "test_unversioned_workspace_and_public_daily_routes_are_absent"),
+        ("TDK-AC-033", "migration_and_operations", "test_business_import_graph_has_no_llm_order_or_scheduler_surface"),
+        ("TDK-AC-034", "contract", "test_all_mutations_cross_named_tasks_and_envelope"),
+        ("TDK-AC-035", "migration_and_operations", "test_report_preserves_exact_failure_timeout_and_external_status"),
     )
-    CRITERION_ASSERTION_PATTERN = {
-        1: "test_bootstrap_watchlist_replay_restart_and_doctor",
-        2: "test_bootstrap_watchlist_replay_restart_and_doctor",
-        3: "test_public_workflow_creates_canonical_research_artifacts",
-        4: "test_startup_and_unauthorized_http_provider_make_no_network_call",
-        5: "test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity",
-        6: "test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity",
-        7: "test_fixture_manifest_separates_real_derived_facts_from_synthetic_sentinels",
-        8: "test_new_invocation_reuses_immutable_research",
-        9: "test_chart_query_exposes_versioned_unadjusted_series_and_freshness",
-        10: "test_annotation_append_only_lifecycle_idempotency_and_restart",
-        11: "test_atomic_confirmation_idempotency_preview_and_restart",
-        12: "test_atomic_confirmation_idempotency_preview_and_restart",
-        13: "test_transparent_market_snapshot_and_read_only_plan_evaluation",
-        14: "test_transparent_market_snapshot_and_read_only_plan_evaluation",
-        15: "test_frozen_timeline_traverses_plan_market_evaluation_and_policy_versions",
-        16: "test_windows_cli_backup_restore_doctor_serve_history",
-        17: "test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity",
-        18: "test_offline_valid_stale_missing_and_coverage_missing_fail_closed",
-        19: "test_fixture_manifest_separates_real_derived_facts_from_synthetic_sentinels",
-        20: "test_same_authority_source_conflict_blocks_new_revision_and_cursor",
-        21: "test_revision_creates_parallel_version_and_new_snapshot",
-        22: "test_revision_v2_switch_discard_and_ended_terminal",
-        23: "test_revision_v2_switch_discard_and_ended_terminal",
-        24: "test_annotation_append_only_lifecycle_idempotency_and_restart",
-        25: "test_suspension_and_limit_facts_are_evaluated_without_lifecycle_side_effects",
-        26: "test_typed_ast_references_account_applicability_and_adjusted_evidence",
-        27: "test_resume_reuses_committed_nodes_and_never_duplicates_research",
-        28: "test_resume_fails_closed_on_definition_fingerprint_or_artifact_corruption",
-        29: "test_migrations_are_idempotent_atomic_and_reject_drift_and_future",
-        30: "test_backup_restore_new_root_preserves_database_objects_and_history",
-        31: "workspace is task-first",
-        32: "accessibility policy includes keyboard focus",
-        33: "test_windows_cli_returns_stable_json_envelopes",
-        34: "test_platform_imports_only_public_research_package",
-        35: "test_platform_imports_only_public_research_package",
-        36: "test_platform_imports_only_public_research_package",
-        37: "workspace copy contains no rating",
-        38: "acceptance_service::self_verify_manifest",
-        39: "test_public_workflow_creates_canonical_research_artifacts",
-        40: "test_new_invocation_reuses_immutable_research",
-        41: "test_fixture_manifest_separates_real_derived_facts_from_synthetic_sentinels",
-        42: "test_non_structural_cross_section_gap_blocks_snapshot",
-        43: "test_confirmation_contract_rejects_invalid_risk_and_time",
-        44: "test_code_identity_changes_with_source_lock_workflow_frontend_migration_and_config",
-        45: "workspace assets stay local and output uses text nodes",
-        46: "test_dependency_locks_offline_assets_skill_routing",
-        47: "test_restore_rejects",
-        48: "test_dependency_locks_offline_assets_skill_routing",
-        49: "test_frozen_timeline_traverses_plan_market_evaluation_and_policy_versions",
-        50: "test_platform_imports_only_public_research_package",
-        51: "test_private_fixture_rights_are_preserved_without_upgrading_redistribution",
-    }
-    MULTI_ASSERTION_REQUIREMENTS = {
-        15: (
-            (
-                "application_journey",
-                "test_connected_golden_journey_records_one_graph_on_one_data_root",
-            ),
-        ),
-        34: (
-            (
-                "architecture_security",
-                "test_platform_imports_only_public_research_package",
-            ),
-            ("application_journey", "test_workflow_and_execution_expose_one_task_each"),
-        ),
-        36: (
-            (
-                "provider_contract",
-                "test_startup_and_unauthorized_http_provider_make_no_network_call",
-            ),
-            (
-                "application_journey",
-                "test_secret_and_personal_paths_never_reach_dom_logs_or_artifacts",
-            ),
-            (
-                "architecture_security",
-                "test_platform_imports_only_public_research_package",
-            ),
-        ),
-        50: (
-            (
-                "domain",
-                "test_typed_ast_references_account_applicability_and_adjusted_evidence",
-            ),
-            (
-                "architecture_security",
-                "test_platform_imports_only_public_research_package",
-            ),
-            (
-                "provider_contract",
-                "test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path",
-            ),
-        ),
-    }
 
-    def __init__(self, data_root: Path, repo_root: Path, receipt_loader: Callable[[str], bytes] | None = None) -> None:
+    def __init__(
+        self,
+        data_root: Path,
+        repo_root: Path,
+        receipt_loader: Callable[[str], bytes] | None = None,
+    ) -> None:
         self.data_root = data_root.resolve()
         self.repo_root = repo_root.resolve()
         self._receipt_loader = receipt_loader
@@ -227,504 +142,439 @@ class AcceptanceEvidenceService:
         fixture_manifest_path: Path,
         live_qualification_artifact_id: str | None = None,
     ) -> AcceptanceEvidenceResult:
-        trusted_root = (self.repo_root / "tests/fixtures/platform_data").resolve()
-        fixture_path = fixture_manifest_path.resolve()
-        if fixture_path.parent != trusted_root or fixture_path.name != "manifest.json":
-            raise ValueError("FIXTURE_MANIFEST_OUTSIDE_TRUSTED_ROOT")
-        live_qualification = None
-        if live_qualification_artifact_id is not None:
-            if self._receipt_loader is None:
-                raise ValueError("QUALIFICATION_RECEIPT_STORE_UNAVAILABLE")
-            live_qualification = decode_provider_qualification_receipt(
-                self._receipt_loader(live_qualification_artifact_id),
-                live_qualification_artifact_id,
-            ).to_dict()
-        evidence_root = self.data_root / ".acceptance-run"
+        fixture = self._load_fixture(fixture_manifest_path)
+        live = self._live_status(live_qualification_artifact_id)
+        evidence_root = (
+            self.repo_root
+            / ".scratch"
+            / "trading-discipline-kernel"
+            / "evidence"
+            / "acceptance"
+        )
         evidence_root.mkdir(parents=True, exist_ok=True)
-        browser_evidence_path = evidence_root / "browser-cdp.json"
-        browser_command = [
-            os.sys.executable,
-            str(self.repo_root / "scripts/verify_issue05_browser.py"),
-            "--evidence-file",
-            str(browser_evidence_path),
-        ]
-        browser_completed = subprocess.run(
-            browser_command,
-            cwd=self.repo_root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        if browser_completed.returncode != 0:
-            redactor = VerificationOutputRedactor()
-            combined = "\n".join(
-                part
-                for part in (browser_completed.stdout, browser_completed.stderr)
-                if part
-            )
-            raise BrowserAcceptanceError(
-                browser_completed.returncode,
-                hashlib.sha256(
-                    json.dumps(
-                        [
-                            "python",
-                            "scripts/verify_issue05_browser.py",
-                            "--evidence-file",
-                            "<redacted>",
-                        ],
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest(),
-                redactor.redact(combined)[-2_000:],
-            )
-        self.validate_browser_evidence(browser_evidence_path)
-        runner_temporary = tempfile.TemporaryDirectory(prefix="tp-accept-")
-        runner_temp = Path(runner_temporary.name)
-        artifacts: dict[str, dict[str, str]] = {}
+        artifacts: dict[str, dict[str, Any]] = {}
+
+        browser_path = evidence_root / "browser-cdp.json"
+        browser = self._run_browser(browser_path)
+        if browser["status"] == "passed":
+            self.validate_browser_evidence(browser_path)
+            artifacts["browser_cdp"] = self._artifact(browser_path)
+            screenshot_root = browser_path.parent / "browser-cdp-screenshots"
+            for name in ("overview", "portfolio", "review", "research"):
+                artifacts[f"browser_{name}"] = self._artifact(
+                    screenshot_root / f"{name}.png"
+                )
+
         suites: list[dict[str, Any]] = []
-        golden_evidence_path = evidence_root / "golden-journey.json"
         for name in self.REQUIRED_SUITES:
-            if name == "browser":
-                test_files = sorted((self.repo_root / "web/tests").glob("*.test.js"))
-                command = [
-                    "node",
-                    "--test",
-                    "--test-reporter=junit",
-                    *(str(path) for path in test_files),
-                ]
-                environment = os.environ.copy()
-                if name == "application_journey":
-                    environment["TRADING_PLATFORM_GOLDEN_EVIDENCE"] = str(
-                        golden_evidence_path
-                    )
-                completed = subprocess.run(
-                    command,
-                    cwd=self.repo_root,
-                    env=os.environ.copy(),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-                artifact = evidence_root / "browser.xml"
-                artifact.write_text(completed.stdout, encoding="utf-8")
-                collected, skipped, xfailed, assertion_ids = self._parse_junit(artifact)
-                command_identity = canonical_hash(
-                    [
-                        "node",
-                        "--test",
-                        "--test-reporter=junit",
-                        *(path.name for path in test_files),
-                    ]
-                )
-            else:
-                planned = self.SUITE_PLAN[name]
-                artifact = evidence_root / f"{name}.xml"
-                suite_data = runner_temp / f"{name}-data"
-                command = [
-                    os.sys.executable,
-                    "-m",
-                    "pytest",
-                    *planned,
-                    "-q",
-                    f"--junitxml={artifact}",
-                    f"--basetemp={suite_data}",
-                ]
-                environment = os.environ.copy()
-                if name == "application_journey":
-                    environment["TRADING_PLATFORM_GOLDEN_EVIDENCE"] = str(
-                        golden_evidence_path
-                    )
-                completed = subprocess.run(
-                    command,
-                    cwd=self.repo_root,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-                collected, skipped, xfailed, assertion_ids = self._parse_junit(artifact)
-                command_identity = canonical_hash(list(planned))
-            artifacts[name] = {"path": str(artifact), "sha256": _sha256(artifact)}
-            suites.append(
-                {
-                    "name": name,
-                    "version": "1",
-                    "status": (
-                        "passed"
-                        if completed.returncode == 0
-                        and collected
-                        and skipped == 0
-                        and xfailed == 0
-                        else "failed"
-                    ),
-                    "command_identity": command_identity,
-                    "exit_code": completed.returncode,
-                    "collected": collected,
-                    "skipped": skipped,
-                    "xfailed": xfailed,
-                    "assertion_ids": assertion_ids,
-                    "artifact_refs": [name],
-                }
+            suite = self._run_pytest_suite(
+                name,
+                self.SUITE_PLAN[name],
+                evidence_root,
             )
-        artifacts["browser_cdp"] = {
-            "path": str(browser_evidence_path.resolve()),
-            "sha256": _sha256(browser_evidence_path.resolve()),
+            suites.append(suite)
+            artifacts[name] = self._artifact(
+                evidence_root / f"{name}.json"
+            )
+
+        migration_hashes = {
+            path.name: _sha256(path)
+            for path in (
+                self.repo_root / "migrations" / "0015_account_snapshot_version.sql",
+                self.repo_root / "migrations" / "0016_strategy_plan_model_b.sql",
+                self.repo_root / "migrations" / "0017_manual_review_journal.sql",
+            )
         }
-        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-        fixture["manifest_sha256"] = _sha256(fixture_path)
-        rights_profile = fixture.get("derived_fact_fixture", {})
-        for member in fixture.get("members", ()):
-            payload_path = trusted_root / str(member.get("payload_path", ""))
-            if payload_path.parent != trusted_root or not payload_path.is_file():
-                raise ValueError("FIXTURE_MEMBER_MISSING")
-            payload = payload_path.read_bytes().rstrip(b"\r\n")
-            if hashlib.sha256(payload).hexdigest() != member.get("payload_sha256"):
-                raise ValueError("FIXTURE_MEMBER_HASH_MISMATCH")
-            json.loads(payload)
-            member["terms_version"] = rights_profile.get("terms_version")
-            member["reviewed_on"] = rights_profile.get("reviewed_on")
-        criteria = []
-        all_assertions = {item["name"]: item["assertion_ids"] for item in suites}
-        for number in range(1, 52):
-            suite_name = self.CRITERION_SUITE.get(number, "domain")
-            suite = next(item for item in suites if item["name"] == suite_name)
-            requirements = self.MULTI_ASSERTION_REQUIREMENTS.get(
-                number, ((suite_name, self.CRITERION_ASSERTION_PATTERN[number]),)
-            )
-            matched = []
-            artifact_refs = []
-            for required_suite, pattern in requirements:
-                found = [
-                    assertion
-                    for assertion in all_assertions[required_suite]
-                    if pattern in assertion
-                ]
-                if found:
-                    matched.extend(found)
-                    artifact_refs.append(required_suite)
-                else:
-                    matched = []
-                    break
-            if number == 38:
-                matched = [pattern]
-                artifact_refs = [suite_name]
-            criteria.append(
+        migration_manifest = evidence_root / "migration-hashes.json"
+        migration_manifest.write_text(
+            json.dumps(
                 {
-                    "criterion": f"AC-{number:03d}",
-                    "status": (
-                        "passed"
-                        if all(
-                            next(
-                                item
-                                for item in suites
-                                if item["name"] == required_suite
-                            )["status"]
-                            == "passed"
-                            for required_suite, _ in requirements
-                        )
-                        and matched
-                        else "failed"
-                    ),
-                    "suite": suite["name"],
-                    "assertion_ids": matched,
-                    "artifact_refs": sorted(set(artifact_refs)),
-                }
-            )
-            if suite_name == "browser":
-                criteria[-1]["artifact_refs"].append("browser_cdp")
-        golden = (
-            json.loads(golden_evidence_path.read_text(encoding="utf-8"))
-            if golden_evidence_path.is_file()
-            else {}
+                    "schema_version": "KernelMigrationHashEvidence@1",
+                    "expected_versions": [15, 16, 17],
+                    "script_sha256": migration_hashes,
+                },
+                sort_keys=True,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
-        runner_temporary.cleanup()
-        golden_fields = {
-            "workflow_run_id": "WorkflowRun",
-            "original_workflow_run_id": "WorkflowRun",
-            "data_snapshot_id": "DataSnapshot",
-            "research_snapshot_id": "DataSnapshot",
-            "research_run_id": "ResearchRun",
-            "research_json_artifact_id": "Artifact",
-            "research_html_artifact_id": "Artifact",
-            "annotation_version_id": "ChartAnnotationVersion",
-            "plan_version_id": "TradePlanVersion",
-            "market_snapshot_id": "MarketSnapshot",
-            "plan_evaluation_id": "PlanEvaluation",
-            "final_artifact_manifest_id": "ArtifactManifest",
-        }
-        golden_valid = (
-            golden.get("schema_version") == "GoldenJourneyEvidence@1"
-            and all(golden.get(field) for field in golden_fields)
-            and golden.get("dispositions", {}).get("research") == "reused"
-            and golden.get("reuse_reason_code") == "ROUTINE_MARKET_ONLY_INPUTS"
-            and golden.get("stale_by_days") == 3
-        )
-        if not golden_valid:
-            for criterion in criteria:
-                if criterion["criterion"] == "AC-015":
-                    criterion["status"] = "failed"
-        golden_entities = [
-            {
-                "entity_type": entity_type,
-                "identity": str(golden[field]),
-                "disposition": str(
-                    golden.get("dispositions", {}).get(
-                        field.removesuffix("_id").replace("_version", ""), "as_recorded"
-                    )
-                ),
-            }
-            for field, entity_type in golden_fields.items()
-            if golden.get(field)
-        ]
+        artifacts["migration_manifest"] = self._artifact(migration_manifest)
+        for name, filename in (
+            ("restart_replay", "restart-replay.json"),
+            ("backup_restore", "backup-restore.json"),
+            ("architecture_import_graph", "architecture-import-graph.json"),
+            (
+                "acceptance_status_semantics",
+                "acceptance-status-semantics.json",
+            ),
+        ):
+            candidate = evidence_root / filename
+            if candidate.is_file():
+                artifacts[name] = self._artifact(candidate)
+        criteria = self._criteria(suites, browser["status"])
         supplied = {
-            "slice_spec_version": "0.2.0",
-            "versions": {
-                "workflow": "research-workflow@2",
-                "node": "run_or_link_research@2",
-                "evaluator": "plan-evaluator@2",
-                "model": "equity-research@0.3.0",
-                "policy": "research_input_policy@1",
-            },
-            "fixed_clock": "2026-07-11T09:30:00+08:00",
-            "network_policy": "offline-deny-all",
             "fixture": fixture,
             "criteria": criteria,
             "suites": suites,
+            "browser": browser,
             "artifacts": artifacts,
-            "golden_entities": golden_entities,
-            "applicability": [
-                {
-                    "capability": "position_accounting",
-                    "status": "not_applicable",
-                    "rationale": "Watchlist slice has no account or Position model.",
-                    "counter_capability_test": next(
-                        assertion
-                        for assertion in all_assertions["domain"]
-                        if "test_typed_ast_references_account_applicability_and_adjusted_evidence"
-                        in assertion
-                    ),
-                },
-                {
-                    "capability": "full_trade_backtest",
-                    "status": "not_applicable",
-                    "rationale": "No execution, fee, slippage or T+1 simulator is in scope.",
-                    "counter_capability_test": next(
-                        assertion
-                        for assertion in all_assertions["architecture_security"]
-                        if "test_platform_imports_only_public_research_package"
-                        in assertion
-                    ),
-                },
-                {
-                    "capability": "valuation_formula_regression",
-                    "status": "passed",
-                    "rationale": "Legacy regression evidence.",
-                    "artifact_refs": ["legacy_regression"],
-                },
-                {
-                    "capability": "adapter_financial_invariants",
-                    "status": "passed",
-                    "rationale": "Provider contract evidence.",
-                    "artifact_refs": ["provider_contract"],
-                },
-            ],
-            "live_qualification": live_qualification
-            or {
-                "status": "external_blocked",
-                "provider_identity": "preconfigured_tushare_compatible_non_official",
-                "source_authority": "structured_aggregator_not_official_disclosure",
-                "terms_profile": "qualification_pending@1",
-                "attempts": [],
-                "blockers": ["live_qualification_artifact_not_supplied"],
-            },
-            "credential_scope_ids": (
-                [live_qualification["credential_scope_id"]]
-                if live_qualification and live_qualification.get("credential_scope_id")
-                else []
-            ),
-            "final_artifact_manifest_id": golden.get("final_artifact_manifest_id"),
-            "browser_evidence_ref": "browser_cdp",
+            "migration_hashes": migration_hashes,
+            "external_checks": (live,),
         }
         return self._freeze(supplied)
 
-    def _freeze(self, supplied: Mapping[str, Any]) -> AcceptanceEvidenceResult:
-        failure_codes: list[str] = []
-        artifacts = self._validate_artifacts(supplied.get("artifacts"), failure_codes)
-        browser_evidence_ref = supplied.get("browser_evidence_ref")
-        if browser_evidence_ref != "browser_cdp" or browser_evidence_ref not in artifacts:
-            failure_codes.append("BROWSER_EVIDENCE_MISSING")
-        criteria = list(supplied.get("criteria", ()))
-        expected = {f"AC-{number:03d}" for number in range(1, 52)}
-        actual = {
-            item.get("criterion") for item in criteria if isinstance(item, Mapping)
-        }
-        if actual != expected or len(criteria) != 51:
-            failure_codes.append("ACCEPTANCE_CRITERIA_INCOMPLETE")
-        if any(
-            item.get("status") != "passed"
-            for item in criteria
-            if isinstance(item, Mapping)
+    def _load_fixture(self, path: Path) -> dict[str, Any]:
+        trusted_root = (
+            self.repo_root / "tests" / "fixtures" / "trading_discipline_kernel"
+        ).resolve()
+        fixture_path = path.resolve()
+        if (
+            fixture_path.parent != trusted_root
+            or fixture_path.name != "expected-manifest.json"
         ):
-            failure_codes.append("LOCAL_CRITERION_NOT_PASSED")
-
-        suites = list(supplied.get("suites", ()))
-        suite_names = {item.get("name") for item in suites if isinstance(item, Mapping)}
-        if suite_names != set(self.REQUIRED_SUITES) or len(suites) != len(
-            self.REQUIRED_SUITES
+            raise ValueError("FIXTURE_MANIFEST_OUTSIDE_TRUSTED_ROOT")
+        try:
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("FIXTURE_MANIFEST_INVALID") from error
+        if (
+            fixture.get("schema_version") != self.FIXTURE_SCHEMA_VERSION
+            or fixture.get("securities") != ["002897.SZ", "600183.SH"]
+            or fixture.get("step_count") != 20
         ):
-            failure_codes.append("SUITE_LEDGER_INCOMPLETE")
-        if any(
-            item.get("status") != "passed"
-            for item in suites
-            if isinstance(item, Mapping)
-        ):
-            failure_codes.append("LOCAL_SUITE_NOT_PASSED")
-        for item in suites:
-            if not isinstance(item, Mapping):
-                continue
+            raise ValueError("FIXTURE_MANIFEST_INVALID")
+        for member in fixture.get("members", ()):
+            relative = Path(str(member.get("path", "")))
+            target = (trusted_root / relative).resolve()
             if (
+                trusted_root not in target.parents
+                or not target.is_file()
+                or _sha256(target) != member.get("sha256")
+            ):
+                raise ValueError("FIXTURE_MEMBER_HASH_MISMATCH")
+        fixture["manifest_sha256"] = _sha256(fixture_path)
+        return fixture
+
+    def _run_browser(self, path: Path) -> dict[str, Any]:
+        command = [
+            os.sys.executable,
+            str(self.repo_root / "scripts" / "verify_issue05_browser.py"),
+            "--evidence-file",
+            str(path),
+        ]
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=300,
+            )
+            status = "passed" if completed.returncode == 0 else "failed"
+            exit_code = completed.returncode
+            output = "\n".join(
+                part for part in (completed.stdout, completed.stderr) if part
+            )
+        except subprocess.TimeoutExpired as error:
+            status = "timeout"
+            exit_code = None
+            output = "\n".join(
+                str(part)
+                for part in (error.stdout, error.stderr)
+                if part
+            )
+        return {
+            "name": "browser_cdp",
+            "status": status,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "exit_code": exit_code,
+            "output_tail": VerificationOutputRedactor().redact(output)[-2000:],
+            "command_identity": canonical_hash(
+                [
+                    "python",
+                    "scripts/verify_issue05_browser.py",
+                    "--evidence-file",
+                    "<evidence-root>",
+                ]
+            ),
+        }
+
+    def _run_pytest_suite(
+        self,
+        name: str,
+        plan: Sequence[str],
+        evidence_root: Path,
+    ) -> dict[str, Any]:
+        junit_path = evidence_root / f"{name}.xml"
+        artifact_path = evidence_root / f"{name}.json"
+        command = [
+            os.sys.executable,
+            "-m",
+            "pytest",
+            *plan,
+            "-q",
+            f"--junitxml={junit_path}",
+            f"--basetemp={evidence_root / (name + '-tmp')}",
+        ]
+        environment = os.environ.copy()
+        environment["TDK_ACCEPTANCE_EVIDENCE_ROOT"] = str(evidence_root)
+        started = time.monotonic()
+        timed_out = False
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.repo_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=600,
+            )
+            exit_code = completed.returncode
+            output = "\n".join(
+                part for part in (completed.stdout, completed.stderr) if part
+            )
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            exit_code = None
+            output = "\n".join(
+                str(part)
+                for part in (error.stdout, error.stderr)
+                if part
+            )
+        collected, skipped, failed, assertion_ids = self._parse_junit(junit_path)
+        if timed_out:
+            status = "timeout"
+        elif exit_code == 0 and collected > 0 and skipped == 0 and failed == 0:
+            status = "passed"
+        else:
+            status = "failed"
+        suite = {
+            "name": name,
+            "status": status,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "exit_code": exit_code,
+            "collected": collected,
+            "passed": max(collected - skipped - failed, 0),
+            "failed": failed,
+            "skipped": skipped,
+            "timed_out": timed_out,
+            "assertion_ids": assertion_ids,
+            "command_identity": canonical_hash(list(plan)),
+            "artifact_refs": [name],
+            "first_failing_substep": (
+                None
+                if status == "passed"
+                else next(
+                    (
+                        line
+                        for line in output.splitlines()
+                        if "FAILED " in line or "ERROR " in line
+                    ),
+                    "suite_timeout" if timed_out else "suite_process",
+                )
+            ),
+            "output_tail": VerificationOutputRedactor().redact(output)[-2000:],
+        }
+        artifact_path.write_text(
+            json.dumps(suite, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        return suite
+
+    def _criteria(
+        self,
+        suites: Sequence[Mapping[str, Any]],
+        browser_status: str,
+    ) -> list[dict[str, Any]]:
+        by_name = {str(item["name"]): item for item in suites}
+        criteria: list[dict[str, Any]] = []
+        for criterion, suite_name, pattern in self.CRITERIA:
+            suite = by_name[suite_name]
+            matched = [
+                assertion
+                for assertion in suite["assertion_ids"]
+                if pattern in assertion
+            ]
+            passed = suite["status"] == "passed" and bool(matched)
+            artifact_refs = [suite_name]
+            if criterion in {"TDK-AC-001", "TDK-AC-002", "TDK-AC-003"}:
+                artifact_refs.append("migration_manifest")
+            if criterion == "TDK-AC-028":
+                artifact_refs.append("restart_replay")
+            if criterion == "TDK-AC-029":
+                artifact_refs.append("backup_restore")
+            if criterion == "TDK-AC-031":
+                passed = passed and browser_status == "passed"
+                artifact_refs.append("browser_cdp")
+            if criterion == "TDK-AC-033":
+                artifact_refs.append("architecture_import_graph")
+            if criterion == "TDK-AC-035":
+                artifact_refs.append("acceptance_status_semantics")
+            criteria.append(
+                {
+                    "criterion": criterion,
+                    "status": "passed" if passed else "failed",
+                    "suite": suite_name,
+                    "assertion_ids": matched,
+                    "artifact_refs": artifact_refs,
+                }
+            )
+        return criteria
+
+    def _live_status(self, artifact_id: str | None) -> dict[str, Any]:
+        if artifact_id is None:
+            return {
+                "name": "live_provider_qualification",
+                "status": "not_applicable",
+                "reason": "synthetic_offline_kernel_acceptance",
+            }
+        if self._receipt_loader is None:
+            raise ValueError("QUALIFICATION_RECEIPT_STORE_UNAVAILABLE")
+        receipt = decode_provider_qualification_receipt(
+            self._receipt_loader(artifact_id),
+            artifact_id,
+        ).to_dict()
+        return {
+            "name": "live_provider_qualification",
+            "status": receipt["status"],
+            "artifact_id": artifact_id,
+            "provider_identity": receipt.get("provider_identity"),
+        }
+
+    def _freeze(self, supplied: Mapping[str, Any]) -> AcceptanceEvidenceResult:
+        failures: list[str] = []
+        suites = list(supplied.get("suites", ()))
+        criteria = list(supplied.get("criteria", ()))
+        browser = supplied.get("browser")
+        external_checks = list(supplied.get("external_checks", ()))
+        expected_criteria = {item[0] for item in self.CRITERIA}
+        if (
+            {item.get("name") for item in suites} != set(self.REQUIRED_SUITES)
+            or len(suites) != len(self.REQUIRED_SUITES)
+        ):
+            failures.append("SUITE_LEDGER_INCOMPLETE")
+        if (
+            {item.get("criterion") for item in criteria} != expected_criteria
+            or len(criteria) != 35
+        ):
+            failures.append("ACCEPTANCE_CRITERIA_INCOMPLETE")
+        if any(item.get("status") != "passed" for item in suites):
+            failures.append("LOCAL_SUITE_NOT_PASSED")
+        if any(item.get("status") != "passed" for item in criteria):
+            failures.append("LOCAL_CRITERION_NOT_PASSED")
+        if not isinstance(browser, Mapping) or browser.get("status") != "passed":
+            failures.append("BROWSER_CDP_NOT_PASSED")
+        for item in suites:
+            if item.get("status") == "passed" and (
                 item.get("exit_code") != 0
-                or not isinstance(item.get("collected"), int)
                 or item.get("collected", 0) < 1
                 or item.get("skipped") != 0
-                or item.get("xfailed") != 0
+                or item.get("failed") != 0
+                or item.get("timed_out") is not False
             ):
-                failure_codes.append("LOCAL_SUITE_EXECUTION_INVALID")
+                failures.append("SUITE_STATUS_INCONSISTENT")
+
+        artifact_evidence: dict[str, dict[str, Any]] = {}
+        for name, item in dict(supplied.get("artifacts", {})).items():
+            path = Path(str(item.get("path", "")))
             if (
-                item.get("artifact_refs") != [item.get("name")]
-                or not item.get("assertion_ids")
-                or not item.get("command_identity")
+                not path.is_file()
+                or _sha256(path) != item.get("sha256")
+                or path.stat().st_size != item.get("size")
             ):
-                failure_codes.append("SUITE_EVIDENCE_NOT_DISTINCT")
-        self._validate_references((*criteria, *suites), artifacts, failure_codes)
+                failures.append("ARTIFACT_EVIDENCE_INVALID")
+                continue
+            artifact_evidence[name] = {
+                "sha256": item["sha256"],
+                "size": item["size"],
+            }
+        required_refs = {
+            ref
+            for item in (*criteria, *suites)
+            for ref in item.get("artifact_refs", ())
+        }
+        if not required_refs.issubset(artifact_evidence):
+            failures.append("ARTIFACT_REFERENCE_MISSING")
 
-        fixture = supplied.get("fixture")
-        fixture_distribution = self._fixture_qualification(fixture, failure_codes)
-        applicability = list(supplied.get("applicability", ()))
-        self._validate_applicability(applicability, artifacts, failure_codes)
-        live = self._live_qualification(
-            supplied.get("live_qualification"), failure_codes
-        )
-
-        required_scalars = (
-            "slice_spec_version",
-            "fixed_clock",
-            "network_policy",
-            "final_artifact_manifest_id",
-        )
-        if any(
-            not supplied.get(field) for field in required_scalars
-        ) or not supplied.get("golden_entities"):
-            failure_codes.append("ACCEPTANCE_IDENTITY_INCOMPLETE")
-        versions = supplied.get("versions")
-        if (
-            not isinstance(versions, Mapping)
-            or set(versions) != {"workflow", "node", "evaluator", "model", "policy"}
-            or any(not value for value in versions.values())
-        ):
-            failure_codes.append("VERSION_LEDGER_INCOMPLETE")
-
+        status = "failed" if failures else "passed"
         code_identity = asdict(
             build_code_identity(
                 self.repo_root,
                 {
-                    "network_policy": supplied.get("network_policy"),
-                    "fixed_clock": supplied.get("fixed_clock"),
+                    "acceptance_schema": self.SCHEMA_VERSION,
+                    "fixture_manifest": supplied.get("fixture", {}).get(
+                        "manifest_sha256"
+                    ),
                 },
             )
         )
-        slice_acceptance = "failed" if failure_codes else "passed"
-        acceptance_identity = canonical_hash(
-            {
-                "schema": self.SCHEMA_VERSION,
-                "spec": supplied.get("slice_spec_version"),
-                "versions": versions,
-                "code_identity": code_identity,
-                "fixture_manifest_sha256": (
-                    fixture.get("manifest_sha256")
-                    if isinstance(fixture, Mapping)
-                    else None
-                ),
-                "fixed_clock": supplied.get("fixed_clock"),
-                "network_policy": supplied.get("network_policy"),
-                "live_qualification": live,
-                "browser_evidence_sha256": artifacts.get(
-                    str(browser_evidence_ref), {}
-                ).get("sha256"),
-                "suites": [
-                    {
-                        key: item.get(key)
-                        for key in (
-                            "name",
-                            "version",
-                            "status",
-                            "command_identity",
-                            "assertion_ids",
-                        )
-                    }
-                    for item in suites
-                ],
-                "criteria": [
-                    {
-                        key: item.get(key)
-                        for key in ("criterion", "status", "suite", "assertion_ids")
-                    }
-                    for item in criteria
-                ],
-            }
-        )
         manifest = {
             "acceptance_schema_version": self.SCHEMA_VERSION,
-            "slice_spec_version": supplied.get("slice_spec_version"),
-            "versions": versions,
             "canonicalization_version": CANONICALIZATION_VERSION,
+            "acceptance_identity": canonical_hash(
+                {
+                    "schema": self.SCHEMA_VERSION,
+                    "code": code_identity,
+                    "fixture": supplied.get("fixture"),
+                    "suites": [
+                        {
+                            key: item.get(key)
+                            for key in (
+                                "name",
+                                "status",
+                                "exit_code",
+                                "collected",
+                                "passed",
+                                "failed",
+                                "skipped",
+                                "timed_out",
+                                "assertion_ids",
+                                "command_identity",
+                            )
+                        }
+                        for item in suites
+                    ],
+                    "criteria": criteria,
+                    "browser": (
+                        {
+                            key: browser.get(key)
+                            for key in (
+                                "name",
+                                "status",
+                                "exit_code",
+                                "command_identity",
+                            )
+                        }
+                        if isinstance(browser, Mapping)
+                        else browser
+                    ),
+                    "migration_hashes": supplied.get("migration_hashes"),
+                    "external_checks": external_checks,
+                }
+            ),
             "code_identity": code_identity,
-            "config_safe_hash": code_identity["config_hash"],
-            "acceptance_identity": acceptance_identity,
-            "credential_scope_ids": tuple(supplied.get("credential_scope_ids", ())),
             "environment": {
                 "os": platform.platform(),
                 "python": platform.python_version(),
                 "sqlite": sqlite3.sqlite_version,
             },
-            "fixture": fixture,
-            "fixture_distribution_qualification": fixture_distribution,
-            "fixed_clock": supplied.get("fixed_clock"),
-            "network_policy": supplied.get("network_policy"),
+            "fixture": supplied.get("fixture"),
+            "migration_hashes": supplied.get("migration_hashes"),
             "suites": suites,
             "criteria": criteria,
-            "golden_entities": supplied.get("golden_entities", ()),
-            "random_seed": None,
-            "determinism_basis": "fixed-clock+canonical-json+content-addressed-artifacts",
-            "artifact_evidence": artifacts,
-            "dependency_license_inventory_ref": supplied.get(
-                "dependency_license_inventory_ref", "architecture_security"
-            ),
-            "third_party_notices_ref": supplied.get(
-                "third_party_notices_ref", "architecture_security"
-            ),
-            "applicability_ledger": applicability,
-            "final_artifact_manifest_id": supplied.get("final_artifact_manifest_id"),
-            "doctor_report_ref": supplied.get(
-                "doctor_report_ref", "windows_maintenance"
-            ),
-            "browser_evidence_ref": browser_evidence_ref,
-            "backup_restore_report_ref": supplied.get(
-                "backup_restore_report_ref", "windows_maintenance"
-            ),
-            "legacy_regression_ref": supplied.get(
-                "legacy_regression_ref", "legacy_regression"
-            ),
-            "live_qualification": live,
-            "slice_acceptance": slice_acceptance,
-            "long_term_platform_complete": False,
-            "failure_codes": sorted(set(failure_codes)),
+            "browser": browser,
+            "external_checks": external_checks,
+            "artifact_evidence": artifact_evidence,
+            "trading_discipline_kernel_acceptance": status,
+            "trading_discipline_kernel_complete": status == "passed",
+            "failure_codes": sorted(set(failures)),
         }
         payload = json.dumps(
             manifest,
@@ -734,14 +584,21 @@ class AcceptanceEvidenceService:
             allow_nan=False,
         ).encode("utf-8")
         digest = hashlib.sha256(payload).hexdigest()
-        evidence_root = self.data_root / "acceptance"
+        evidence_root = (
+            self.repo_root
+            / ".scratch"
+            / "trading-discipline-kernel"
+            / "evidence"
+            / "acceptance"
+        )
         evidence_root.mkdir(parents=True, exist_ok=True)
         target = evidence_root / f"acceptance-{digest}.json"
         if target.exists() and target.read_bytes() != payload:
             raise RuntimeError("ACCEPTANCE_EVIDENCE_HASH_COLLISION")
         if not target.exists():
             descriptor, temporary_name = tempfile.mkstemp(
-                prefix=".acceptance-", dir=evidence_root
+                prefix=".acceptance-",
+                dir=evidence_root,
             )
             try:
                 with os.fdopen(descriptor, "wb") as stream:
@@ -756,11 +613,19 @@ class AcceptanceEvidenceService:
         if (
             _sha256(target) != digest
             or verified.get("acceptance_schema_version") != self.SCHEMA_VERSION
-            or len(verified.get("criteria", ())) != 51
+            or len(verified.get("criteria", ())) != 35
             or target.stat().st_mode & stat.S_IWUSR
         ):
             raise RuntimeError("ACCEPTANCE_SELF_VERIFICATION_FAILED")
-        return AcceptanceEvidenceResult(slice_acceptance, digest, target)
+        return AcceptanceEvidenceResult(status, digest, target)
+
+    @staticmethod
+    def _artifact(path: Path) -> dict[str, Any]:
+        return {
+            "path": str(path.resolve()),
+            "sha256": _sha256(path),
+            "size": path.stat().st_size,
+        }
 
     def validate_browser_evidence(self, path: Path) -> Mapping[str, Any]:
         try:
@@ -770,29 +635,11 @@ class AcceptanceEvidenceService:
         verifier = evidence.get("verifier") if isinstance(evidence, Mapping) else None
         browser = evidence.get("browser") if isinstance(evidence, Mapping) else None
         initial = evidence.get("initial") if isinstance(evidence, Mapping) else None
-        routes = (
-            evidence.get("routes_and_headers")
-            if isinstance(evidence, Mapping)
-            else None
-        )
-        headers = (
-            routes.get("headers") if isinstance(routes, Mapping) else None
-        )
-        screenshots = (
-            evidence.get("screenshots")
-            if isinstance(evidence, Mapping)
-            else None
-        )
-        plan = (
-            evidence.get("plan_progressive_disclosure")
-            if isinstance(evidence, Mapping)
-            else None
-        )
-        editor = (
-            evidence.get("account_editor")
-            if isinstance(evidence, Mapping)
-            else None
-        )
+        routes = evidence.get("routes_and_headers") if isinstance(evidence, Mapping) else None
+        headers = routes.get("headers") if isinstance(routes, Mapping) else None
+        screenshots = evidence.get("screenshots") if isinstance(evidence, Mapping) else None
+        plan = evidence.get("plan_progressive_disclosure") if isinstance(evidence, Mapping) else None
+        editor = evidence.get("account_editor") if isinstance(evidence, Mapping) else None
         expected_source_hash = _sha256(
             self.repo_root / "scripts/verify_issue05_browser.py"
         )
@@ -841,10 +688,7 @@ class AcceptanceEvidenceService:
             if not isinstance(item, Mapping):
                 return False
             filename = item.get("name")
-            if (
-                not isinstance(filename, str)
-                or filename != f"{name}.png"
-            ):
+            if not isinstance(filename, str) or filename != f"{name}.png":
                 return False
             target = path.parent / "browser-cdp-screenshots" / filename
             return (
@@ -868,16 +712,7 @@ class AcceptanceEvidenceService:
             and initial.get("navigation") == expected_navigation
             and initial.get("homeGroups") == expected_groups
             and initial.get("external") == []
-            and all(
-                initial.get(name) is True
-                for name in (
-                    "unknownVisible",
-                    "skipLink",
-                    "mainFocusable",
-                    "oneH1",
-                    "dialogLabels",
-                )
-            )
+            and all(initial.get(name) is True for name in ("unknownVisible", "skipLink", "mainFocusable", "oneH1", "dialogLabels"))
             and isinstance(routes, Mapping)
             and routes.get("schema") == "PortfolioWorkspaceView@1"
             and routes.get("homeKeys") == expected_home_keys
@@ -890,24 +725,14 @@ class AcceptanceEvidenceService:
             and headers.get("referrer") == "no-referrer"
             and headers.get("opener") == "same-origin"
             and isinstance(plan, Mapping)
-            and all(plan.get(name) is True for name in (
-                "open",
-                "rules",
-                "diagnosticsClosed",
-            ))
+            and all(plan.get(name) is True for name in ("open", "rules", "diagnosticsClosed"))
             and isinstance(editor, Mapping)
             and editor.get("draftSaved") is True
             and editor.get("confirmDisabled") is True
             and "已确认 v2" in editor.get("summary", "")
             and editor.get("detailsClosed") is True
-            and all(
-                evidence.get(name) is True
-                for name in ("responsive", "reduced_motion")
-            )
-            and all(
-                screenshot_valid(name)
-                for name in ("overview", "portfolio", "review", "research")
-            )
+            and all(evidence.get(name) is True for name in ("responsive", "reduced_motion"))
+            and all(screenshot_valid(name) for name in ("overview", "portfolio", "review", "research"))
             and "已确认 v2" in evidence.get("restart_state", "")
             and evidence.get("console_errors") == []
             and evidence.get("network_failures") == []
@@ -932,211 +757,14 @@ class AcceptanceEvidenceService:
             if cases
             else sum(int(item.attrib.get("tests", "0")) for item in suites)
         )
-        skipped = sum(1 for case in cases if case.find("skipped") is not None) + sum(
-            int(item.attrib.get("skipped", "0")) for item in suites if not cases
-        )
+        skipped = sum(1 for case in cases if case.find("skipped") is not None)
         failed = sum(
             1
             for case in cases
             if case.find("failure") is not None or case.find("error") is not None
-        ) + sum(
-            int(item.attrib.get("failures", "0")) + int(item.attrib.get("errors", "0"))
-            for item in suites
-            if not cases
         )
         assertions = [
             f"{case.attrib.get('classname')}::{case.attrib.get('name')}"
             for case in cases
         ]
         return collected, skipped, failed, assertions
-
-    @staticmethod
-    def _validate_artifacts(
-        value: Any, failure_codes: list[str]
-    ) -> dict[str, dict[str, Any]]:
-        if not isinstance(value, Mapping) or not value:
-            failure_codes.append("ARTIFACT_EVIDENCE_INCOMPLETE")
-            return {}
-        result: dict[str, dict[str, Any]] = {}
-        for ref, item in value.items():
-            if not isinstance(ref, str) or not isinstance(item, Mapping):
-                failure_codes.append("ARTIFACT_EVIDENCE_INVALID")
-                continue
-            path = Path(str(item.get("path", "")))
-            expected = item.get("sha256")
-            if (
-                not path.is_file()
-                or not isinstance(expected, str)
-                or _sha256(path) != expected
-            ):
-                failure_codes.append("ARTIFACT_HASH_MISMATCH")
-                continue
-            result[ref] = {"sha256": expected, "size_bytes": path.stat().st_size}
-        return result
-
-    @staticmethod
-    def _validate_references(
-        records: tuple[Any, ...], artifacts: Mapping[str, Any], failure_codes: list[str]
-    ) -> None:
-        for record in records:
-            if not isinstance(record, Mapping) or not record.get("artifact_refs"):
-                failure_codes.append("EXECUTION_EVIDENCE_MISSING")
-                continue
-            if any(reference not in artifacts for reference in record["artifact_refs"]):
-                failure_codes.append("ARTIFACT_REFERENCE_MISSING")
-
-    def _validate_applicability(
-        self, items: list[Any], artifacts: Mapping[str, Any], failure_codes: list[str]
-    ) -> None:
-        indexed = {
-            item.get("capability"): item for item in items if isinstance(item, Mapping)
-        }
-        for capability, status in self.REQUIRED_APPLICABILITY.items():
-            item = indexed.get(capability)
-            if not item or item.get("status") != status or not item.get("rationale"):
-                failure_codes.append("APPLICABILITY_LEDGER_INVALID")
-                continue
-            if status == "not_applicable" and not item.get("counter_capability_test"):
-                failure_codes.append("COUNTER_CAPABILITY_EVIDENCE_MISSING")
-            if status == "passed" and any(
-                ref not in artifacts for ref in item.get("artifact_refs", ())
-            ):
-                failure_codes.append("APPLICABILITY_ARTIFACT_MISSING")
-
-    @staticmethod
-    def _fixture_qualification(value: Any, failure_codes: list[str]) -> str:
-        if (
-            not isinstance(value, Mapping)
-            or not value.get("fixture_pack_id")
-            or not value.get("manifest_sha256")
-            or not value.get("members")
-        ):
-            failure_codes.append("FIXTURE_RIGHTS_INCOMPLETE")
-            return "external_blocked"
-        distribution = (
-            "external_blocked"
-            if value.get("raw_response_distribution_qualification")
-            == "external_blocked"
-            else "qualified"
-        )
-        for member in value["members"]:
-            rights = member.get("rights", {}) if isinstance(member, Mapping) else {}
-            required = {
-                "local_storage_allowed",
-                "deterministic_replay_allowed",
-                "repository_redistribution_allowed",
-                "packaged_distribution_allowed",
-            }
-            if (
-                set(rights) != required
-                or not rights.get("local_storage_allowed")
-                or not rights.get("deterministic_replay_allowed")
-                or not member.get("terms_version")
-                or not member.get("reviewed_on")
-            ):
-                failure_codes.append("FIXTURE_RIGHTS_INCOMPLETE")
-            if not rights.get("repository_redistribution_allowed") or not rights.get(
-                "packaged_distribution_allowed"
-            ):
-                distribution = "external_blocked"
-        return distribution
-
-    @staticmethod
-    def _live_qualification(value: Any, failure_codes: list[str]) -> dict[str, Any]:
-        if not isinstance(value, Mapping) or value.get("status") not in {
-            "qualified",
-            "external_blocked",
-            "failed",
-        }:
-            failure_codes.append("LIVE_QUALIFICATION_INVALID")
-            return {"status": "failed", "failure_code": "LIVE_QUALIFICATION_INVALID"}
-        live = dict(value)
-        required = (
-            "provider_identity",
-            "source_authority",
-            "terms_profile",
-            "attempts",
-            "invocation_id",
-            "provider_id",
-            "adapter_version",
-            "adapter_code_identity",
-            "credential_scope_id",
-            "query_policy_identity",
-            "source_policy_identity",
-            "request_fingerprint",
-            "data_snapshot_id",
-            "transport_identity",
-            "qualification_profile",
-            "as_of_at",
-            "qualified_at",
-            "source_policy",
-        )
-        if any(field not in live for field in required):
-            failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INCOMPLETE")
-            live["status"] = "failed"
-        elif live["status"] == "qualified":
-            attempts = live.get("attempts")
-            valid_attempts = isinstance(attempts, list) and bool(attempts)
-            completed: set[str] = set()
-            if valid_attempts:
-                for attempt in attempts:
-                    if not isinstance(attempt, Mapping):
-                        valid_attempts = False
-                        break
-                    raw_sha256 = attempt.get("raw_sha256")
-                    status = attempt.get("status")
-                    if (
-                        not attempt.get("attempt_id")
-                        or not attempt.get("dataset")
-                        or not attempt.get("retrieved_at")
-                        or status not in {"complete", "partial", "missing", "failed", "rate_limited"}
-                    ):
-                        valid_attempts = False
-                        break
-                    if raw_sha256 is not None and (
-                        not isinstance(raw_sha256, str)
-                        or len(raw_sha256) != 64
-                        or any(
-                            character not in "0123456789abcdef"
-                            for character in raw_sha256.lower()
-                        )
-                    ):
-                        valid_attempts = False
-                        break
-                    if status == "complete":
-                        if raw_sha256 is None or attempt.get("error_code"):
-                            valid_attempts = False
-                            break
-                        completed.add(str(attempt["dataset"]))
-            policy = live.get("source_policy")
-            routes = policy.get("routes") if isinstance(policy, Mapping) else None
-            required_datasets = {
-                str(route.get("dataset"))
-                for route in routes or ()
-                if isinstance(route, Mapping) and route.get("completeness") == "required"
-            }
-            try:
-                qualified_at = datetime.fromisoformat(str(live["qualified_at"]))
-                qualification_age = datetime.now(timezone.utc) - qualified_at.astimezone(timezone.utc)
-                qualification_fresh = -timedelta(minutes=5) <= qualification_age <= timedelta(hours=24)
-            except (KeyError, TypeError, ValueError):
-                qualification_fresh = False
-            if (
-                not valid_attempts
-                or not required_datasets
-                or not required_datasets.issubset(completed)
-                or live.get("blockers")
-                or live.get("adapter_code_identity") != tushare_compatible_code_identity()
-                or live.get("transport_identity") != production_transport_identity()
-                or live.get("qualification_profile") != "production"
-                or not qualification_fresh
-            ):
-                failure_codes.append("LIVE_QUALIFICATION_EVIDENCE_INVALID")
-                live["status"] = "failed"
-        elif live["status"] == "external_blocked" and not live.get("blockers"):
-            failure_codes.append("LIVE_QUALIFICATION_BLOCKER_MISSING")
-            live["status"] = "failed"
-        return live
-
-
-__all__ = ["AcceptanceEvidenceResult", "AcceptanceEvidenceService"]

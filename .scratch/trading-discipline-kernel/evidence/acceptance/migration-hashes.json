@@ -1,0 +1,13 @@
+{
+  "expected_versions": [
+    15,
+    16,
+    17
+  ],
+  "schema_version": "KernelMigrationHashEvidence@1",
+  "script_sha256": {
+    "0015_account_snapshot_version.sql": "ca8ac7e30bc9771c0f9b10b28bec03ee979f61c77b96e10d3cbb982ba5648305",
+    "0016_strategy_plan_model_b.sql": "732fac8ab6dbe393e8b62595d57730247a8929f5ee271cce380c28e0ff58aa62",
+    "0017_manual_review_journal.sql": "a53804ab84ff683c457b8b2c6718572d3b604690af83e346efd68af3bc3f302c"
+  }
+}

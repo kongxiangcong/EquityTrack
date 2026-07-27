@@ -278,14 +278,14 @@ def main(argv: list[str] | None = None) -> int:
                 args.fixture_manifest, args.live_qualification_artifact_id
             )
             result = {
-                "slice_acceptance": evidence.slice_acceptance,
+                "trading_discipline_kernel_acceptance": evidence.status,
                 "manifest_sha256": evidence.manifest_sha256,
                 "manifest_ref": evidence.manifest_path.name,
             }
             print(
                 json.dumps(
                     {
-                        "ok": evidence.slice_acceptance == "passed",
+                        "ok": evidence.status == "passed",
                         "operation": operation,
                         "result": result,
                     },
@@ -293,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
-            return 0 if evidence.slice_acceptance == "passed" else 2
+            return 0 if evidence.status == "passed" else 2
         elif operation == "import-preview":
             result = (
                 open_import_preview(args.repo_root)

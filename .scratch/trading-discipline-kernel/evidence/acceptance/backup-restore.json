@@ -1,0 +1,133 @@
+{
+  "authority_manifest": {
+    "execution_ids": [
+      "execution_378905119f0fa68414bf9aa0"
+    ],
+    "plan_hashes": [
+      [
+        "trade_plan_version_c2e016b4e1bb094134e0eb04",
+        "2846075ed2823de832ce2c4602af12ff8ac66cb0dd437dfd9725b1faa062b1ce"
+      ],
+      [
+        "trade_plan_version_tdk_002897_1",
+        "baccf88333e7413145a389d930c52e171402a56d6b606533e2b63ce4369e23f8"
+      ],
+      [
+        "trade_plan_version_tdk_600183_1",
+        "26cc03a41a10411b984603cefa0b5c398c230b42acd16be37df98c63e647ff18"
+      ]
+    ],
+    "portfolio_sha256": "884a4260eb1deb3e618ff0fc26284898850fb1b3304c9993abbb0b04846f76ed",
+    "review_hashes": [
+      [
+        "discipline_review_d853cd76a60a26cb8c987c0c",
+        1,
+        "7c56e854fef5ebb466866f0fd1ebfa1719baa47d1aa102f9e33c1ebd48873058"
+      ],
+      [
+        "discipline_review_d853cd76a60a26cb8c987c0c",
+        2,
+        "8eb4fe25c315f95b267e43394a33866815838c069df94628852534e1f96c19eb"
+      ]
+    ],
+    "schema_versions": [
+      [
+        1,
+        "0001_core_identity_objects.sql",
+        "b8cbf0d323c21ab89d7d0e6f60372ca7a00b0a58751519cc03001ae53406adfd"
+      ],
+      [
+        2,
+        "0002_provider_normalized_snapshot.sql",
+        "9d2c4abe94eab54138d549dfd50668a5b50382069e0ffea8a4fd2fa7192b289b"
+      ],
+      [
+        3,
+        "0003_workflow_research_manifest.sql",
+        "47da39ef4959a33f9657e3ced50cbc86e9b76dcc4ed00113cbcba3fa8fda4919"
+      ],
+      [
+        4,
+        "0004_chart_annotation.sql",
+        "038af0966f962fa1ee1b93587492d9298ae0d6a575ef66eb2314c33ea8366aa7"
+      ],
+      [
+        5,
+        "0005_market_trade_plan.sql",
+        "c4902a84175b17d732e9eff3dfec1e952c286bafb3a5ccfb3d78248d1317de09"
+      ],
+      [
+        6,
+        "0006_market_snapshot_evaluation.sql",
+        "041bbbf4a3c41f172c431253d7061310965007c139579496a505ecc6f0d296b4"
+      ],
+      [
+        7,
+        "0007_workflow_recovery.sql",
+        "e5c9c76ac52792183f3564be0a6dc03dbcf389d3d7d4f22147f225b26f202ac7"
+      ],
+      [
+        8,
+        "0008_workspace_authorization.sql",
+        "75d20eae9e31ecbb2c30e85f91efcadd1ca1bf02e81b696045ea276510e049bf"
+      ],
+      [
+        9,
+        "0009_account_opening_state.sql",
+        "82b526fca7b522575f657a22d99216ade5c7c6094071edd739cf147a4dce4fd5"
+      ],
+      [
+        10,
+        "0010_account_history.sql",
+        "6f054ebfb69a9975d63cc2eacfab6e940578d71ace318884d96d68119b7e1812"
+      ],
+      [
+        11,
+        "0011_plan_account_context.sql",
+        "9605d4fd571b11cdae69365dadf1c5776b440b6446a92ad5d4524c1642f99492"
+      ],
+      [
+        12,
+        "0012_research_artifact_bundle.sql",
+        "87e58f6a077b7b01123ecb83a2be58392a23e980777bf8fa19476b0f29180753"
+      ],
+      [
+        13,
+        "0013_source_policy_official_evidence.sql",
+        "ab26675ffc77ea33c2fb341565920e020455711bb766f31ff1e6b3a970c5ad05"
+      ],
+      [
+        14,
+        "0014_research_evaluation.sql",
+        "2f66d6d7858562c098f5852178227a8a3a2bfea22bf53143406bb2ae89ab00af"
+      ],
+      [
+        15,
+        "0015_account_snapshot_version.sql",
+        "ca8ac7e30bc9771c0f9b10b28bec03ee979f61c77b96e10d3cbb982ba5648305"
+      ],
+      [
+        16,
+        "0016_strategy_plan_model_b.sql",
+        "732fac8ab6dbe393e8b62595d57730247a8929f5ee271cce380c28e0ff58aa62"
+      ],
+      [
+        17,
+        "0017_manual_review_journal.sql",
+        "a53804ab84ff683c457b8b2c6718572d3b604690af83e346efd68af3bc3f302c"
+      ]
+    ],
+    "snapshot_hashes": [
+      [
+        "account_snapshot_version_953011182120931d303df421",
+        "6330042b67bc7971148a63e2dc79679795bc0a57882000c57fb55f776e7b0b61"
+      ]
+    ]
+  },
+  "backup_name": "tdk-kernel.zip",
+  "backup_sha256": "95a636837dbd006f82ad934f2a8c73710d041bc3ca5fff44a1f52a7de79a20c5",
+  "doctor_status": "passed",
+  "restored_root_distinct": true,
+  "schema_version": "KernelBackupRestoreEvidence@1",
+  "status": "passed"
+}

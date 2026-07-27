@@ -1,0 +1,14 @@
+{
+  "schema_version": "SyntheticPlanFixture@1",
+  "security_id": "security_002897_sz",
+  "security_code": "002897.SZ",
+  "strategy_version_id": "strategy_version_trend_hold_break_exit_1",
+  "sleeves": [
+    {
+      "kind": "core",
+      "quantity_budget": "100",
+      "core_floor": "80"
+    }
+  ],
+  "expected_review_outcome": "NO_CHANGE"
+}

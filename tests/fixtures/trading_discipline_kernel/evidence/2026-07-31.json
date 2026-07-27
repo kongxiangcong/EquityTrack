@@ -1,0 +1,18 @@
+{
+  "schema_version": "SyntheticCompleteSessionEvidence@1",
+  "session": "2026-07-31",
+  "market_timezone": "Asia/Shanghai",
+  "complete": true,
+  "securities": {
+    "002897.SZ": {
+      "close": "83.10",
+      "outcome": "no_action"
+    },
+    "600183.SH": {
+      "close": "9.50",
+      "outcome": "decision_task",
+      "rule_id": "grid-rule"
+    }
+  },
+  "synthetic_only": true
+}
