@@ -64,6 +64,10 @@ from .decision_journal import (
     DecisionJournal,
     DeclareExecution,
 )
+from .discipline_reviews import (
+    ConfirmDisciplineReviewVersion,
+    DisciplineReviews,
+)
 from trading_platform.domain.decision_tasks import (
     DeferralCondition,
     UserDisposition,
@@ -129,6 +133,7 @@ _IMPLEMENTED = {
     "decision_task.resolve@1",
     "execution_record.declare@1",
     "execution_record.correct@1",
+    "discipline_review.confirm@1",
 }
 
 
@@ -142,12 +147,14 @@ class ApplicationCommandDispatcher:
         manual_reviews: ManualPortfolioReview,
         decision_tasks: DecisionTasks,
         decision_journal: DecisionJournal,
+        discipline_reviews: DisciplineReviews,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._trade_plans = trade_plans
         self._manual_reviews = manual_reviews
         self._decision_tasks = decision_tasks
         self._decision_journal = decision_journal
+        self._discipline_reviews = discipline_reviews
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -350,6 +357,19 @@ class ApplicationCommandDispatcher:
                 transport_actor=transport.identity,
             )
             return command, self._decision_journal.correct(command)
+        if envelope.command_name == "discipline_review.confirm@1":
+            command = ConfirmDisciplineReviewVersion(
+                invocation_id=envelope.invocation_id,
+                discipline_review_id=str(
+                    payload["discipline_review_id"]
+                ),
+                expected_version_no=_revision(envelope),
+                confirmed_at=str(payload["confirmed_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._discipline_reviews.confirm(command)
         plan_actor = PlanCommandActor(
             actor.identity,
             envelope.interaction_channel.value,
@@ -618,6 +638,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
                 "draft_id",
                 "decision_task_id",
                 "execution_record_id",
+                "discipline_review_id",
             )
             if payload.get(key)
         ),
@@ -634,6 +655,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
                 "challenge_id",
                 "event_id",
                 "latest_transition_id",
+                "version_no",
             )
             if payload.get(key)
         ),

@@ -55,6 +55,7 @@ from .commands import ApplicationCommandDispatcher
 from .manual_portfolio_review import ManualPortfolioReview
 from .decision_tasks import DecisionTasks
 from .decision_journal import DecisionJournal
+from .discipline_reviews import DisciplineReviews
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -66,6 +67,12 @@ from trading_platform.persistence.decision_tasks import (
 )
 from trading_platform.persistence.decision_journal import (
     SQLiteDecisionJournalRepository,
+)
+from trading_platform.persistence.discipline_reviews import (
+    SQLiteDisciplineReviewRepository,
+)
+from trading_platform.domain.discipline_reviews import (
+    DisciplineReviewService,
 )
 
 
@@ -306,6 +313,12 @@ def open_application_commands(
                 journal_repository,
             ),
             journal,
+            DisciplineReviews(
+                SQLiteDisciplineReviewRepository(
+                    store.connection, store.writer_lock
+                ),
+                DisciplineReviewService(),
+            ),
         )
 
 
@@ -366,6 +379,20 @@ def open_decision_journal(
         )
         repository.fault_injector = fault_injector
         yield DecisionJournal(repository)
+
+
+@contextmanager
+def open_discipline_reviews(
+    data_root: Path,
+    migrations_root: Path | None = None,
+) -> Iterator[DisciplineReviews]:
+    with _store(data_root, migrations_root) as store:
+        yield DisciplineReviews(
+            SQLiteDisciplineReviewRepository(
+                store.connection, store.writer_lock
+            ),
+            DisciplineReviewService(),
+        )
 
 
 @contextmanager
@@ -536,6 +563,7 @@ __all__ = [
     "open_manual_portfolio_review",
     "open_decision_tasks",
     "open_decision_journal",
+    "open_discipline_reviews",
     "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",

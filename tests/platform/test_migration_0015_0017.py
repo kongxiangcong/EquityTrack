@@ -891,6 +891,10 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
         "SELECT sql FROM sqlite_master "
         "WHERE type='table' AND name='execution_record'"
     ).fetchone()[0]
+    discipline_sql = store.connection.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='discipline_review_version'"
+    ).fetchone()[0]
     assert "decision_actor LIKE 'user:%'" in action_sql
     assert "corrects_entry_id TEXT UNIQUE" in action_sql
     assert (
@@ -899,6 +903,9 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
     )
     assert "price_state='known' AND price_value IS NOT NULL" in execution_sql
     assert "fee_state='known' AND fee_value IS NOT NULL" in execution_sql
+    assert "supersedes_version_no" in discipline_sql
+    assert "timezone='Asia/Shanghai'" in discipline_sql
+    assert "draft_invocation_id TEXT UNIQUE" in discipline_sql
     store.migrate()
     assert store.connection.execute(
         "SELECT count(*) FROM schema_migration WHERE version=17"

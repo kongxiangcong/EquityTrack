@@ -47,6 +47,7 @@ OWNING_SQLITE_TESTS = {
     "test_chart_annotations.py",
     "test_data_sync_pit.py",
     "test_decision_tasks.py",
+    "test_discipline_reviews.py",
     "test_external_official_disclosure.py",
     "test_execution_records.py",
     "test_market_evaluation.py",

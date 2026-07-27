@@ -114,6 +114,18 @@ proves another state; absence of broker evidence never means “not executed”.
 The application atomically commits the action log, execution, task transition,
 and receipt.
 
+`DisciplineReviewVersion@1` is the only formal behavior-review contract.
+Create its draft through the named application task using a `weekly` (default
+presentation) or `custom` period whose start and end are proven complete
+Asia/Shanghai A-share sessions. A period is not tied to Friday and no
+scheduler starts it. The application derives task/action/execution/plan/
+snapshot refs and overridden, skipped, deferred, unrecorded, and unverified
+evidence; callers cannot classify behavior or supply a score.
+`discipline_review.confirm@1` supplies `discipline_review_id`,
+`expected_revision`, and `confirmed_at`, and requires an explicitly confirmed
+user decision actor. Confirmation appends an immutable version. Monthly views
+aggregate confirmed versions and do not create another workflow or table.
+
 Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.

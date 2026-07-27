@@ -86,6 +86,7 @@ Replace any free-form/transient behavior history used for formal discipline deci
   `149 passed in 82.79s`; after removal of the duplicate application Protocol
   surface, the affected compile/architecture/journal/task group passed
   `32 passed in 23.83s`.
-- `0017` remains unapplied to both known persistent roots. Its current SHA-256
-  is `16608B72C45F53325FCEAD6D119577EBBD307D7186AEDC572C4051F50DE2EA51`;
-  `0016` remains unchanged.
+- `0017` remained unapplied to both known persistent roots. Its SHA-256 at the
+  ticket-11 boundary, before tickets 12–13 complete the same cohort in place,
+  was `16608B72C45F53325FCEAD6D119577EBBD307D7186AEDC572C4051F50DE2EA51`;
+  `0016` remained unchanged.

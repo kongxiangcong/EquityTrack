@@ -199,10 +199,12 @@ CREATE TABLE execution_record (
 CREATE TABLE discipline_review_version (
   discipline_review_id TEXT NOT NULL,
   version_no INTEGER NOT NULL CHECK(version_no > 0),
+  supersedes_version_no INTEGER,
   account_id TEXT NOT NULL REFERENCES account(account_id),
   period_kind TEXT NOT NULL CHECK(period_kind IN ('weekly','custom')),
   period_start_session TEXT NOT NULL,
   period_end_session TEXT NOT NULL,
+  timezone TEXT NOT NULL CHECK(timezone='Asia/Shanghai'),
   status TEXT NOT NULL CHECK(status IN ('draft','confirmed','superseded')),
   review_run_ids_json TEXT NOT NULL,
   decision_task_ids_json TEXT NOT NULL,
@@ -210,18 +212,31 @@ CREATE TABLE discipline_review_version (
   execution_record_ids_json TEXT NOT NULL,
   plan_version_ids_json TEXT NOT NULL,
   account_snapshot_version_ids_json TEXT NOT NULL,
+  exceptions_json TEXT NOT NULL,
   overridden_items_json TEXT NOT NULL,
   unrecorded_items_json TEXT NOT NULL,
   unverified_items_json TEXT NOT NULL,
   drift_assessment_ids_json TEXT NOT NULL,
   evidence_gap_summary_json TEXT NOT NULL,
   content_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  draft_invocation_id TEXT UNIQUE,
   confirmed_at TEXT,
   confirmation_command_receipt_id TEXT REFERENCES application_command_receipt(invocation_id),
   schema_version TEXT NOT NULL CHECK(schema_version='DisciplineReviewVersion@1'),
   PRIMARY KEY(discipline_review_id,version_no),
+  FOREIGN KEY(discipline_review_id,supersedes_version_no)
+    REFERENCES discipline_review_version(discipline_review_id,version_no),
   CHECK(period_start_session <= period_end_session),
-  CHECK((status='confirmed' AND confirmed_at IS NOT NULL AND confirmation_command_receipt_id IS NOT NULL) OR status<>'confirmed')
+  CHECK(
+    (version_no=1 AND supersedes_version_no IS NULL)
+    OR (version_no>1 AND supersedes_version_no=version_no-1)
+  ),
+  CHECK(
+    (status='draft' AND draft_invocation_id IS NOT NULL AND confirmed_at IS NULL AND confirmation_command_receipt_id IS NULL)
+    OR (status='confirmed' AND draft_invocation_id IS NULL AND confirmed_at IS NOT NULL AND confirmation_command_receipt_id IS NOT NULL)
+    OR (status='superseded' AND draft_invocation_id IS NULL AND confirmed_at IS NULL AND confirmation_command_receipt_id IS NULL)
+  )
 );
 
 CREATE TABLE plan_impact_assessment (

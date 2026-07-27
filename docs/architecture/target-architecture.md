@@ -80,6 +80,13 @@ corrections replace projection inputs through immutable links and never update
 the confirmed account snapshot. Missing broker evidence stays explicitly
 unverified.
 
+`DisciplineReviews` derives immutable weekly/custom review versions from those
+task and journal authorities. Period boundaries are proven complete
+Asia/Shanghai sessions rather than scheduler or Friday assumptions.
+Confirmation appends a version and receipt; later drafts never rewrite prior
+versions. Monthly reporting is a deterministic aggregation of confirmed
+versions, not a second persistence model.
+
 ## Data, privacy, and financial boundaries
 
 - Official disclosures are canonical for critical financial facts.

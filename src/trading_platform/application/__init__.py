@@ -70,6 +70,11 @@ if TYPE_CHECKING:
         ListDecisionJournal,
         RecordTaskAction,
     )
+    from .discipline_reviews import (
+        ConfirmDisciplineReviewVersion,
+        CreateDisciplineReviewDraft,
+        GetDisciplineReview,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
@@ -89,6 +94,7 @@ if TYPE_CHECKING:
         open_decision_workspace,
         open_decision_tasks,
         open_decision_journal,
+        open_discipline_reviews,
         open_market,
         open_manual_portfolio_review,
         open_platform_health,
@@ -172,6 +178,9 @@ _EXPORT_MODULES = {
     "DeclareExecution": ".decision_journal",
     "ListDecisionJournal": ".decision_journal",
     "RecordTaskAction": ".decision_journal",
+    "ConfirmDisciplineReviewVersion": ".discipline_reviews",
+    "CreateDisciplineReviewDraft": ".discipline_reviews",
+    "GetDisciplineReview": ".discipline_reviews",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -202,6 +211,7 @@ _EXPORT_MODULES = {
     "open_decision_workspace": ".bootstrap",
     "open_decision_tasks": ".bootstrap",
     "open_decision_journal": ".bootstrap",
+    "open_discipline_reviews": ".bootstrap",
     "open_data_synchronization": ".bootstrap",
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",
