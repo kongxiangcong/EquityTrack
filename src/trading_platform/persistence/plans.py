@@ -10,14 +10,24 @@ from trading_platform.domain.plans import (
     ActiveTradePlan,
     CoreFloor,
     CoreSleeve,
-    GridConstraint,
     GridSleeve,
     PlanActivation,
     PlanValidationError,
     TradePlanGraph,
     TradePlanMaster,
     TradePlanMasterId,
+    TradePlanRule,
     TradePlanVersion,
+)
+from trading_platform.domain.rules import (
+    GridConstraint,
+    RuleClass,
+    RulePriority,
+    RuleScope,
+    ast_from_dict,
+    ast_to_dict,
+    candidate_from_dict,
+    candidate_to_dict,
 )
 from trading_platform.identity import canonical_hash
 
@@ -351,7 +361,8 @@ class SQLiteTradePlanRepository:
                     "SELECT s.*,g.lower_price,g.upper_price,g.level_count,"
                     "g.quantity_per_level,g.total_quantity_budget,"
                     "g.price_basis,g.trigger_mode,"
-                    "g.cooldown_trading_sessions,g.content_hash "
+                    "g.cooldown_trading_sessions,g.lot_size,"
+                    "g.generated_levels_hash,g.content_hash "
                     "AS grid_content_hash "
                     "FROM trade_plan_sleeve s "
                     "LEFT JOIN grid_constraint g "
@@ -530,7 +541,7 @@ class SQLiteTradePlanRepository:
                 constraint = sleeve.constraint
                 self._connection.execute(
                     "INSERT INTO grid_constraint "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         constraint.grid_constraint_id,
                         plan_version_id,
@@ -542,6 +553,8 @@ class SQLiteTradePlanRepository:
                         constraint.price_basis,
                         constraint.trigger_mode,
                         constraint.cooldown_trading_sessions,
+                        str(constraint.lot_size),
+                        constraint.generated_levels_hash,
                         constraint.content_hash,
                     ),
                 )
@@ -566,32 +579,39 @@ class SQLiteTradePlanRepository:
             )
         for position, rule in enumerate(graph.rules):
             self._connection.execute(
-                "INSERT INTO trade_plan_rule VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO trade_plan_rule "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     plan_version_id,
                     position,
-                    rule["rule_id"],
-                    rule["rule_class"],
-                    rule["priority"],
-                    rule["scope"],
-                    rule["ast_version"],
+                    rule.rule_id,
+                    rule.rule_class.value,
+                    rule.rule_kind,
+                    rule.priority.value,
+                    rule.scope.value,
+                    rule.sleeve_id,
+                    rule.effect,
+                    rule.applies_to,
                     json.dumps(
-                        rule["condition"],
+                        candidate_to_dict(rule.candidate_intent),
                         ensure_ascii=False,
                         sort_keys=True,
                         separators=(",", ":"),
                     ),
-                    (
-                        json.dumps(
-                            rule["candidate_intent"],
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        )
-                        if rule.get("candidate_intent") is not None
-                        else None
+                    json.dumps(
+                        rule.input_applicability,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
                     ),
-                    rule["content_hash"],
+                    rule.ast_version,
+                    json.dumps(
+                        ast_to_dict(rule.condition),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    rule.content_hash,
                 ),
             )
         for position, reference in enumerate(graph.evidence_references):
@@ -722,6 +742,7 @@ class SQLiteTradePlanRepository:
                     cooldown_trading_sessions=row[
                         "cooldown_trading_sessions"
                     ],
+                    lot_size=Decimal(row["lot_size"]),
                 ),
             )
         else:
@@ -734,24 +755,42 @@ class SQLiteTradePlanRepository:
             != row["grid_content_hash"]
         ):
             raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+        if (
+            isinstance(sleeve, GridSleeve)
+            and sleeve.constraint.generated_levels_hash
+            != row["generated_levels_hash"]
+        ):
+            raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
         return sleeve
 
     @staticmethod
-    def _decode_rule(row: sqlite3.Row) -> Mapping[str, object]:
-        return {
-            "rule_id": row["rule_id"],
-            "rule_class": row["rule_class"],
-            "priority": row["priority"],
-            "scope": row["scope"],
-            "ast_version": row["ast_version"],
-            "condition": json.loads(row["condition_json"]),
-            "candidate_intent": (
-                json.loads(row["candidate_intent_json"])
-                if row["candidate_intent_json"] is not None
-                else None
+    def _decode_rule(row: sqlite3.Row) -> TradePlanRule:
+        candidate_payload = (
+            json.loads(row["candidate_intent_json"])
+            if row["candidate_intent_json"] is not None
+            else None
+        )
+        rule = TradePlanRule(
+            rule_id=row["rule_id"],
+            rule_class=RuleClass(row["rule_class"]),
+            rule_kind=row["rule_kind"],
+            priority=RulePriority(row["priority"]),
+            scope=RuleScope(row["scope"]),
+            sleeve_id=row["sleeve_id"],
+            effect=row["effect"],
+            applies_to=row["applies_to"],
+            candidate_intent=candidate_from_dict(candidate_payload),
+            input_applicability=tuple(
+                json.loads(row["input_applicability_json"])
             ),
-            "content_hash": row["content_hash"],
-        }
+            condition=ast_from_dict(
+                json.loads(row["condition_json"])
+            ),
+            content_hash=row["content_hash"],
+            ast_version=row["ast_version"],
+        )
+        rule.validate()
+        return rule
 
     @staticmethod
     def _decode_reference(row: sqlite3.Row) -> Mapping[str, object]:

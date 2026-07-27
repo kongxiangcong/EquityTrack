@@ -12,6 +12,59 @@ from pathlib import Path
 from .locking import DataRootWriterLock, PersistenceError
 
 
+def _legacy_rule_to_ast_v2(payload: object):
+    from trading_platform.domain.rules import RuleAstV2
+
+    if not isinstance(payload, dict):
+        raise ValueError("legacy condition must be an object")
+    node = payload.get("node_kind")
+    if node in {"all", "any", "not"}:
+        return RuleAstV2(
+            node=node,
+            children=tuple(
+                _legacy_rule_to_ast_v2(child)
+                for child in payload.get("children", ())
+            ),
+        )
+    if (
+        node != "leaf"
+        or payload.get("applicability")
+        != "current_complete_session"
+    ):
+        raise ValueError("legacy condition is not finite")
+    operand_id = payload.get("metric_ref")
+    if operand_id not in {
+        "security.close_unadjusted",
+        "security.status",
+        "market.trend",
+        "account.total_quantity",
+        "account.cash",
+        "account.nav",
+    }:
+        raise ValueError("legacy operand is not finite")
+    constant = payload.get("constant")
+    if not isinstance(constant, dict):
+        raise ValueError("legacy constant missing")
+    kind = constant.get("constant_type")
+    raw = constant.get("value")
+    if kind == "decimal":
+        expected: object = Decimal(str(raw))
+    elif kind == "bool":
+        if str(raw).lower() not in {"true", "false"}:
+            raise ValueError("legacy boolean invalid")
+        expected = str(raw).lower() == "true"
+    elif kind == "enum":
+        expected = str(raw)
+    else:
+        raise ValueError("legacy constant is not finite")
+    return RuleAstV2(
+        node="comparison",
+        operand_id=str(operand_id),
+        operator=str(payload.get("operator")),
+        expected=expected,
+    )
+
+
 class MigrationRunner:
     def __init__(self, connection: sqlite3.Connection, data_root: Path, migrations_root: Path, writer_lock: DataRootWriterLock) -> None:
         self.connection = connection
@@ -129,11 +182,20 @@ class MigrationRunner:
         from trading_platform.domain.plans import (
             CoreFloor,
             CoreSleeve,
-            GridConstraint,
             GridSleeve,
             PlanValidationError,
+            TradePlanRule,
             validate_sleeve_contract,
             validate_sleeve_quantities,
+        )
+        from trading_platform.domain.rules import (
+            GridConstraint,
+            RuleAstV2,
+            RuleClass,
+            RuleContractError,
+            RulePriority,
+            RuleScope,
+            ast_to_dict,
         )
 
         def block(message: str) -> None:
@@ -230,6 +292,8 @@ class MigrationRunner:
             block("The legacy sleeve mapping lacks explicit user approval.")
 
         parsed_mappings: dict[str, tuple[str, str, str]] = {}
+        converted_rules: list[tuple[str, int, str, str]] = []
+        converted_versions: list[tuple[str, str, str]] = []
         for item in mapping["plans"]:
             if not isinstance(item, dict):
                 block("A legacy sleeve mapping entry is invalid.")
@@ -383,8 +447,15 @@ class MigrationRunner:
                         raw_sleeve["grid_constraint"][
                             "_migration_content_hash"
                         ] = typed_sleeve.constraint.content_hash
+                        raw_sleeve["grid_constraint"][
+                            "_migration_lot_size"
+                        ] = str(typed_sleeve.constraint.lot_size)
+                        raw_sleeve["grid_constraint"][
+                            "_migration_levels_hash"
+                        ] = typed_sleeve.constraint.generated_levels_hash
             except (
                 PlanValidationError,
+                RuleContractError,
                 InvalidOperation,
                 TypeError,
             ) as error:
@@ -400,9 +471,148 @@ class MigrationRunner:
             }
             if (
                 set(rule_scopes) != expected_rules
-                or any(scope not in kinds for scope in rule_scopes.values())
+                or any(
+                    scope
+                    not in {
+                        sleeve["sleeve_id"] for sleeve in sleeves
+                    }
+                    for scope in rule_scopes.values()
+                )
             ):
                 block("A legacy rule lacks one explicit sleeve scope.")
+            sleeve_kinds = {
+                sleeve["sleeve_id"]: sleeve["sleeve_kind"]
+                for sleeve in sleeves
+            }
+            plan_rule_hashes: dict[str, list[str]] = {}
+            for row in self.connection.execute(
+                "SELECT r.*,c.condition_json FROM plan_rule r "
+                "JOIN plan_rule_condition c "
+                "USING(plan_version_id,rule_no) "
+                "JOIN trade_plan_version v USING(plan_version_id) "
+                "WHERE v.plan_id=? ORDER BY r.rule_no",
+                (plan_id,),
+            ):
+                try:
+                    condition = _legacy_rule_to_ast_v2(
+                        json.loads(row["condition_json"])
+                    )
+                    sleeve_id = str(rule_scopes[row["rule_id"]])
+                    rule = TradePlanRule.build(
+                        rule_id=row["rule_id"],
+                        rule_class=RuleClass.HARD,
+                        rule_kind=row["rule_kind"],
+                        priority=RulePriority.ORDINARY,
+                        scope=RuleScope(sleeve_kinds[sleeve_id]),
+                        sleeve_id=sleeve_id,
+                        effect=row["effect"],
+                        applies_to=row["applies_to"],
+                        candidate_intent=None,
+                        input_applicability=(
+                            row["input_applicability"],
+                        ),
+                        condition=condition,
+                    )
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    RuleContractError,
+                    PlanValidationError,
+                ) as error:
+                    raise PersistenceError(
+                        "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
+                        "An active legacy rule is not representable as "
+                        "the finite AST@2 contract.",
+                    ) from error
+                converted_rules.append(
+                    (
+                        row["plan_version_id"],
+                        row["rule_no"],
+                        json.dumps(
+                            ast_to_dict(condition),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        rule.content_hash,
+                    )
+                )
+                plan_rule_hashes.setdefault(
+                    row["plan_version_id"], []
+                ).append(rule.content_hash)
+            try:
+                from trading_platform.domain.plans import PlanGraphSeal
+                from trading_platform.identity import canonical_hash
+
+                for version in self.connection.execute(
+                    "SELECT plan_version_id,content_json "
+                    "FROM trade_plan_version WHERE plan_id=? "
+                    "ORDER BY version_no",
+                    (plan_id,),
+                ):
+                    plan_version_id = version["plan_version_id"]
+                    content_hash = canonical_hash(
+                        json.loads(version["content_json"])
+                    )
+                    reference_hashes = tuple(
+                        hashlib.sha256(
+                            (
+                                "0016-legacy-ref:"
+                                f"{plan_version_id}:{row['ref_no']}:"
+                                f"{row['ref_type']}:{row['ref_id']}"
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        for row in self.connection.execute(
+                            "SELECT ref_no,ref_type,ref_id "
+                            "FROM plan_version_reference "
+                            "WHERE plan_version_id=? ORDER BY ref_no",
+                            (plan_version_id,),
+                        )
+                    )
+                    adjusted_hashes = tuple(
+                        hashlib.sha256(
+                            (
+                                "0016-legacy-adjusted:"
+                                f"{plan_version_id}:{row['rule_id']}:"
+                                f"{row['condition_path']}"
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        for row in self.connection.execute(
+                            "SELECT rule_id,condition_path "
+                            "FROM plan_adjusted_price_evidence "
+                            "WHERE plan_version_id=? "
+                            "ORDER BY rule_id,condition_path",
+                            (plan_version_id,),
+                        )
+                    )
+                    seal = PlanGraphSeal.build(
+                        version_content_hash=content_hash,
+                        sleeve_hashes=tuple(
+                            sleeve.content_hash
+                            for sleeve in typed_tuple
+                        ),
+                        rule_hashes=tuple(
+                            plan_rule_hashes.get(plan_version_id, ())
+                        ),
+                        evidence_hashes=(
+                            reference_hashes + adjusted_hashes
+                        ),
+                    )
+                    converted_versions.append(
+                        (
+                            plan_version_id,
+                            content_hash,
+                            seal.graph_seal_hash,
+                        )
+                    )
+            except (json.JSONDecodeError, TypeError) as error:
+                raise PersistenceError(
+                    "STRATEGY_PLAN_HISTORY_UNMIGRATABLE",
+                    "An active legacy plan does not contain canonical "
+                    "JSON content.",
+                ) from error
             parsed_mappings[plan_id] = (
                 str(strategy_version_id),
                 json.dumps(
@@ -460,6 +670,25 @@ class MigrationRunner:
                 for plan_id, (strategy, sleeves, scopes)
                 in parsed_mappings.items()
             ),
+        )
+        self.connection.execute(
+            "CREATE TEMP TABLE migration_0016_rule_conversion("
+            "plan_version_id TEXT NOT NULL,rule_no INTEGER NOT NULL,"
+            "condition_json TEXT NOT NULL,content_hash TEXT NOT NULL,"
+            "PRIMARY KEY(plan_version_id,rule_no))"
+        )
+        self.connection.executemany(
+            "INSERT INTO migration_0016_rule_conversion VALUES(?,?,?,?)",
+            converted_rules,
+        )
+        self.connection.execute(
+            "CREATE TEMP TABLE migration_0016_version_conversion("
+            "plan_version_id TEXT PRIMARY KEY,content_hash TEXT NOT NULL,"
+            "graph_seal_hash TEXT NOT NULL)"
+        )
+        self.connection.executemany(
+            "INSERT INTO migration_0016_version_conversion VALUES(?,?,?)",
+            converted_versions,
         )
 
         inconsistent_activation = self.connection.execute(

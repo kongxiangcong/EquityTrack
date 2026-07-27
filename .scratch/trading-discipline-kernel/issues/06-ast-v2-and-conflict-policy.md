@@ -1,6 +1,6 @@
 # 06 — AST@2 and conflict policy
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 05
@@ -42,3 +42,34 @@ Generic DSL, arbitrary functions, tactical scopes, Agent execution of HardRules,
 ## One-way cutover
 
 Delete AST@1 parser/evaluator/runtime branches and fixtures after migration. Do not version-dispatch between AST@1 and AST@2 at runtime.
+
+## Claim record
+
+- External seams: sealed `TradePlanRule` content, exact market/account/event
+  operand input, deterministic evaluation persistence, and the application
+  market evaluation task.
+- Deep-module ownership: `domain/rules.py` owns the finite AST, typed
+  operands/windows/grid nodes and rule evaluation; `domain/conflicts.py`
+  owns the complete locked terminal resolver; `domain/plans.py` owns sealed
+  rule identity; the market application task owns orchestration only.
+- Old paths to replace: AST@1 condition classes/evaluator, field-path lookup,
+  policy-version selection, flat rule-result tuples, and security-only
+  evaluation fixtures.
+- Superseded artifacts to delete: AST@1 runtime symbols/tests/schema reads,
+  any arbitrary expression/function branch, duplicate core-floor logic,
+  and evaluator paths that can emit execution or mutate a plan.
+
+## Resolution
+
+- The sealed plan graph now stores only finite AST@2 rules, exact typed
+  operands/candidate intents, and the locked conflict-policy identity.
+- `domain/rules.py` owns deterministic rule evaluation and replay hashes;
+  `domain/conflicts.py` owns the complete terminal precedence table.
+- The market named task evaluates only the exact active plan and immutable
+  market snapshot. Complete evaluation hashes provide immutable replay while
+  distinct typed inputs remain distinct results.
+- Migration 0016 converts only representable active AST@1 rules, reseals the
+  current graph, and fails closed with full rollback for non-representable
+  rules. AST@1 runtime paths and automatic provider-job evaluation are absent.
+- TDK-AC-005, TDK-AC-012, TDK-AC-013, and TDK-AC-014 focused evidence is
+  recorded in `evidence/06-ast-v2-and-conflict-policy.md`.

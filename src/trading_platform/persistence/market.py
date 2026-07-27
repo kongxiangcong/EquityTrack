@@ -7,10 +7,22 @@ from decimal import Decimal
 
 from trading_platform.application.market_contracts import BuildMarketSnapshotCommand
 from trading_platform.domain.market import (
-    Completeness, ComponentStatus, EvaluationOutcome, EvaluationStatus,
+    Completeness, ComponentStatus, EvaluationStatus,
     MarketBar, MarketComponentView, MarketSnapshotView, MarketError,
-    PlanEvaluationView, ReasonCode, RuleEvaluationView, RuleResult, SecurityMarketConstraint,
+    PlanEvaluationView, ReasonCode, SecurityMarketConstraint,
     SnapshotStatus, UniverseMember, compute_components,
+)
+from trading_platform.domain.conflicts import (
+    ConflictResolution,
+    ResolutionOutcome,
+)
+from trading_platform.domain.rules import (
+    RuleEvaluation,
+    RuleResult,
+    candidate_from_dict,
+    candidate_to_dict,
+    operand_from_dict,
+    operand_to_dict,
 )
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock
@@ -78,9 +90,66 @@ class SQLiteMarketRepository:
             if existing:
                 return self.get_plan_evaluation(existing[0])
             with self.connection:
-                self.connection.execute("INSERT INTO plan_evaluation(plan_evaluation_id,plan_version_id,market_snapshot_id,evaluator_version,evaluation_policy_version,status,outcome,completeness,rule_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (evaluation.plan_evaluation_id, evaluation.plan_version_id, evaluation.market_snapshot_id, evaluation.evaluator_version, evaluation.evaluation_policy_version, evaluation.status, evaluation.outcome, evaluation.completeness, len(evaluation.rule_results), datetime.now(timezone.utc).isoformat()))
+                resolution_json = json.dumps(
+                    {
+                        "selected_intent_id": evaluation.resolution.selected_intent_id,
+                        "contributing_rule_ids": evaluation.resolution.contributing_rule_ids,
+                        "policy_version": evaluation.resolution.policy_version,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                self.connection.execute(
+                    "INSERT INTO plan_evaluation VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        evaluation.plan_evaluation_id,
+                        evaluation.plan_version_id,
+                        evaluation.market_snapshot_id,
+                        evaluation.evaluator_version,
+                        evaluation.evaluation_policy_version,
+                        evaluation.status.value,
+                        evaluation.resolution.outcome.value,
+                        evaluation.resolution.reason_code,
+                        resolution_json,
+                        evaluation.resolution.content_hash,
+                        evaluation.completeness.value,
+                        len(evaluation.rule_results),
+                        evaluation.evaluation_hash,
+                        0,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
                 for index, result in enumerate(evaluation.rule_results):
-                    self.connection.execute("INSERT INTO plan_rule_evaluation(plan_evaluation_id,rule_order,rule_id,result,reason_code,operands_json,effect,applies_to,observed_at,evidence_count) VALUES(?,?,?,?,?,?,?,?,?,?)", (evaluation.plan_evaluation_id, index, result.rule_id, result.result, result.reason_code, json.dumps(result.operands), result.effect, result.applies_to, result.observed_at, len(result.evidence_refs)))
+                    evaluation_json = json.dumps(
+                        {
+                            "operands": tuple(
+                                operand_to_dict(item)
+                                for item in result.operands
+                            ),
+                            "candidate_intent": candidate_to_dict(
+                                result.candidate_intent
+                            ),
+                            "matched_grid_levels": result.matched_grid_levels,
+                            "observed_at": result.observed_at,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    self.connection.execute(
+                        "INSERT INTO plan_rule_evaluation VALUES(?,?,?,?,?,?,?,?)",
+                        (
+                            evaluation.plan_evaluation_id,
+                            index,
+                            result.rule_id,
+                            result.result.value,
+                            result.reason_code,
+                            evaluation_json,
+                            result.replay_hash,
+                            len(result.evidence_refs),
+                        ),
+                    )
                     for evidence_index, evidence in enumerate(result.evidence_refs):
                         self.connection.execute("INSERT INTO plan_evaluation_evidence(plan_evaluation_id,rule_order,evidence_order,evidence_ref) VALUES(?,?,?,?)", (evaluation.plan_evaluation_id, index, evidence_index, evidence))
         return self.get_plan_evaluation(evaluation.plan_evaluation_id)
@@ -89,14 +158,62 @@ class SQLiteMarketRepository:
         row = self.connection.execute("SELECT * FROM plan_evaluation WHERE plan_evaluation_id=?", (evaluation_id,)).fetchone()
         if row is None:
             raise MarketError("PLAN_EVALUATION_NOT_FOUND")
+        if row["legacy_read_only"]:
+            raise MarketError("LEGACY_PLAN_EVALUATION_READ_ONLY")
         results = []
         for item in self.connection.execute("SELECT * FROM plan_rule_evaluation WHERE plan_evaluation_id=? ORDER BY rule_order", (evaluation_id,)):
             evidence = tuple(entry[0] for entry in self.connection.execute("SELECT evidence_ref FROM plan_evaluation_evidence WHERE plan_evaluation_id=? AND rule_order=? ORDER BY evidence_order", (evaluation_id, item["rule_order"])))
-            results.append(RuleEvaluationView(rule_id=item["rule_id"], result=RuleResult(item["result"]), reason_code=ReasonCode(item["reason_code"]), operands=tuple(tuple(pair) for pair in json.loads(item["operands_json"])), effect=item["effect"], applies_to=item["applies_to"], observed_at=item["observed_at"], evidence_refs=evidence))
-        return PlanEvaluationView(plan_evaluation_id=row["plan_evaluation_id"], plan_version_id=row["plan_version_id"], market_snapshot_id=row["market_snapshot_id"], evaluator_version=row["evaluator_version"], evaluation_policy_version=row["evaluation_policy_version"], status=EvaluationStatus(row["status"]), outcome=EvaluationOutcome(row["outcome"]) if row["outcome"] else None, completeness=Completeness(row["completeness"]), rule_results=tuple(results))
+            payload = json.loads(item["evaluation_json"])
+            results.append(
+                RuleEvaluation(
+                    rule_id=item["rule_id"],
+                    result=RuleResult(item["result"]),
+                    reason_code=item["reason_code"],
+                    operands=tuple(
+                        operand_from_dict(value)
+                        for value in payload["operands"]
+                    ),
+                    candidate_intent=candidate_from_dict(
+                        payload["candidate_intent"]
+                    ),
+                    matched_grid_levels=tuple(
+                        payload["matched_grid_levels"]
+                    ),
+                    observed_at=payload["observed_at"],
+                    evidence_refs=evidence,
+                    replay_hash=item["replay_hash"],
+                )
+            )
+        resolution_payload = json.loads(row["resolution_json"])
+        resolution = ConflictResolution(
+            outcome=ResolutionOutcome(row["resolution_outcome"]),
+            reason_code=row["resolution_reason_code"],
+            selected_intent_id=resolution_payload["selected_intent_id"],
+            contributing_rule_ids=tuple(
+                resolution_payload["contributing_rule_ids"]
+            ),
+            policy_version=resolution_payload["policy_version"],
+            content_hash=row["resolution_hash"],
+        )
+        return PlanEvaluationView(
+            plan_evaluation_id=row["plan_evaluation_id"],
+            plan_version_id=row["plan_version_id"],
+            market_snapshot_id=row["market_snapshot_id"],
+            evaluator_version=row["evaluator_version"],
+            evaluation_policy_version=row["evaluation_policy_version"],
+            status=EvaluationStatus(row["status"]),
+            completeness=Completeness(row["completeness"]),
+            rule_results=tuple(results),
+            resolution=resolution,
+            evaluation_hash=row["evaluation_hash"],
+        )
 
     def _market_snapshot_for_fingerprint(self, fingerprint: str) -> sqlite3.Row | None:
         return self.connection.execute("SELECT market_snapshot_id FROM market_snapshot WHERE input_fingerprint=?", (fingerprint,)).fetchone()
 
     def _plan_evaluation_for_key(self, evaluation: PlanEvaluationView) -> sqlite3.Row | None:
-        return self.connection.execute("SELECT plan_evaluation_id FROM plan_evaluation WHERE plan_version_id=? AND market_snapshot_id=? AND evaluator_version=? AND evaluation_policy_version=?", (evaluation.plan_version_id, evaluation.market_snapshot_id, evaluation.evaluator_version, evaluation.evaluation_policy_version)).fetchone()
+        return self.connection.execute(
+            "SELECT plan_evaluation_id FROM plan_evaluation "
+            "WHERE evaluation_hash=?",
+            (evaluation.evaluation_hash,),
+        ).fetchone()

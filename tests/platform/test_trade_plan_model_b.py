@@ -21,7 +21,14 @@ from trading_platform.domain.plans import (
     PlanValidationError,
     TradePlanMaster,
     TradePlanMasterId,
+    TradePlanRule,
     build_plan_version,
+)
+from trading_platform.domain.rules import (
+    RuleAstV2,
+    RuleClass,
+    RulePriority,
+    RuleScope,
 )
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import PersistenceError
@@ -235,19 +242,23 @@ def _graph(
         quantity_budget=Decimal("100"),
         core_floor=CoreFloor(Decimal("80")),
     )
-    rule = _with_hash(
-        {
-            "rule_id": f"rule_{suffix}",
-            "rule_class": "hard",
-            "priority": "ordinary",
-            "scope": "core",
-            "ast_version": "plan-rule-ast@2",
-            "condition": {
-                "ast_version": "plan-rule-ast@2",
-                "node": "always_false_fixture",
-            },
-            "candidate_intent": None,
-        }
+    rule = TradePlanRule.build(
+        rule_id=f"rule_{suffix}",
+        rule_class=RuleClass.HARD,
+        rule_kind="fixture_guard",
+        priority=RulePriority.ORDINARY,
+        scope=RuleScope.CORE,
+        sleeve_id=f"core_{suffix}",
+        effect="record_rule_outcome",
+        applies_to="plan",
+        candidate_intent=None,
+        input_applicability=("account.total_quantity",),
+        condition=RuleAstV2(
+            node="comparison",
+            operand_id="account.total_quantity",
+            operator="lt",
+            expected=Decimal("0"),
+        ),
     )
     evidence = _with_hash(
         {

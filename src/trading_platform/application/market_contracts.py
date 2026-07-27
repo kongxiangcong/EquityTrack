@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
+from trading_platform.domain.rules import EventWindow, OperandValue
 from trading_platform.identity.code import CodeIdentity
 
 
@@ -21,5 +21,7 @@ class EvaluatePlanCommand:
     invocation_id: str
     plan_version_id: str
     market_snapshot_id: str
-    evaluator_version: str
-    evaluation_policy_version: str
+    operands: tuple[OperandValue, ...] = ()
+    complete_sessions: tuple[str, ...] = ()
+    event_windows: tuple[EventWindow, ...] = ()
+    resource_conflict: bool = False

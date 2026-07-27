@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from enum import Enum
-from typing import Any, Mapping
+from typing import Mapping
 
+from trading_platform.domain.conflicts import ConflictResolution
+from trading_platform.domain.rules import RuleEvaluation
 
 class MarketError(ValueError):
     def __init__(self, code: str) -> None:
@@ -30,23 +32,9 @@ class EvaluationStatus(str, Enum):
     BLOCKED = "blocked"
 
 
-class EvaluationOutcome(str, Enum):
-    TRIGGERED = "triggered"
-    NOT_TRIGGERED = "not_triggered"
-    UNABLE = "unable_to_determine"
-
-
 class Completeness(str, Enum):
     COMPLETE = "complete"
     PARTIAL = "partial"
-
-
-class RuleResult(str, Enum):
-    TRIGGERED = "triggered"
-    NOT_TRIGGERED = "not_triggered"
-    UNABLE = "unable_to_determine"
-    BLOCKED = "blocked"
-    NOT_APPLICABLE = "not_applicable"
 
 
 class ReasonCode(str, Enum):
@@ -124,18 +112,6 @@ class MarketSnapshotView:
 
 
 @dataclass(frozen=True)
-class RuleEvaluationView:
-    rule_id: str
-    result: RuleResult
-    reason_code: ReasonCode
-    operands: tuple[tuple[str, str], ...]
-    effect: str
-    applies_to: str
-    observed_at: str
-    evidence_refs: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class PlanEvaluationView:
     plan_evaluation_id: str
     plan_version_id: str
@@ -143,9 +119,10 @@ class PlanEvaluationView:
     evaluator_version: str
     evaluation_policy_version: str
     status: EvaluationStatus
-    outcome: EvaluationOutcome | None
     completeness: Completeness
-    rule_results: tuple[RuleEvaluationView, ...]
+    rule_results: tuple[RuleEvaluation, ...]
+    resolution: ConflictResolution
+    evaluation_hash: str
 
 
 def compute_components(
@@ -578,291 +555,4 @@ def _blocked(
         0,
         expected,
         (),
-    )
-
-
-def evaluate_rules(
-    content: Any,
-    market: MarketSnapshotView,
-    account_operands: Mapping[str, str] | None = None,
-) -> tuple[
-    EvaluationStatus,
-    EvaluationOutcome | None,
-    Completeness,
-    tuple[RuleEvaluationView, ...],
-]:
-    if market.status == "blocked":
-        blocker = next(
-            (
-                component
-                for component in market.components
-                if component.status == "blocked"
-            ),
-            None,
-        )
-        reason = blocker.reason_code if blocker else ReasonCode.QUALITY_BLOCKING
-        blocked = tuple(
-            RuleEvaluationView(
-                rule.rule_id,
-                RuleResult.BLOCKED,
-                reason,
-                (),
-                rule.effect,
-                rule.applies_to,
-                market.effective_session_date,
-                blocker.evidence_refs if blocker else (),
-            )
-            for rule in content.rules
-        )
-        return EvaluationStatus.BLOCKED, None, Completeness.PARTIAL, blocked
-    components = {item.component_id: item for item in market.components}
-    results = tuple(
-        _evaluate_rule(
-            rule, components, market.effective_session_date, account_operands or {}
-        )
-        for rule in content.rules
-    )
-    if any(item.result is RuleResult.BLOCKED for item in results):
-        return EvaluationStatus.BLOCKED, None, Completeness.PARTIAL, results
-    outcome = (
-        EvaluationOutcome.TRIGGERED
-        if any(item.result is RuleResult.TRIGGERED for item in results)
-        else (
-            EvaluationOutcome.UNABLE
-            if any(item.result is RuleResult.UNABLE for item in results)
-            else EvaluationOutcome.NOT_TRIGGERED
-        )
-    )
-    completeness = (
-        Completeness.PARTIAL
-        if market.status is not SnapshotStatus.COMPLETE
-        or any(
-            item.result in {RuleResult.UNABLE, RuleResult.NOT_APPLICABLE}
-            for item in results
-        )
-        else Completeness.COMPLETE
-    )
-    return EvaluationStatus.COMPLETED, outcome, completeness, results
-
-
-def _evaluate_rule(
-    rule: Any,
-    components: Mapping[str, MarketComponentView],
-    observed_at: str,
-    account_operands: Mapping[str, str],
-) -> RuleEvaluationView:
-    state, operands, evidence, propagated_reason = _evaluate_condition(
-        rule.condition, components, account_operands
-    )
-    result = {
-        "true": RuleResult.TRIGGERED,
-        "false": RuleResult.NOT_TRIGGERED,
-        "unknown": RuleResult.UNABLE,
-        "blocked": RuleResult.BLOCKED,
-        "not_applicable": RuleResult.NOT_APPLICABLE,
-    }[state]
-    reason = (
-        propagated_reason
-        or {
-            "true": ReasonCode.CONDITION_TRUE,
-            "false": ReasonCode.CONDITION_FALSE,
-            "unknown": ReasonCode.INPUT_MISSING,
-            "blocked": ReasonCode.QUALITY_BLOCKING,
-            "not_applicable": ReasonCode.RULE_NOT_APPLICABLE,
-        }[state]
-    )
-    return RuleEvaluationView(
-        rule.rule_id,
-        result,
-        reason,
-        operands,
-        rule.effect,
-        rule.applies_to,
-        observed_at,
-        evidence,
-    )
-
-
-def _evaluate_condition(
-    condition: Any,
-    components: Mapping[str, MarketComponentView],
-    account_operands: Mapping[str, str],
-) -> tuple[str, tuple[tuple[str, str], ...], tuple[str, ...], ReasonCode | None]:
-    if condition.node_kind != "leaf":
-        children = [
-            _evaluate_condition(item, components, account_operands)
-            for item in condition.children
-        ]
-        states = [item[0] for item in children]
-        if condition.node_kind == "not":
-            state = (
-                "false"
-                if states[0] == "true"
-                else "true" if states[0] == "false" else states[0]
-            )
-        elif "blocked" in states:
-            state = "blocked"
-        elif condition.node_kind == "all":
-            state = (
-                "false"
-                if "false" in states
-                else (
-                    "unknown"
-                    if "unknown" in states
-                    else "not_applicable" if "not_applicable" in states else "true"
-                )
-            )
-        else:
-            state = (
-                "true"
-                if "true" in states
-                else (
-                    "unknown"
-                    if "unknown" in states
-                    else "not_applicable" if "not_applicable" in states else "false"
-                )
-            )
-        propagated = next(
-            (
-                child[3]
-                for child in children
-                if child[0] in {"blocked", "unknown"} and child[3] is not None
-            ),
-            None,
-        )
-        return (
-            state,
-            tuple(item for child in children for item in child[1]),
-            tuple(item for child in children for item in child[2]),
-            propagated,
-        )
-    if condition.metric_ref in {"position.quantity", "portfolio.net_asset_value"}:
-        key = (
-            "position_quantity"
-            if condition.metric_ref == "position.quantity"
-            else "portfolio_net_asset_value"
-        )
-        actual = account_operands.get(key)
-        if actual is None or condition.constant is None:
-            return (
-                "not_applicable",
-                (("metric_ref", condition.metric_ref),),
-                (),
-                ReasonCode.RULE_NOT_APPLICABLE,
-            )
-        left, right = Decimal(actual), Decimal(condition.constant.value)
-        matched = {
-            "eq": left == right,
-            "ne": left != right,
-            "lt": left < right,
-            "lte": left <= right,
-            "gt": left > right,
-            "gte": left >= right,
-        }.get(condition.operator)
-        if matched is None:
-            return (
-                "unknown",
-                (("metric_ref", condition.metric_ref), ("actual", actual)),
-                (),
-                ReasonCode.INPUT_MISSING,
-            )
-        operands = (
-            ("metric_ref", condition.metric_ref),
-            ("actual", actual),
-            ("expected", condition.constant.value),
-            ("unit", condition.constant.unit or "decimal"),
-        )
-        return ("true" if matched else "false"), operands, (), None
-    component_id = (
-        "security.price_context"
-        if condition.metric_ref.startswith("security.")
-        else condition.metric_ref
-    )
-    component = components.get(component_id)
-    if component is None or component.status in {"blocked", "unsupported"}:
-        state = "blocked" if component and component.status == "blocked" else "unknown"
-        return (
-            state,
-            (("metric_ref", condition.metric_ref),),
-            component.evidence_refs if component else (),
-            component.reason_code if component else ReasonCode.INPUT_MISSING,
-        )
-    values = dict(component.values)
-    if condition.metric_ref in {"security.close_unadjusted", "security.close_adjusted"}:
-        actual = values.get("close")
-    elif condition.metric_ref == "security.suspended":
-        actual = values.get("suspended")
-    elif condition.metric_ref == "security.limit_state":
-        actual = values.get("limit_state")
-    else:
-        actual = component.classification
-    if actual is None or condition.constant is None:
-        return (
-            "unknown",
-            (("metric_ref", condition.metric_ref),),
-            component.evidence_refs,
-            ReasonCode.INPUT_MISSING,
-        )
-    if condition.constant.constant_type == "decimal":
-        left, right = Decimal(actual), Decimal(condition.constant.value)
-        if (
-            condition.operator == "between"
-            and condition.constant.secondary_value is not None
-        ):
-            matched = right <= left <= Decimal(condition.constant.secondary_value)
-        elif (
-            condition.operator in {"crosses_above", "crosses_below"}
-            and component_id == "security.price_context"
-            and values.get("previous_close") is not None
-        ):
-            previous = Decimal(values["previous_close"])
-            matched = (
-                previous <= right < left
-                if condition.operator == "crosses_above"
-                else previous >= right > left
-            )
-        else:
-            matched = {
-                "eq": left == right,
-                "ne": left != right,
-                "lt": left < right,
-                "lte": left <= right,
-                "gt": left > right,
-                "gte": left >= right,
-            }.get(condition.operator)
-    else:
-        if condition.operator == "changed_to":
-            previous = values.get("previous_classification")
-            matched = (
-                None
-                if previous is None
-                else previous != condition.constant.value
-                and actual == condition.constant.value
-            )
-        else:
-            matched = (
-                actual == condition.constant.value
-                if condition.operator == "eq"
-                else actual != condition.constant.value
-            )
-    if matched is None:
-        return (
-            "unknown",
-            (("metric_ref", condition.metric_ref), ("actual", actual)),
-            component.evidence_refs,
-            ReasonCode.INPUT_MISSING,
-        )
-    operands = [
-        ("metric_ref", condition.metric_ref),
-        ("actual", actual),
-        ("expected", condition.constant.value),
-        ("unit", condition.constant.unit or "enum"),
-    ]
-    if condition.constant.secondary_value is not None:
-        operands.append(("expected_upper", condition.constant.secondary_value))
-    return (
-        "true" if matched else "false",
-        tuple(operands),
-        component.evidence_refs,
-        None,
     )

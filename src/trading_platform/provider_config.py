@@ -31,7 +31,7 @@ from trading_platform.application.command_codecs import (
     decode_market_snapshot_command_value,
     decode_provider_security_identity_value,
 )
-from trading_platform.application.provider_job import PlanEvaluationTemplate, ProviderJob
+from trading_platform.application.provider_job import ProviderJob
 from trading_platform.application.research_request_codec import decode_research_workflow_request
 from trading_platform.operations import OperationError
 
@@ -239,7 +239,7 @@ def decode_sync_job(job_file: Path) -> DecodedProviderJob:
             raise TypeError("job must be an object")
         allowed_top = {
             "schema_version", "provider", "query_policy", "source_policy", "request",
-            "security_identity", "research_request", "market", "evaluation",
+            "security_identity", "research_request", "market",
         }
         if set(raw) - allowed_top or raw.get("schema_version") != "ProviderJob@2":
             raise TypeError("ProviderJob@2 is required")
@@ -380,11 +380,13 @@ def decode_sync_job(job_file: Path) -> DecodedProviderJob:
             security_identity = decode_provider_security_identity_value(identity_payload)
         research_request = None if raw.get("research_request") is None else decode_research_workflow_request(json.dumps(raw["research_request"]).encode("utf-8"))
         market_command = None if raw.get("market") is None else decode_market_snapshot_command_value(dict(raw["market"]))
-        evaluation_template = None
-        if raw.get("evaluation") is not None:
-            evaluation = strict_object(raw, "evaluation", {"invocation_id", "plan_version_id", "evaluator_version", "evaluation_policy_version"})
-            evaluation_template = PlanEvaluationTemplate(*(required_text(evaluation, name) for name in ("invocation_id", "plan_version_id", "evaluator_version", "evaluation_policy_version")))
-        job = ProviderJob("ProviderJob@2", security_identity, security_invocation_id, research_request, market_command, evaluation_template)
+        job = ProviderJob(
+            "ProviderJob@2",
+            security_identity,
+            security_invocation_id,
+            research_request,
+            market_command,
+        )
         credential_variable = required_text(provider_data, "credential_env")
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise ProviderJobCodecError(type(error).__name__) from None

@@ -12,10 +12,21 @@ DROP TRIGGER IF EXISTS plan_risk_no_update;
 DROP TRIGGER IF EXISTS plan_risk_no_delete;
 DROP TRIGGER IF EXISTS plan_transition_no_update;
 DROP TRIGGER IF EXISTS plan_transition_no_delete;
+DROP TRIGGER IF EXISTS plan_evaluation_no_update;
+DROP TRIGGER IF EXISTS plan_evaluation_no_delete;
+DROP TRIGGER IF EXISTS plan_rule_evaluation_no_update;
+DROP TRIGGER IF EXISTS plan_rule_evaluation_no_delete;
+DROP TRIGGER IF EXISTS plan_rule_evaluation_no_late_insert;
+DROP TRIGGER IF EXISTS plan_evaluation_evidence_no_update;
+DROP TRIGGER IF EXISTS plan_evaluation_evidence_no_delete;
+DROP TRIGGER IF EXISTS plan_evaluation_evidence_no_late_insert;
 DROP INDEX IF EXISTS one_open_draft_per_existing_plan;
 DROP INDEX IF EXISTS one_open_initial_draft_per_security;
 DROP INDEX IF EXISTS one_active_version_per_plan;
 
+ALTER TABLE plan_evaluation_evidence RENAME TO plan_evaluation_evidence_legacy_0016;
+ALTER TABLE plan_rule_evaluation RENAME TO plan_rule_evaluation_legacy_0016;
+ALTER TABLE plan_evaluation RENAME TO plan_evaluation_legacy_0016;
 ALTER TABLE trade_plan RENAME TO trade_plan_legacy_0016;
 ALTER TABLE trade_plan_draft RENAME TO trade_plan_draft_legacy_0016;
 ALTER TABLE trade_plan_version RENAME TO trade_plan_version_legacy_0016;
@@ -193,6 +204,8 @@ CREATE TABLE grid_constraint (
   price_basis TEXT NOT NULL CHECK(price_basis IN ('unadjusted','adjusted')),
   trigger_mode TEXT NOT NULL CHECK(trigger_mode IN ('crosses_level','closes_at_or_beyond_level')),
   cooldown_trading_sessions INTEGER NOT NULL CHECK(cooldown_trading_sessions >= 0),
+  lot_size TEXT NOT NULL,
+  generated_levels_hash TEXT NOT NULL,
   content_hash TEXT NOT NULL UNIQUE,
   UNIQUE(plan_version_id)
 );
@@ -221,12 +234,18 @@ CREATE TABLE trade_plan_rule (
   rule_order INTEGER NOT NULL CHECK(rule_order >= 0),
   rule_id TEXT NOT NULL,
   rule_class TEXT NOT NULL CHECK(rule_class IN ('hard','review','legacy_read_only')),
+  rule_kind TEXT NOT NULL,
   priority TEXT NOT NULL,
   scope TEXT NOT NULL CHECK(scope IN ('master','core','grid','legacy_unsleeved')),
+  sleeve_id TEXT,
+  effect TEXT NOT NULL,
+  applies_to TEXT NOT NULL CHECK(applies_to IN ('entry','increase','decrease','exit','plan')),
+  candidate_intent_json TEXT,
+  input_applicability_json TEXT NOT NULL,
   ast_version TEXT NOT NULL,
   condition_json TEXT NOT NULL,
-  candidate_intent_json TEXT,
   content_hash TEXT NOT NULL,
+  CHECK((scope='master' AND sleeve_id IS NULL) OR (scope<>'master' AND sleeve_id IS NOT NULL)),
   PRIMARY KEY(plan_version_id,rule_order),
   UNIQUE(plan_version_id,rule_id)
 );
@@ -253,6 +272,52 @@ CREATE TABLE trade_plan_adjusted_price_evidence (
   algorithm_version TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   PRIMARY KEY(plan_version_id,rule_id,condition_path)
+);
+
+CREATE TABLE plan_evaluation (
+  plan_evaluation_id TEXT PRIMARY KEY,
+  plan_version_id TEXT NOT NULL REFERENCES trade_plan_version(plan_version_id),
+  market_snapshot_id TEXT NOT NULL REFERENCES market_snapshot(market_snapshot_id),
+  evaluator_version TEXT NOT NULL,
+  evaluation_policy_version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('completed','blocked')),
+  resolution_outcome TEXT NOT NULL CHECK(resolution_outcome IN ('blocked','manual_review_required','decision_task','no_action')),
+  resolution_reason_code TEXT NOT NULL,
+  resolution_json TEXT NOT NULL,
+  resolution_hash TEXT NOT NULL,
+  completeness TEXT NOT NULL CHECK(completeness IN ('complete','partial')),
+  rule_count INTEGER NOT NULL CHECK(rule_count >= 0),
+  evaluation_hash TEXT NOT NULL UNIQUE,
+  legacy_read_only INTEGER NOT NULL CHECK(legacy_read_only IN (0,1)),
+  created_at TEXT NOT NULL,
+  CHECK(
+    (legacy_read_only=0 AND evaluator_version='plan-evaluator@2'
+      AND evaluation_policy_version='trade-plan-conflict@1')
+    OR legacy_read_only=1
+  ),
+  UNIQUE(evaluation_hash)
+);
+
+CREATE TABLE plan_rule_evaluation (
+  plan_evaluation_id TEXT NOT NULL REFERENCES plan_evaluation(plan_evaluation_id),
+  rule_order INTEGER NOT NULL CHECK(rule_order >= 0),
+  rule_id TEXT NOT NULL,
+  result TEXT NOT NULL CHECK(result IN ('triggered','not_triggered','unable_to_determine','blocked','not_applicable')),
+  reason_code TEXT NOT NULL,
+  evaluation_json TEXT NOT NULL,
+  replay_hash TEXT NOT NULL,
+  evidence_count INTEGER NOT NULL CHECK(evidence_count >= 0),
+  PRIMARY KEY(plan_evaluation_id,rule_order)
+);
+
+CREATE TABLE plan_evaluation_evidence (
+  plan_evaluation_id TEXT NOT NULL,
+  rule_order INTEGER NOT NULL,
+  evidence_order INTEGER NOT NULL,
+  evidence_ref TEXT NOT NULL,
+  PRIMARY KEY(plan_evaluation_id,rule_order,evidence_order),
+  FOREIGN KEY(plan_evaluation_id,rule_order)
+    REFERENCES plan_rule_evaluation(plan_evaluation_id,rule_order)
 );
 
 CREATE TABLE plan_confirmation_challenge (
@@ -345,11 +410,12 @@ INSERT INTO trade_plan_draft
 SELECT
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   m.plan_id,r.account_id,p.security_id,m.strategy_version_id,NULL,1,'confirmed',
-  '{}',v.content_json,v.content_hash,v.confirmed_at,v.confirmed_at,
+  '{}',v.content_json,qv.content_hash,v.confirmed_at,v.confirmed_at,
   meta.approved_by,'migration','system:migration-0016'
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_legacy_0016 p USING(plan_id)
 JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
@@ -359,16 +425,17 @@ SELECT
   'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   'PlanConfirmationChallenge@1',m.plan_id,
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  1,v.content_hash,
+  1,qv.content_hash,
   '{"migration":"0016","legacy_mapping":"explicit"}',
-  canonical_sha256('0016-diff:' || m.plan_id || ':' || v.content_hash),
+  canonical_sha256('0016-diff:' || m.plan_id || ':' || qv.content_hash),
   '["confirm_and_enable"]',
   meta.approved_by,'migration','system:migration-0016',
   meta.approved_at,meta.approved_at,meta.approved_at,
   'user_approval_receipt_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  canonical_sha256('0016-challenge:' || m.plan_id || ':' || v.content_hash || ':' || meta.artifact_hash)
+  canonical_sha256('0016-challenge:' || m.plan_id || ':' || qv.content_hash || ':' || meta.artifact_hash)
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
 
@@ -379,14 +446,15 @@ SELECT
   'plan_confirmation_challenge_migration_' || substr(canonical_sha256(m.plan_id),1,24),
   m.plan_id,
   'trade_plan_draft_migration_' || substr(canonical_sha256(m.plan_id),1,24),
-  1,v.content_hash,
-  canonical_sha256('0016-diff:' || m.plan_id || ':' || v.content_hash),
+  1,qv.content_hash,
+  canonical_sha256('0016-diff:' || m.plan_id || ':' || qv.content_hash),
   'confirm_and_enable',
   meta.approved_by,'migration','system:migration-0016',
   'migration-0016:approve:' || m.plan_id,meta.approved_at,
-  canonical_sha256('0016-receipt:' || m.plan_id || ':' || v.content_hash || ':' || meta.artifact_hash)
+  canonical_sha256('0016-receipt:' || m.plan_id || ':' || qv.content_hash || ':' || meta.artifact_hash)
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN migration_0016_version_conversion qv USING(plan_version_id)
 JOIN migration_0016_mapping_meta meta
 GROUP BY m.plan_id;
 
@@ -398,10 +466,13 @@ SELECT v.plan_version_id,v.plan_id,v.version_no,v.supersedes_version_id,
        v.evaluator_policy_version,
        CASE WHEN m.plan_id IS NULL THEN 'legacy_read_only' ELSE 'trade-plan-conflict@1' END,
        CASE WHEN m.plan_id IS NULL THEN coalesce(c.ast_version,'plan-condition-ast@1') ELSE 'plan-rule-ast@2' END,
-       v.content_json,v.content_hash,
-       canonical_sha256(
-         '0016-graph:' || v.plan_version_id || ':' || v.content_hash || ':'
-         || coalesce(meta.artifact_hash,'legacy-read-only')
+       v.content_json,coalesce(qv.content_hash,v.content_hash),
+       coalesce(
+         qv.graph_seal_hash,
+         canonical_sha256(
+           '0016-graph:' || v.plan_version_id || ':' || v.content_hash
+           || ':legacy-read-only'
+         )
        ),
        1,v.confirmed_at,
        CASE WHEN m.plan_id IS NULL THEN NULL
@@ -413,6 +484,7 @@ JOIN plan_account_snapshot_reference_legacy_0016 r USING(plan_version_id)
 LEFT JOIN plan_rule_condition_legacy_0016 c USING(plan_version_id)
 LEFT JOIN migration_0016_legacy_mapping m USING(plan_id)
 LEFT JOIN migration_0016_mapping_meta meta
+LEFT JOIN migration_0016_version_conversion qv USING(plan_version_id)
 GROUP BY v.plan_version_id;
 
 INSERT INTO trade_plan_sleeve
@@ -440,6 +512,8 @@ SELECT
   json_extract(s.value,'$.grid_constraint.price_basis'),
   json_extract(s.value,'$.grid_constraint.trigger_mode'),
   json_extract(s.value,'$.grid_constraint.cooldown_trading_sessions'),
+  json_extract(s.value,'$.grid_constraint._migration_lot_size'),
+  json_extract(s.value,'$.grid_constraint._migration_levels_hash'),
   json_extract(s.value,'$.grid_constraint._migration_content_hash')
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_version_legacy_0016 v USING(plan_id)
@@ -469,15 +543,27 @@ INSERT INTO trade_plan_rule
 SELECT r.plan_version_id,r.rule_no,r.rule_id,
        CASE WHEN m.plan_id IS NULL THEN 'legacy_read_only' ELSE 'hard' END,
        r.rule_kind,
+       'ordinary',
+       CASE WHEN m.plan_id IS NULL THEN 'legacy_unsleeved'
+            ELSE (
+              SELECT json_extract(s.value,'$.sleeve_kind')
+              FROM json_each(m.sleeves_json) s
+              WHERE json_extract(s.value,'$.sleeve_id')
+                    =json_extract(m.rule_scopes_json,'$.' || r.rule_id)
+            ) END,
        CASE WHEN m.plan_id IS NULL THEN 'legacy_unsleeved'
             ELSE json_extract(m.rule_scopes_json,'$.' || r.rule_id) END,
+       r.effect,r.applies_to,NULL,json_array(r.input_applicability),
        CASE WHEN m.plan_id IS NULL THEN c.ast_version ELSE 'plan-rule-ast@2' END,
-       c.condition_json,NULL,
-       canonical_sha256('0016-legacy-rule:' || r.plan_version_id || ':' || r.rule_id || ':' || c.condition_hash)
+       CASE WHEN m.plan_id IS NULL THEN c.condition_json ELSE q.condition_json END,
+       CASE WHEN m.plan_id IS NULL
+            THEN canonical_sha256('0016-legacy-rule:' || r.plan_version_id || ':' || r.rule_id || ':' || c.condition_hash)
+            ELSE q.content_hash END
 FROM plan_rule_legacy_0016 r
 JOIN plan_rule_condition_legacy_0016 c USING(plan_version_id,rule_no)
 JOIN trade_plan_version_legacy_0016 v USING(plan_version_id)
-LEFT JOIN migration_0016_legacy_mapping m USING(plan_id);
+LEFT JOIN migration_0016_legacy_mapping m USING(plan_id)
+LEFT JOIN migration_0016_rule_conversion q USING(plan_version_id,rule_no);
 
 INSERT INTO trade_plan_evidence_reference
 SELECT plan_version_id,ref_no,ref_type,ref_id,resolution_status,
@@ -490,6 +576,49 @@ SELECT plan_version_id,rule_id,condition_path,data_snapshot_id,factor_set_id,
        algorithm_version,
        canonical_sha256('0016-legacy-adjusted:' || plan_version_id || ':' || rule_id || ':' || condition_path)
 FROM plan_adjusted_price_evidence_legacy_0016;
+
+INSERT INTO plan_evaluation
+SELECT
+  plan_evaluation_id,plan_version_id,market_snapshot_id,
+  evaluator_version,evaluation_policy_version,status,
+  CASE
+    WHEN status='blocked' THEN 'blocked'
+    WHEN outcome='not_triggered' THEN 'no_action'
+    ELSE 'manual_review_required'
+  END,
+  CASE
+    WHEN status='blocked' THEN 'LEGACY_EVALUATION_BLOCKED'
+    WHEN outcome='not_triggered' THEN 'LEGACY_NO_TRIGGER'
+    ELSE 'LEGACY_EVALUATION_REQUIRES_REVIEW'
+  END,
+  json_object(
+    'legacy_outcome',outcome,
+    'legacy_status',status,
+    'migration','0016'
+  ),
+  canonical_sha256('0016-legacy-resolution:' || plan_evaluation_id),
+  completeness,rule_count,
+  canonical_sha256('0016-legacy-evaluation:' || plan_evaluation_id),
+  1,created_at
+FROM plan_evaluation_legacy_0016;
+
+INSERT INTO plan_rule_evaluation
+SELECT
+  plan_evaluation_id,rule_order,rule_id,result,reason_code,
+  json_object(
+    'legacy_operands',json(operands_json),
+    'legacy_effect',effect,
+    'legacy_applies_to',applies_to,
+    'legacy_observed_at',observed_at
+  ),
+  canonical_sha256(
+    '0016-legacy-rule-evaluation:' || plan_evaluation_id || ':' || rule_order
+  ),
+  evidence_count
+FROM plan_rule_evaluation_legacy_0016;
+
+INSERT INTO plan_evaluation_evidence
+SELECT * FROM plan_evaluation_evidence_legacy_0016;
 
 INSERT INTO plan_account_snapshot_reference
 SELECT * FROM plan_account_snapshot_reference_legacy_0016;
@@ -561,6 +690,9 @@ SELECT
   '2026-07-27T00:00:00+08:00';
 
 DROP TABLE plan_account_snapshot_reference_legacy_0016;
+DROP TABLE plan_evaluation_evidence_legacy_0016;
+DROP TABLE plan_rule_evaluation_legacy_0016;
+DROP TABLE plan_evaluation_legacy_0016;
 DROP TABLE trade_plan_transition_legacy_0016;
 DROP TABLE plan_activation_legacy_0016;
 DROP TABLE plan_risk_constraint_legacy_0016;
@@ -573,6 +705,8 @@ DROP TABLE trade_plan_version_legacy_0016;
 DROP TABLE trade_plan_legacy_0016;
 DROP TABLE migration_0016_legacy_mapping;
 DROP TABLE migration_0016_mapping_meta;
+DROP TABLE migration_0016_rule_conversion;
+DROP TABLE migration_0016_version_conversion;
 
 CREATE TRIGGER investment_thesis_version_no_update BEFORE UPDATE ON investment_thesis_version
 BEGIN SELECT RAISE(ABORT,'INVESTMENT_THESIS_VERSION_IMMUTABLE'); END;
@@ -659,6 +793,28 @@ CREATE TRIGGER trade_plan_adjusted_no_update BEFORE UPDATE ON trade_plan_adjuste
 BEGIN SELECT RAISE(ABORT,'TRADE_PLAN_GRAPH_IMMUTABLE'); END;
 CREATE TRIGGER trade_plan_adjusted_no_delete BEFORE DELETE ON trade_plan_adjusted_price_evidence
 BEGIN SELECT RAISE(ABORT,'TRADE_PLAN_GRAPH_IMMUTABLE'); END;
+CREATE TRIGGER plan_evaluation_no_update BEFORE UPDATE ON plan_evaluation
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_evaluation_no_delete BEFORE DELETE ON plan_evaluation
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_rule_evaluation_no_update BEFORE UPDATE ON plan_rule_evaluation
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_rule_evaluation_no_delete BEFORE DELETE ON plan_rule_evaluation
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_rule_evaluation_no_late_insert BEFORE INSERT ON plan_rule_evaluation
+WHEN (SELECT count(*) FROM plan_rule_evaluation WHERE plan_evaluation_id=NEW.plan_evaluation_id)
+  >= (SELECT rule_count FROM plan_evaluation WHERE plan_evaluation_id=NEW.plan_evaluation_id)
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_evaluation_evidence_no_update BEFORE UPDATE ON plan_evaluation_evidence
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_evaluation_evidence_no_delete BEFORE DELETE ON plan_evaluation_evidence
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
+CREATE TRIGGER plan_evaluation_evidence_no_late_insert BEFORE INSERT ON plan_evaluation_evidence
+WHEN (SELECT count(*) FROM plan_evaluation_evidence
+      WHERE plan_evaluation_id=NEW.plan_evaluation_id AND rule_order=NEW.rule_order)
+  >= (SELECT evidence_count FROM plan_rule_evaluation
+      WHERE plan_evaluation_id=NEW.plan_evaluation_id AND rule_order=NEW.rule_order)
+BEGIN SELECT RAISE(ABORT,'PLAN_EVALUATION_IMMUTABLE'); END;
 CREATE TRIGGER plan_confirmation_challenge_no_delete BEFORE DELETE ON plan_confirmation_challenge
 BEGIN SELECT RAISE(ABORT,'PLAN_CONFIRMATION_CHALLENGE_IMMUTABLE'); END;
 CREATE TRIGGER user_approval_receipt_no_update BEFORE UPDATE ON user_approval_receipt

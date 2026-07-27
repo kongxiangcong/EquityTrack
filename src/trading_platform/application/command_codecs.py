@@ -9,6 +9,7 @@ from trading_platform.application.market_contracts import (
     EvaluatePlanCommand,
 )
 from trading_platform.identity.code import CodeIdentity
+from trading_platform.domain.rules import EventWindow, operand_from_dict
 
 
 class CommandCodecError(ValueError):
@@ -102,7 +103,76 @@ def decode_plan_evaluation_command_value(value: Any) -> EvaluatePlanCommand:
     try:
         if not isinstance(value, dict):
             raise TypeError("evaluation command must be an object")
-        return EvaluatePlanCommand(**value)
+        allowed = {
+            "invocation_id",
+            "plan_version_id",
+            "market_snapshot_id",
+            "operands",
+            "complete_sessions",
+            "event_windows",
+            "resource_conflict",
+        }
+        if set(value) - allowed:
+            raise TypeError("unknown evaluation command field")
+        resource_conflict = value.get("resource_conflict", False)
+        if not isinstance(resource_conflict, bool):
+            raise TypeError("resource_conflict must be boolean")
+        operand_fields = {
+            "operand_id",
+            "value_state",
+            "value",
+            "unit",
+            "currency",
+            "as_of_identity",
+            "evidence_refs",
+            "reason_code",
+        }
+        event_fields = {
+            "event_type",
+            "start_session",
+            "end_session",
+            "event_ids",
+        }
+        raw_operands = value.get("operands", ())
+        raw_windows = value.get("event_windows", ())
+        if (
+            not isinstance(raw_operands, (list, tuple))
+            or not isinstance(raw_windows, (list, tuple))
+            or any(
+                not isinstance(item, dict)
+                or set(item) - operand_fields
+                for item in raw_operands
+            )
+            or any(
+                not isinstance(item, dict)
+                or set(item) - event_fields
+                for item in raw_windows
+            )
+        ):
+            raise ValueError("invalid typed evaluation input")
+        return EvaluatePlanCommand(
+            invocation_id=str(value["invocation_id"]),
+            plan_version_id=str(value["plan_version_id"]),
+            market_snapshot_id=str(value["market_snapshot_id"]),
+            operands=tuple(
+                operand_from_dict(item)
+                for item in raw_operands
+            ),
+            complete_sessions=tuple(
+                str(item)
+                for item in value.get("complete_sessions", ())
+            ),
+            event_windows=tuple(
+                EventWindow(
+                    event_type=str(item["event_type"]),
+                    start_session=str(item["start_session"]),
+                    end_session=str(item["end_session"]),
+                    event_ids=tuple(item.get("event_ids", ())),
+                )
+                for item in raw_windows
+            ),
+            resource_conflict=resource_conflict,
+        )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise CommandCodecError(
             "PLAN_EVALUATION_COMMAND_INVALID",

@@ -80,6 +80,9 @@ class AcceptanceEvidenceService:
             "tests/platform/test_trade_plan_model_b.py",
             "tests/platform/test_trade_plan_sleeves.py",
             "tests/platform/test_strategy_catalog.py",
+            "tests/platform/test_rule_ast_v2.py",
+            "tests/platform/test_conflict_resolver.py",
+            "tests/platform/test_market_evaluation.py",
         ),
         "provider_contract": ("tests/platform/test_data_sync_pit.py",),
         "persistence_migration": (
@@ -483,7 +486,7 @@ class AcceptanceEvidenceService:
             "versions": {
                 "workflow": "research-workflow@2",
                 "node": "run_or_link_research@2",
-                "evaluator": "plan-evaluator@1",
+                "evaluator": "plan-evaluator@2",
                 "model": "equity-research@0.3.0",
                 "policy": "research_input_policy@1",
             },

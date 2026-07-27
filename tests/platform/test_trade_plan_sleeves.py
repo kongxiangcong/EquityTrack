@@ -8,15 +8,23 @@ import pytest
 from trading_platform.domain.plans import (
     CoreFloor,
     CoreSleeve,
-    GridConstraint,
     GridSleeve,
     PlanValidationError,
     PositionSleeveKind,
     TradePlanMaster,
     TradePlanMasterId,
+    TradePlanRule,
     build_plan_version,
     validate_sleeve_contract,
     validate_sleeve_quantities,
+)
+from trading_platform.domain.rules import (
+    GridConstraint,
+    RuleContractError,
+    RuleAstV2,
+    RuleClass,
+    RulePriority,
+    RuleScope,
 )
 from trading_platform.application import (
     CreateTradePlanMaster,
@@ -33,7 +41,6 @@ from trading_platform.domain.strategies import (
 from tests.platform.test_trade_plan_model_b import (
     _authority_root,
     _seed_approval,
-    _with_hash,
 )
 
 
@@ -163,7 +170,12 @@ def test_sleeve_quantity_contract_rejects_invalid_exact_values(
     factory,
     code: str,
 ) -> None:
-    with pytest.raises(PlanValidationError) as rejected:
+    expected_error = (
+        RuleContractError
+        if code.startswith("GRID_")
+        else PlanValidationError
+    )
+    with pytest.raises(expected_error) as rejected:
         factory()
     assert rejected.value.code == code
 
@@ -241,19 +253,23 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
             content_hash=canonical_hash(content),
         )
         connection.close()
-        rule = _with_hash(
-            {
-                "rule_id": "rule_core_grid_round_trip",
-                "rule_class": "hard",
-                "priority": "ordinary",
-                "scope": "grid",
-                "ast_version": "plan-rule-ast@2",
-                "condition": {
-                    "ast_version": "plan-rule-ast@2",
-                    "node": "always_false_fixture",
-                },
-                "candidate_intent": None,
-            }
+        rule = TradePlanRule.build(
+            rule_id="rule_core_grid_round_trip",
+            rule_class=RuleClass.HARD,
+            rule_kind="fixture_guard",
+            priority=RulePriority.ORDINARY,
+            scope=RuleScope.GRID,
+            sleeve_id="grid",
+            effect="record_rule_outcome",
+            applies_to="plan",
+            candidate_intent=None,
+            input_applicability=("account.total_quantity",),
+            condition=RuleAstV2(
+                node="comparison",
+                operand_id="account.total_quantity",
+                operator="lt",
+                expected=Decimal("0"),
+            ),
         )
         graph = build_plan_version(
             plan_version_id="trade_plan_version_core_grid_round_trip",

@@ -6,6 +6,14 @@ from decimal import Decimal
 from enum import Enum
 from typing import Mapping
 
+from trading_platform.domain.rules import (
+    GridConstraint,
+    RuleAstV2,
+    RuleClass,
+    RulePriority,
+    RuleScope,
+    CandidateIntent,
+)
 from trading_platform.identity import canonical_hash
 
 
@@ -37,72 +45,6 @@ class CoreFloor:
             raise PlanValidationError("CORE_FLOOR_REQUIRED")
         if not _whole_share(self.quantity, allow_zero=True):
             raise PlanValidationError("CORE_FLOOR_INVALID")
-
-
-@dataclass(frozen=True, kw_only=True)
-class GridConstraint:
-    grid_constraint_id: str
-    lower_price: Decimal
-    upper_price: Decimal
-    level_count: int
-    quantity_per_level: Decimal
-    total_quantity_budget: Decimal
-    price_basis: str
-    trigger_mode: str
-    cooldown_trading_sessions: int
-
-    def __post_init__(self) -> None:
-        if (
-            not self.grid_constraint_id
-            or not _exact_decimal(self.lower_price, positive=True)
-            or not _exact_decimal(self.upper_price, positive=True)
-            or self.upper_price <= self.lower_price
-        ):
-            raise PlanValidationError("GRID_PRICE_BOUNDS_INVALID")
-        if (
-            isinstance(self.level_count, bool)
-            or not 2 <= self.level_count <= 100
-        ):
-            raise PlanValidationError("GRID_LEVEL_COUNT_INVALID")
-        if (
-            not _whole_share(self.quantity_per_level, allow_zero=False)
-            or self.quantity_per_level % Decimal("100") != 0
-        ):
-            raise PlanValidationError("GRID_LOT_SIZE_INVALID")
-        if not _whole_share(
-            self.total_quantity_budget, allow_zero=True
-        ):
-            raise PlanValidationError("GRID_QUANTITY_BUDGET_INVALID")
-        if self.price_basis not in {"unadjusted", "adjusted"}:
-            raise PlanValidationError("GRID_PRICE_BASIS_INVALID")
-        if self.trigger_mode not in {
-            "crosses_level",
-            "closes_at_or_beyond_level",
-        }:
-            raise PlanValidationError("GRID_TRIGGER_MODE_INVALID")
-        if (
-            isinstance(self.cooldown_trading_sessions, bool)
-            or self.cooldown_trading_sessions < 0
-        ):
-            raise PlanValidationError("GRID_COOLDOWN_INVALID")
-
-    @property
-    def canonical_content(self) -> Mapping[str, object]:
-        return {
-            "grid_constraint_id": self.grid_constraint_id,
-            "lower_price": str(self.lower_price),
-            "upper_price": str(self.upper_price),
-            "level_count": self.level_count,
-            "quantity_per_level": str(self.quantity_per_level),
-            "total_quantity_budget": str(self.total_quantity_budget),
-            "price_basis": self.price_basis,
-            "trigger_mode": self.trigger_mode,
-            "cooldown_trading_sessions": self.cooldown_trading_sessions,
-        }
-
-    @property
-    def content_hash(self) -> str:
-        return canonical_hash(self.canonical_content)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -461,10 +403,107 @@ class TradePlanVersion:
 
 
 @dataclass(frozen=True)
+class TradePlanRule:
+    rule_id: str
+    rule_class: RuleClass
+    rule_kind: str
+    priority: RulePriority
+    scope: RuleScope
+    sleeve_id: str | None
+    effect: str
+    applies_to: str
+    candidate_intent: CandidateIntent | None
+    input_applicability: tuple[str, ...]
+    condition: RuleAstV2
+    content_hash: str
+    ast_version: str = "plan-rule-ast@2"
+
+    def identity_payload(self) -> Mapping[str, object]:
+        return {
+            "rule_id": self.rule_id,
+            "rule_class": self.rule_class,
+            "rule_kind": self.rule_kind,
+            "priority": self.priority,
+            "scope": self.scope,
+            "sleeve_id": self.sleeve_id,
+            "effect": self.effect,
+            "applies_to": self.applies_to,
+            "candidate_intent": self.candidate_intent,
+            "input_applicability": self.input_applicability,
+            "condition": self.condition,
+            "ast_version": self.ast_version,
+        }
+
+    def validate(self) -> None:
+        self.condition.validate()
+        if self.candidate_intent is not None:
+            self.candidate_intent.validate()
+        if (
+            not self.rule_id
+            or not self.rule_kind
+            or not self.effect
+            or self.applies_to
+            not in {"entry", "increase", "decrease", "exit", "plan"}
+            or (
+                self.scope is RuleScope.MASTER
+                and self.sleeve_id is not None
+            )
+            or (
+                self.scope is not RuleScope.MASTER
+                and not self.sleeve_id
+            )
+            or self.ast_version != "plan-rule-ast@2"
+            or self.content_hash != canonical_hash(
+                self.identity_payload()
+            )
+        ):
+            raise PlanValidationError("TRADE_PLAN_RULE_INVALID")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        rule_id: str,
+        rule_class: RuleClass,
+        rule_kind: str,
+        priority: RulePriority,
+        scope: RuleScope,
+        sleeve_id: str | None,
+        effect: str,
+        applies_to: str,
+        candidate_intent: CandidateIntent | None,
+        input_applicability: tuple[str, ...],
+        condition: RuleAstV2,
+    ) -> "TradePlanRule":
+        prototype = cls(
+            rule_id=rule_id,
+            rule_class=rule_class,
+            rule_kind=rule_kind,
+            priority=priority,
+            scope=scope,
+            sleeve_id=sleeve_id,
+            effect=effect,
+            applies_to=applies_to,
+            candidate_intent=candidate_intent,
+            input_applicability=input_applicability,
+            condition=condition,
+            content_hash="",
+        )
+        return cls(
+            **{
+                **prototype.__dict__,
+                "content_hash": canonical_hash(
+                    prototype.identity_payload()
+                ),
+            }
+        )
+
+
+@dataclass(frozen=True)
 class TradePlanGraph:
     version: TradePlanVersion
     sleeves: tuple[PositionSleeve, ...]
-    rules: tuple[Mapping[str, object], ...]
+    rules: tuple[TradePlanRule, ...]
     evidence_references: tuple[Mapping[str, object], ...]
     adjusted_price_evidence: tuple[Mapping[str, object], ...] = ()
     schema_version: str = "TradePlanGraph@1"
@@ -477,10 +516,18 @@ class TradePlanGraph:
             self.version.strategy_version_id, self.sleeves
         )
         validate_sleeve_quantities(self.sleeves, total_quantity=None)
+        for rule in self.rules:
+            rule.validate()
+            if (
+                rule.scope is not RuleScope.MASTER
+                and rule.sleeve_id
+                not in {sleeve.sleeve_id for sleeve in self.sleeves}
+            ):
+                raise PlanValidationError(
+                    "TRADE_PLAN_RULE_SCOPE_INVALID"
+                )
         sleeve_hashes = _sleeve_hashes(self.sleeves)
-        rule_hashes = _child_hashes(
-            self.rules, "rule_id", sequence_sensitive=True
-        )
+        rule_hashes = _rule_hashes(self.rules)
         evidence_hashes = _child_hashes(
             self.evidence_references,
             "ref_id",
@@ -540,7 +587,7 @@ def build_plan_version(
     evaluator_policy_version: str,
     content: Mapping[str, object],
     sleeves: tuple[PositionSleeve, ...],
-    rules: tuple[Mapping[str, object], ...],
+    rules: tuple[TradePlanRule, ...],
     evidence_references: tuple[Mapping[str, object], ...],
     adjusted_price_evidence: tuple[Mapping[str, object], ...],
     confirmed_at: str,
@@ -550,9 +597,7 @@ def build_plan_version(
     seal = PlanGraphSeal.build(
         version_content_hash=content_hash,
         sleeve_hashes=_sleeve_hashes(sleeves),
-        rule_hashes=_child_hashes(
-            rules, "rule_id", sequence_sensitive=True
-        ),
+        rule_hashes=_rule_hashes(rules),
         evidence_hashes=_child_hashes(
             evidence_references, "ref_id", sequence_sensitive=True
         )
@@ -638,6 +683,18 @@ def _sleeve_hashes(
     return tuple(sorted(sleeve.content_hash for sleeve in sleeves))
 
 
+def _rule_hashes(
+    rules: tuple[TradePlanRule, ...],
+) -> tuple[str, ...]:
+    identities = [rule.rule_id for rule in rules]
+    if (
+        any(not identity for identity in identities)
+        or len(set(identities)) != len(identities)
+    ):
+        raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+    return tuple(rule.content_hash for rule in rules)
+
+
 def _exact_decimal(value: object, *, positive: bool) -> bool:
     if not isinstance(value, Decimal) or not value.is_finite():
         return False
@@ -655,7 +712,6 @@ __all__ = [
     "ActiveTradePlan",
     "CoreFloor",
     "CoreSleeve",
-    "GridConstraint",
     "GridSleeve",
     "PlanActivation",
     "PlanGraphSeal",
@@ -666,6 +722,7 @@ __all__ = [
     "TradePlanGraph",
     "TradePlanMaster",
     "TradePlanMasterId",
+    "TradePlanRule",
     "TradePlanVersion",
     "build_plan_version",
     "validate_sleeve_contract",

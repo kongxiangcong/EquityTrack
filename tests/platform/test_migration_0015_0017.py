@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from trading_platform.persistence import PersistenceError, PlatformStore
+from trading_platform.persistence.plans import SQLiteTradePlanRepository
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -403,6 +404,104 @@ def test_active_legacy_plan_requires_explicit_sleeve_mapping(
     assert after == before
 
 
+def test_active_nonrepresentable_ast1_rule_blocks_0016(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    prior.connection.execute(
+        "UPDATE trade_plan SET lifecycle_status='active' "
+        "WHERE plan_id='plan_legacy'"
+    )
+    prior.connection.execute(
+        "INSERT INTO plan_rule VALUES(?,?,?,?,?,?,?)",
+        (
+            "plan_version_legacy",
+            0,
+            "rule_unrepresentable",
+            "legacy_fixture",
+            "record_outcome",
+            "plan",
+            "applicable",
+        ),
+    )
+    prior.connection.execute(
+        "INSERT INTO plan_rule_condition VALUES(?,?,?,?,?)",
+        (
+            "plan_version_legacy",
+            0,
+            "plan-rule-ast@1",
+            json.dumps(
+                {
+                    "node_kind": "leaf",
+                    "metric_ref": "filesystem.secret",
+                    "operator": "eq",
+                    "constant": {
+                        "constant_type": "enum",
+                        "value": "anything",
+                    },
+                    "applicability": "current_complete_session",
+                },
+                sort_keys=True,
+            ),
+            "unrepresentable-condition-hash",
+        ),
+    )
+    prior.connection.commit()
+    before = tuple(prior.connection.iterdump())
+    prior.close()
+    mapping = {
+        "schema_version": "LegacySleeveMapping@1",
+        "approved_by": "user:synthetic-migration-reviewer",
+        "approved_at": "2026-07-27T00:00:00+08:00",
+        "plans": [
+            {
+                "plan_id": "plan_legacy",
+                "strategy_version_id": (
+                    "strategy_version_trend_hold_break_exit_1"
+                ),
+                "sleeves": [
+                    {
+                        "sleeve_id": "legacy_core",
+                        "sleeve_kind": "core",
+                        "quantity_budget_state": "unknown",
+                        "quantity_budget_value": None,
+                        "core_floor_state": "known",
+                        "core_floor_value": "0",
+                        "max_notional_state": "unknown",
+                        "max_notional_value": None,
+                        "max_loss_state": "unknown",
+                        "max_loss_value": None,
+                    }
+                ],
+                "rule_scopes": {
+                    "rule_unrepresentable": "legacy_core"
+                },
+            }
+        ],
+    }
+    mapping_dir = data_root / "migration-inputs"
+    mapping_dir.mkdir()
+    (mapping_dir / "0016-legacy-sleeve-mapping.json").write_text(
+        json.dumps(
+            mapping,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        blocked.migrate()
+    assert failure.value.code == "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+    assert tuple(blocked.connection.iterdump()) == before
+    blocked.close()
+
+
 def test_legacy_plan_without_exact_account_owner_blocks_0016(
     tmp_path: Path,
 ) -> None:
@@ -554,6 +653,40 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
         "UPDATE trade_plan SET lifecycle_status='active' "
         "WHERE plan_id='plan_legacy'"
     )
+    prior.connection.execute(
+        "INSERT INTO plan_rule VALUES(?,?,?,?,?,?,?)",
+        (
+            "plan_version_legacy",
+            0,
+            "rule_representable",
+            "price_gate",
+            "record_outcome",
+            "entry",
+            "applicable",
+        ),
+    )
+    prior.connection.execute(
+        "INSERT INTO plan_rule_condition VALUES(?,?,?,?,?)",
+        (
+            "plan_version_legacy",
+            0,
+            "plan-rule-ast@1",
+            json.dumps(
+                {
+                    "node_kind": "leaf",
+                    "metric_ref": "security.close_unadjusted",
+                    "operator": "gte",
+                    "constant": {
+                        "constant_type": "decimal",
+                        "value": "10",
+                    },
+                    "applicability": "current_complete_session",
+                },
+                sort_keys=True,
+            ),
+            "representable-condition-hash",
+        ),
+    )
     original_content = prior.connection.execute(
         "SELECT content_json FROM trade_plan_version "
         "WHERE plan_version_id='plan_version_legacy'"
@@ -609,7 +742,9 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
                         },
                     }
                 ],
-                "rule_scopes": {},
+                "rule_scopes": {
+                    "rule_representable": "legacy_grid"
+                },
             }
         ],
     }
@@ -662,6 +797,13 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
         "SELECT mapping_artifact_hash "
         "FROM strategy_plan_migration_manifest"
     ).fetchone()[0] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    graph = SQLiteTradePlanRepository(
+        upgraded.connection, upgraded.writer_lock
+    ).get_graph("plan_version_legacy")
+    assert graph.rules[0].ast_version == "plan-rule-ast@2"
+    assert graph.rules[0].condition.operand_id == (
+        "security.close_unadjusted"
+    )
     upgraded.close()
 
 

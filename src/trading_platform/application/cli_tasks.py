@@ -5,14 +5,13 @@ from typing import Protocol
 
 from trading_platform.data.service import DataSyncService
 from trading_platform.domain.data import SyncRequest, SyncResult
-from trading_platform.domain.market import MarketSnapshotView, PlanEvaluationView
+from trading_platform.domain.market import MarketSnapshotView
 from trading_platform.domain.research_evaluation import ResearchWorkflowResult
 from trading_platform.market import MarketEvaluationService
 from trading_platform.workflows.research import ResearchWorkflow
 
 from .contracts import DoctorReport, StartResearchWorkflow
 from .watchlist import Watchlist
-from .market_contracts import EvaluatePlanCommand
 from .provider_job import ProviderJob
 
 
@@ -58,7 +57,6 @@ class DailyResearchResult:
     doctor: DoctorReport
     research: ResearchWorkflowResult | None = None
     market: MarketSnapshotView | None = None
-    evaluation: PlanEvaluationView | None = None
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"sync": asdict(self.sync)}
@@ -66,8 +64,6 @@ class DailyResearchResult:
             result["research"] = asdict(self.research)
         if self.market is not None:
             result["market"] = asdict(self.market)
-        if self.evaluation is not None:
-            result["evaluation"] = asdict(self.evaluation)
         result["doctor"] = asdict(self.doctor)
         return result
 
@@ -98,7 +94,6 @@ class DailyResearchCycle:
         sync = self._data.sync(self._request)
         research = None
         market = None
-        evaluation = None
         if self._job.research_request is not None:
             research_request = self._job.research_request
             outcome = self._research.handle(StartResearchWorkflow(research_request))
@@ -109,20 +104,10 @@ class DailyResearchCycle:
             research = outcome
         if self._job.market_command is not None:
             market = self._market.build_market_snapshot(self._job.market_command)
-            if self._job.evaluation_template is not None:
-                template = self._job.evaluation_template
-                evaluation = self._market.evaluate_plan(EvaluatePlanCommand(
-                    template.invocation_id,
-                    template.plan_version_id,
-                    market.market_snapshot_id,
-                    template.evaluator_version,
-                    template.evaluation_policy_version,
-                ))
         return DailyResearchResult(
             sync=sync,
             research=research,
             market=market,
-            evaluation=evaluation,
             doctor=self._doctor.doctor(),
         )
 

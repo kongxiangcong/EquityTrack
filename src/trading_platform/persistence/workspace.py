@@ -45,7 +45,8 @@ class WorkspaceService:
         )
         workflows = [dict(item) for item in workflow_evidence.workflows]
         evaluations = self._all(
-            "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,e.outcome,"
+            "SELECT e.plan_evaluation_id,e.market_snapshot_id,e.status,"
+            "e.resolution_outcome AS outcome,"
             "e.completeness,e.created_at,e.evaluator_version,"
             "e.evaluation_policy_version FROM plan_evaluation e "
             "JOIN trade_plan_version v ON v.plan_version_id=e.plan_version_id "
@@ -55,7 +56,10 @@ class WorkspaceService:
         )
         for evaluation in evaluations:
             evaluation["rules"] = self._all(
-                "SELECT rule_order,rule_id,result,reason_code,operands_json,effect,applies_to,observed_at FROM plan_rule_evaluation WHERE plan_evaluation_id=? ORDER BY rule_order",
+                "SELECT rule_order,rule_id,result,reason_code,"
+                "evaluation_json,replay_hash "
+                "FROM plan_rule_evaluation "
+                "WHERE plan_evaluation_id=? ORDER BY rule_order",
                 (evaluation["plan_evaluation_id"],),
             )
         manifests = [dict(item) for item in workflow_evidence.manifests]
