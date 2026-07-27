@@ -1,6 +1,6 @@
 # 05 — Core and grid sleeves
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 04
@@ -41,3 +41,34 @@ Tactical sleeves, multiple active masters, tax-lot accounting, order generation,
 ## One-way cutover
 
 Move sleeve behavior completely into the sealed plan graph. Delete any flat-plan quantity fields that duplicate the new source of truth; do not mirror sleeve state in a compatibility column.
+
+## Claim record
+
+- External seams: Model B graph construction/validation, immutable strategy
+  parameter contracts, SQLite sleeve/grid rows, and explicit 0016 legacy
+  mapping input.
+- Deep-module ownership: `domain/plans.py` owns sleeve taxonomy, exact share
+  quantities, allocation/core-floor invariants, and candidate floor checks;
+  `domain/strategies.py` owns the two closed parameter contracts;
+  `SQLiteTradePlanRepository` owns exact decimal protocol conversion and
+  sealed sleeve/grid persistence.
+- Old paths to replace: untyped sleeve mappings, caller-authored content
+  hashes, flat plan loss/quantity fields, and any rule-side duplicate
+  core-floor decision.
+- Superseded artifacts to delete: mapping-shaped sleeve fixtures, duplicated
+  quantity fields/tests, any tactical/legacy authoring branch, and stale
+  schema/docs that present flat plan quantities as current truth.
+
+## Resolution
+
+- The closed typed sleeve graph now owns exact core/grid allocation,
+  mandatory known core floor, grid bounds/levels/lot/cooldown, and the
+  deterministic decrease floor check.
+- Built-in strategy parameter objects enforce their cross-field contracts;
+  catalog validation invokes them after the finite field contracts.
+- SQLite persists and reconstructs typed sleeve and grid rows inside the
+  graph-seal transaction. Migration 0016 validates the same domain contract
+  for explicit mappings and installs exact mapped grid constraints.
+- Mapping-shaped runtime sleeves and flat-plan quantity tests are absent.
+  Evidence is recorded in
+  `evidence/05-core-grid-sleeves.md`.

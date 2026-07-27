@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Mapping
 
 from trading_platform.domain.plans import (
     ActiveTradePlan,
+    CoreFloor,
+    CoreSleeve,
+    GridConstraint,
+    GridSleeve,
     PlanActivation,
     PlanValidationError,
     TradePlanGraph,
@@ -341,10 +346,17 @@ class SQLiteTradePlanRepository:
         graph = TradePlanGraph(
             version=version,
             sleeves=tuple(
-                self._decode_child(row)
+                self._decode_sleeve(row)
                 for row in self._connection.execute(
-                    "SELECT * FROM trade_plan_sleeve "
-                    "WHERE plan_version_id=? ORDER BY sleeve_id",
+                    "SELECT s.*,g.lower_price,g.upper_price,g.level_count,"
+                    "g.quantity_per_level,g.total_quantity_budget,"
+                    "g.price_basis,g.trigger_mode,"
+                    "g.cooldown_trading_sessions,g.content_hash "
+                    "AS grid_content_hash "
+                    "FROM trade_plan_sleeve s "
+                    "LEFT JOIN grid_constraint g "
+                    "USING(grid_constraint_id) "
+                    "WHERE s.plan_version_id=? ORDER BY s.sleeve_id",
                     (plan_version_id,),
                 )
             ),
@@ -514,22 +526,42 @@ class SQLiteTradePlanRepository:
     def _insert_graph_children(self, graph: TradePlanGraph) -> None:
         plan_version_id = graph.version.plan_version_id
         for sleeve in graph.sleeves:
+            if isinstance(sleeve, GridSleeve):
+                constraint = sleeve.constraint
+                self._connection.execute(
+                    "INSERT INTO grid_constraint "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        constraint.grid_constraint_id,
+                        plan_version_id,
+                        str(constraint.lower_price),
+                        str(constraint.upper_price),
+                        constraint.level_count,
+                        str(constraint.quantity_per_level),
+                        str(constraint.total_quantity_budget),
+                        constraint.price_basis,
+                        constraint.trigger_mode,
+                        constraint.cooldown_trading_sessions,
+                        constraint.content_hash,
+                    ),
+                )
+            record = sleeve.canonical_content
             self._connection.execute(
                 "INSERT INTO trade_plan_sleeve VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     plan_version_id,
-                    sleeve["sleeve_id"],
-                    sleeve["sleeve_kind"],
-                    sleeve["quantity_budget_state"],
-                    sleeve.get("quantity_budget_value"),
-                    sleeve["core_floor_state"],
-                    sleeve.get("core_floor_value"),
-                    sleeve["max_notional_state"],
-                    sleeve.get("max_notional_value"),
-                    sleeve["max_loss_state"],
-                    sleeve.get("max_loss_value"),
-                    sleeve.get("grid_constraint_id"),
-                    sleeve["content_hash"],
+                    sleeve.sleeve_id,
+                    sleeve.kind.value,
+                    record["quantity_budget_state"],
+                    record["quantity_budget_value"],
+                    record["core_floor_state"],
+                    record["core_floor_value"],
+                    record["max_notional_state"],
+                    record["max_notional_value"],
+                    record["max_loss_state"],
+                    record["max_loss_value"],
+                    record["grid_constraint_id"],
+                    sleeve.content_hash,
                 ),
             )
         for position, rule in enumerate(graph.rules):
@@ -649,12 +681,60 @@ class SQLiteTradePlanRepository:
         return row
 
     @staticmethod
-    def _decode_child(row: sqlite3.Row) -> Mapping[str, object]:
-        return {
-            key: row[key]
-            for key in row.keys()
-            if key != "plan_version_id"
+    def _decode_sleeve(row: sqlite3.Row) -> CoreSleeve | GridSleeve:
+        common = {
+            "sleeve_id": row["sleeve_id"],
+            "quantity_budget": (
+                Decimal(row["quantity_budget_value"])
+                if row["quantity_budget_state"] == "known"
+                else None
+            ),
+            "core_floor": CoreFloor(Decimal(row["core_floor_value"])),
+            "max_notional": (
+                Decimal(row["max_notional_value"])
+                if row["max_notional_state"] == "known"
+                else None
+            ),
+            "max_loss": (
+                Decimal(row["max_loss_value"])
+                if row["max_loss_state"] == "known"
+                else None
+            ),
         }
+        if row["sleeve_kind"] == "core":
+            sleeve = CoreSleeve(**common)
+        elif row["sleeve_kind"] == "grid":
+            sleeve = GridSleeve(
+                **common,
+                constraint=GridConstraint(
+                    grid_constraint_id=row["grid_constraint_id"],
+                    lower_price=Decimal(row["lower_price"]),
+                    upper_price=Decimal(row["upper_price"]),
+                    level_count=row["level_count"],
+                    quantity_per_level=Decimal(
+                        row["quantity_per_level"]
+                    ),
+                    total_quantity_budget=Decimal(
+                        row["total_quantity_budget"]
+                    ),
+                    price_basis=row["price_basis"],
+                    trigger_mode=row["trigger_mode"],
+                    cooldown_trading_sessions=row[
+                        "cooldown_trading_sessions"
+                    ],
+                ),
+            )
+        else:
+            raise PlanValidationError("LEGACY_SLEEVE_READ_ONLY")
+        if sleeve.content_hash != row["content_hash"]:
+            raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+        if (
+            isinstance(sleeve, GridSleeve)
+            and sleeve.constraint.content_hash
+            != row["grid_content_hash"]
+        ):
+            raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+        return sleeve
 
     @staticmethod
     def _decode_rule(row: sqlite3.Row) -> Mapping[str, object]:

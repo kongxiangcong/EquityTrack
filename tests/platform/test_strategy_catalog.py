@@ -88,6 +88,57 @@ def test_parameter_contract_rejects_unknown_or_missing_fields(tmp_path) -> None:
     )
 
 
+def test_catalog_versions_apply_cross_field_sleeve_parameter_contracts(
+    tmp_path,
+) -> None:
+    data_root = _ready_root(tmp_path)
+    with open_strategy_queries(data_root) as queries:
+        trend = queries.get(
+            GetStrategyVersion(
+                "strategy_version_trend_hold_break_exit_1"
+            )
+        )
+        grid = queries.get(
+            GetStrategyVersion("strategy_version_core_plus_grid_1")
+        )
+    trend.validate_parameters(
+        {
+            "price_basis": "unadjusted",
+            "trend_metric_ref": "security.close_unadjusted",
+            "break_condition": {
+                "ast_version": "plan-rule-ast@2",
+                "session_scope": "complete_session",
+            },
+            "break_confirmation_sessions": 2,
+            "core_floor_quantity": "80",
+            "invalidation_review_rule_ids": ["review_invalidation"],
+            "candidate_decrease_quantity": {
+                "state": "unknown",
+                "value": None,
+            },
+            "review_by": "2026-08-27",
+        }
+    )
+    with pytest.raises(
+        StrategyContractError, match="GRID_LOT_SIZE_INVALID"
+    ):
+        grid.validate_parameters(
+            {
+                "core_floor_quantity": "80",
+                "grid_lower_price": "8",
+                "grid_upper_price": "12",
+                "grid_level_count": 5,
+                "grid_quantity_per_level": "50",
+                "grid_total_quantity_budget": "500",
+                "grid_price_basis": "unadjusted",
+                "grid_trigger_mode": "crosses_level",
+                "cooldown_trading_sessions": 1,
+                "cash_operand_policy": "known_required",
+                "quantity_operand_policy": "known_required",
+            }
+        )
+
+
 def test_application_exports_no_strategy_authoring_command() -> None:
     import trading_platform.application as application
 

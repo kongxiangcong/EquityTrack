@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
+from enum import Enum
 from typing import Mapping
 
 from trading_platform.identity import canonical_hash
@@ -11,6 +13,261 @@ class PlanValidationError(ValueError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class PositionSleeveKind(str, Enum):
+    CORE = "core"
+    GRID = "grid"
+    LEGACY_UNSLEEVED = "legacy_unsleeved"
+
+    @classmethod
+    def parse(cls, value: str) -> "PositionSleeveKind":
+        try:
+            return cls(value)
+        except ValueError as error:
+            raise PlanValidationError("SLEEVE_KIND_INVALID") from error
+
+
+@dataclass(frozen=True)
+class CoreFloor:
+    quantity: Decimal
+
+    def __post_init__(self) -> None:
+        if self.quantity is None:
+            raise PlanValidationError("CORE_FLOOR_REQUIRED")
+        if not _whole_share(self.quantity, allow_zero=True):
+            raise PlanValidationError("CORE_FLOOR_INVALID")
+
+
+@dataclass(frozen=True, kw_only=True)
+class GridConstraint:
+    grid_constraint_id: str
+    lower_price: Decimal
+    upper_price: Decimal
+    level_count: int
+    quantity_per_level: Decimal
+    total_quantity_budget: Decimal
+    price_basis: str
+    trigger_mode: str
+    cooldown_trading_sessions: int
+
+    def __post_init__(self) -> None:
+        if (
+            not self.grid_constraint_id
+            or not _exact_decimal(self.lower_price, positive=True)
+            or not _exact_decimal(self.upper_price, positive=True)
+            or self.upper_price <= self.lower_price
+        ):
+            raise PlanValidationError("GRID_PRICE_BOUNDS_INVALID")
+        if (
+            isinstance(self.level_count, bool)
+            or not 2 <= self.level_count <= 100
+        ):
+            raise PlanValidationError("GRID_LEVEL_COUNT_INVALID")
+        if (
+            not _whole_share(self.quantity_per_level, allow_zero=False)
+            or self.quantity_per_level % Decimal("100") != 0
+        ):
+            raise PlanValidationError("GRID_LOT_SIZE_INVALID")
+        if not _whole_share(
+            self.total_quantity_budget, allow_zero=True
+        ):
+            raise PlanValidationError("GRID_QUANTITY_BUDGET_INVALID")
+        if self.price_basis not in {"unadjusted", "adjusted"}:
+            raise PlanValidationError("GRID_PRICE_BASIS_INVALID")
+        if self.trigger_mode not in {
+            "crosses_level",
+            "closes_at_or_beyond_level",
+        }:
+            raise PlanValidationError("GRID_TRIGGER_MODE_INVALID")
+        if (
+            isinstance(self.cooldown_trading_sessions, bool)
+            or self.cooldown_trading_sessions < 0
+        ):
+            raise PlanValidationError("GRID_COOLDOWN_INVALID")
+
+    @property
+    def canonical_content(self) -> Mapping[str, object]:
+        return {
+            "grid_constraint_id": self.grid_constraint_id,
+            "lower_price": str(self.lower_price),
+            "upper_price": str(self.upper_price),
+            "level_count": self.level_count,
+            "quantity_per_level": str(self.quantity_per_level),
+            "total_quantity_budget": str(self.total_quantity_budget),
+            "price_basis": self.price_basis,
+            "trigger_mode": self.trigger_mode,
+            "cooldown_trading_sessions": self.cooldown_trading_sessions,
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return canonical_hash(self.canonical_content)
+
+
+@dataclass(frozen=True, kw_only=True)
+class PositionSleeve:
+    sleeve_id: str
+    quantity_budget: Decimal | None
+    core_floor: CoreFloor
+    max_notional: Decimal | None = None
+    max_loss: Decimal | None = None
+
+    @property
+    def kind(self) -> PositionSleeveKind:
+        raise NotImplementedError
+
+    def __post_init__(self) -> None:
+        if not self.sleeve_id:
+            raise PlanValidationError("SLEEVE_ID_REQUIRED")
+        if self.quantity_budget is not None and not _whole_share(
+            self.quantity_budget, allow_zero=True
+        ):
+            raise PlanValidationError("SLEEVE_QUANTITY_BUDGET_INVALID")
+        for value in (self.max_notional, self.max_loss):
+            if value is not None and not _exact_decimal(
+                value, positive=False
+            ):
+                raise PlanValidationError("SLEEVE_FINANCIAL_LIMIT_INVALID")
+
+    @property
+    def canonical_content(self) -> Mapping[str, object]:
+        return {
+            "sleeve_id": self.sleeve_id,
+            "sleeve_kind": self.kind.value,
+            "quantity_budget_state": (
+                "known" if self.quantity_budget is not None else "unknown"
+            ),
+            "quantity_budget_value": (
+                str(self.quantity_budget)
+                if self.quantity_budget is not None
+                else None
+            ),
+            "core_floor_state": "known",
+            "core_floor_value": str(self.core_floor.quantity),
+            "max_notional_state": (
+                "known" if self.max_notional is not None else "unknown"
+            ),
+            "max_notional_value": (
+                str(self.max_notional)
+                if self.max_notional is not None
+                else None
+            ),
+            "max_loss_state": (
+                "known" if self.max_loss is not None else "unknown"
+            ),
+            "max_loss_value": (
+                str(self.max_loss) if self.max_loss is not None else None
+            ),
+            "grid_constraint_id": None,
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return canonical_hash(self.canonical_content)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoreSleeve(PositionSleeve):
+    @property
+    def kind(self) -> PositionSleeveKind:
+        return PositionSleeveKind.CORE
+
+
+@dataclass(frozen=True, kw_only=True)
+class GridSleeve(PositionSleeve):
+    constraint: GridConstraint
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.quantity_budget != self.constraint.total_quantity_budget:
+            raise PlanValidationError("GRID_QUANTITY_BUDGET_MISMATCH")
+
+    @property
+    def kind(self) -> PositionSleeveKind:
+        return PositionSleeveKind.GRID
+
+    @property
+    def canonical_content(self) -> Mapping[str, object]:
+        return {
+            **super().canonical_content,
+            "grid_constraint_id": self.constraint.grid_constraint_id,
+        }
+
+
+def validate_sleeve_contract(
+    strategy_version_id: str,
+    sleeves: tuple[PositionSleeve, ...],
+) -> None:
+    core_count = sum(
+        sleeve.kind is PositionSleeveKind.CORE for sleeve in sleeves
+    )
+    grid_count = sum(
+        sleeve.kind is PositionSleeveKind.GRID for sleeve in sleeves
+    )
+    if core_count == 0:
+        raise PlanValidationError("SLEEVE_CORE_REQUIRED")
+    if core_count > 1:
+        raise PlanValidationError("SLEEVE_CORE_DUPLICATE")
+    if grid_count > 1:
+        raise PlanValidationError("SLEEVE_GRID_DUPLICATE")
+    if len({sleeve.sleeve_id for sleeve in sleeves}) != len(sleeves):
+        raise PlanValidationError("SLEEVE_ID_DUPLICATE")
+    if any(
+        sleeve.kind is PositionSleeveKind.LEGACY_UNSLEEVED
+        for sleeve in sleeves
+    ):
+        raise PlanValidationError("LEGACY_SLEEVE_READ_ONLY")
+    expected = {
+        "strategy_version_trend_hold_break_exit_1": {PositionSleeveKind.CORE},
+        "strategy_version_core_plus_grid_1": {
+            PositionSleeveKind.CORE,
+            PositionSleeveKind.GRID,
+        },
+    }.get(strategy_version_id)
+    if expected is None:
+        raise PlanValidationError("SLEEVE_STRATEGY_UNKNOWN")
+    actual = {sleeve.kind for sleeve in sleeves}
+    if not actual <= expected:
+        raise PlanValidationError("SLEEVE_STRATEGY_MISMATCH")
+
+
+def validate_sleeve_quantities(
+    sleeves: tuple[PositionSleeve, ...],
+    *,
+    total_quantity: Decimal | None,
+    remaining_quantity: Decimal | None = None,
+    candidate_grid_decrease: Decimal | None = None,
+) -> None:
+    floors = {sleeve.core_floor.quantity for sleeve in sleeves}
+    if len(floors) != 1:
+        raise PlanValidationError("CORE_FLOOR_MISMATCH")
+    floor = next(iter(floors))
+    known_budgets = tuple(
+        sleeve.quantity_budget
+        for sleeve in sleeves
+        if sleeve.quantity_budget is not None
+    )
+    if total_quantity is not None:
+        if not _whole_share(total_quantity, allow_zero=True):
+            raise PlanValidationError("TOTAL_QUANTITY_INVALID")
+        if len(known_budgets) == len(sleeves) and sum(
+            known_budgets, Decimal("0")
+        ) > total_quantity:
+            raise PlanValidationError("SLEEVE_ALLOCATION_EXCEEDS_POSITION")
+        if floor > total_quantity:
+            raise PlanValidationError("CORE_FLOOR_EXCEEDS_POSITION")
+    if candidate_grid_decrease is None:
+        return
+    if remaining_quantity is None:
+        raise PlanValidationError("GRID_REMAINING_QUANTITY_REQUIRED")
+    if (
+        not _whole_share(remaining_quantity, allow_zero=True)
+        or not _whole_share(candidate_grid_decrease, allow_zero=False)
+    ):
+        raise PlanValidationError("GRID_DECREASE_QUANTITY_INVALID")
+    if remaining_quantity - candidate_grid_decrease < floor:
+        raise PlanValidationError("GRID_DECREASE_CROSSES_CORE_FLOOR")
 
 
 @dataclass(frozen=True)
@@ -206,7 +463,7 @@ class TradePlanVersion:
 @dataclass(frozen=True)
 class TradePlanGraph:
     version: TradePlanVersion
-    sleeves: tuple[Mapping[str, object], ...]
+    sleeves: tuple[PositionSleeve, ...]
     rules: tuple[Mapping[str, object], ...]
     evidence_references: tuple[Mapping[str, object], ...]
     adjusted_price_evidence: tuple[Mapping[str, object], ...] = ()
@@ -216,7 +473,11 @@ class TradePlanGraph:
         self.version.validate()
         if self.schema_version != "TradePlanGraph@1":
             raise PlanValidationError("PLAN_GRAPH_INVALID")
-        sleeve_hashes = _child_hashes(self.sleeves, "sleeve_id")
+        validate_sleeve_contract(
+            self.version.strategy_version_id, self.sleeves
+        )
+        validate_sleeve_quantities(self.sleeves, total_quantity=None)
+        sleeve_hashes = _sleeve_hashes(self.sleeves)
         rule_hashes = _child_hashes(
             self.rules, "rule_id", sequence_sensitive=True
         )
@@ -278,7 +539,7 @@ def build_plan_version(
     metric_catalog_version: str,
     evaluator_policy_version: str,
     content: Mapping[str, object],
-    sleeves: tuple[Mapping[str, object], ...],
+    sleeves: tuple[PositionSleeve, ...],
     rules: tuple[Mapping[str, object], ...],
     evidence_references: tuple[Mapping[str, object], ...],
     adjusted_price_evidence: tuple[Mapping[str, object], ...],
@@ -288,7 +549,7 @@ def build_plan_version(
     content_hash = canonical_hash(content)
     seal = PlanGraphSeal.build(
         version_content_hash=content_hash,
-        sleeve_hashes=_child_hashes(sleeves, "sleeve_id"),
+        sleeve_hashes=_sleeve_hashes(sleeves),
         rule_hashes=_child_hashes(
             rules, "rule_id", sequence_sensitive=True
         ),
@@ -365,15 +626,48 @@ def _child_hashes(
     return tuple(hashes if sequence_sensitive else sorted(hashes))
 
 
+def _sleeve_hashes(
+    sleeves: tuple[PositionSleeve, ...],
+) -> tuple[str, ...]:
+    identities = [sleeve.sleeve_id for sleeve in sleeves]
+    if (
+        any(not identity for identity in identities)
+        or len(set(identities)) != len(identities)
+    ):
+        raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+    return tuple(sorted(sleeve.content_hash for sleeve in sleeves))
+
+
+def _exact_decimal(value: object, *, positive: bool) -> bool:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        return False
+    return value > 0 if positive else value >= 0
+
+
+def _whole_share(value: object, *, allow_zero: bool) -> bool:
+    if not _exact_decimal(value, positive=not allow_zero):
+        return False
+    assert isinstance(value, Decimal)
+    return value == value.to_integral_value()
+
+
 __all__ = [
     "ActiveTradePlan",
+    "CoreFloor",
+    "CoreSleeve",
+    "GridConstraint",
+    "GridSleeve",
     "PlanActivation",
     "PlanGraphSeal",
     "PlanValidationError",
+    "PositionSleeve",
+    "PositionSleeveKind",
     "TradePlanDraft",
     "TradePlanGraph",
     "TradePlanMaster",
     "TradePlanMasterId",
     "TradePlanVersion",
     "build_plan_version",
+    "validate_sleeve_contract",
+    "validate_sleeve_quantities",
 ]

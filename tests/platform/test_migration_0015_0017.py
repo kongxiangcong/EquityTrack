@@ -568,7 +568,7 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
             {
                 "plan_id": "plan_legacy",
                 "strategy_version_id": (
-                    "strategy_version_trend_hold_break_exit_1"
+                    "strategy_version_core_plus_grid_1"
                 ),
                 "sleeves": [
                     {
@@ -582,6 +582,31 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
                         "max_notional_value": None,
                         "max_loss_state": "unknown",
                         "max_loss_value": None,
+                    },
+                    {
+                        "sleeve_id": "legacy_grid",
+                        "sleeve_kind": "grid",
+                        "quantity_budget_state": "known",
+                        "quantity_budget_value": "100",
+                        "core_floor_state": "known",
+                        "core_floor_value": "0",
+                        "max_notional_state": "unknown",
+                        "max_notional_value": None,
+                        "max_loss_state": "unknown",
+                        "max_loss_value": None,
+                        "grid_constraint": {
+                            "grid_constraint_id": (
+                                "grid_constraint_legacy"
+                            ),
+                            "lower_price": "8",
+                            "upper_price": "12",
+                            "level_count": 5,
+                            "quantity_per_level": "100",
+                            "total_quantity_budget": "100",
+                            "price_basis": "unadjusted",
+                            "trigger_mode": "crosses_level",
+                            "cooldown_trading_sessions": 1,
+                        },
                     }
                 ],
                 "rule_scopes": {},
@@ -620,6 +645,15 @@ def test_explicit_legacy_mapping_preserves_history_and_active_ownership(
             "WHERE plan_version_id='plan_version_legacy'"
         ).fetchone()
     ) == ("core", "known", "0")
+    assert tuple(
+        upgraded.connection.execute(
+            "SELECT s.sleeve_kind,g.lower_price,g.upper_price,"
+            "g.quantity_per_level,g.total_quantity_budget "
+            "FROM trade_plan_sleeve s JOIN grid_constraint g "
+            "USING(grid_constraint_id) "
+            "WHERE s.plan_version_id='plan_version_legacy'"
+        ).fetchone()
+    ) == ("grid", "8", "12", "100", "100")
     assert upgraded.connection.execute(
         "SELECT count(*) FROM plan_activation "
         "WHERE plan_id='plan_legacy' AND ended_at IS NULL"

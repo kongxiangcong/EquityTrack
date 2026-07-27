@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 
 import pytest
 
@@ -15,6 +16,8 @@ from trading_platform.application import (
 )
 from trading_platform.domain.account_snapshots import AccountSnapshotVersion
 from trading_platform.domain.plans import (
+    CoreFloor,
+    CoreSleeve,
     PlanValidationError,
     TradePlanMaster,
     TradePlanMasterId,
@@ -227,20 +230,10 @@ def _graph(
     supersedes: str | None,
     receipt_id: str,
 ) -> object:
-    sleeve = _with_hash(
-        {
-            "sleeve_id": f"core_{suffix}",
-            "sleeve_kind": "core",
-            "quantity_budget_state": "known",
-            "quantity_budget_value": "100",
-            "core_floor_state": "known",
-            "core_floor_value": "80",
-            "max_notional_state": "unknown",
-            "max_notional_value": None,
-            "max_loss_state": "unknown",
-            "max_loss_value": None,
-            "grid_constraint_id": None,
-        }
+    sleeve = CoreSleeve(
+        sleeve_id=f"core_{suffix}",
+        quantity_budget=Decimal("100"),
+        core_floor=CoreFloor(Decimal("80")),
     )
     rule = _with_hash(
         {

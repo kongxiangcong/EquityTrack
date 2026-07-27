@@ -146,6 +146,132 @@ class StrategyParameterContract:
 
 
 @dataclass(frozen=True)
+class TrendHoldBreakExitParameters:
+    price_basis: str
+    trend_metric_ref: str
+    break_condition: Mapping[str, object]
+    break_confirmation_sessions: int
+    core_floor_quantity: Decimal
+    invalidation_review_rule_ids: object
+    candidate_decrease_quantity: Mapping[str, object]
+    review_by: str
+
+    @classmethod
+    def from_mapping(
+        cls, parameters: Mapping[str, object]
+    ) -> "TrendHoldBreakExitParameters":
+        floor = _required_decimal(
+            parameters.get("core_floor_quantity"),
+            "CORE_FLOOR_INVALID",
+        )
+        condition = parameters.get("break_condition")
+        if (
+            not isinstance(condition, Mapping)
+            or condition.get("ast_version") != "plan-rule-ast@2"
+            or condition.get("session_scope") != "complete_session"
+        ):
+            raise StrategyContractError(
+                "TREND_BREAK_SESSION_SCOPE_INVALID"
+            )
+        return cls(
+            price_basis=str(parameters.get("price_basis", "")),
+            trend_metric_ref=str(
+                parameters.get("trend_metric_ref", "")
+            ),
+            break_condition=condition,
+            break_confirmation_sessions=int(
+                parameters.get("break_confirmation_sessions", 0)
+            ),
+            core_floor_quantity=floor,
+            invalidation_review_rule_ids=parameters.get(
+                "invalidation_review_rule_ids"
+            ),
+            candidate_decrease_quantity=parameters.get(
+                "candidate_decrease_quantity", {}
+            ),
+            review_by=str(parameters.get("review_by", "")),
+        )
+
+
+@dataclass(frozen=True)
+class CorePlusGridParameters:
+    core_floor_quantity: Decimal
+    grid_lower_price: Decimal
+    grid_upper_price: Decimal
+    grid_level_count: int
+    grid_quantity_per_level: Decimal
+    grid_total_quantity_budget: Decimal
+    grid_price_basis: str
+    grid_trigger_mode: str
+    cooldown_trading_sessions: int
+    cash_operand_policy: str
+    quantity_operand_policy: str
+
+    @classmethod
+    def from_mapping(
+        cls, parameters: Mapping[str, object]
+    ) -> "CorePlusGridParameters":
+        floor = _required_decimal(
+            parameters.get("core_floor_quantity"),
+            "CORE_FLOOR_INVALID",
+        )
+        lower = _required_decimal(
+            parameters.get("grid_lower_price"),
+            "GRID_PRICE_BOUNDS_INVALID",
+        )
+        upper = _required_decimal(
+            parameters.get("grid_upper_price"),
+            "GRID_PRICE_BOUNDS_INVALID",
+        )
+        if lower <= 0 or upper <= lower:
+            raise StrategyContractError("GRID_PRICE_BOUNDS_INVALID")
+        per_level = _required_decimal(
+            parameters.get("grid_quantity_per_level"),
+            "GRID_LOT_SIZE_INVALID",
+        )
+        total_budget = _required_decimal(
+            parameters.get("grid_total_quantity_budget"),
+            "GRID_QUANTITY_BUDGET_INVALID",
+        )
+        if (
+            per_level <= 0
+            or per_level != per_level.to_integral_value()
+            or per_level % Decimal("100") != 0
+        ):
+            raise StrategyContractError("GRID_LOT_SIZE_INVALID")
+        if (
+            floor != floor.to_integral_value()
+            or total_budget != total_budget.to_integral_value()
+        ):
+            raise StrategyContractError("GRID_QUANTITY_BUDGET_INVALID")
+        return cls(
+            core_floor_quantity=floor,
+            grid_lower_price=lower,
+            grid_upper_price=upper,
+            grid_level_count=int(
+                parameters.get("grid_level_count", 0)
+            ),
+            grid_quantity_per_level=per_level,
+            grid_total_quantity_budget=total_budget,
+            grid_price_basis=str(
+                parameters.get("grid_price_basis", "")
+            ),
+            grid_trigger_mode=str(
+                parameters.get("grid_trigger_mode", "")
+            ),
+            cooldown_trading_sessions=int(
+                parameters.get("cooldown_trading_sessions", -1)
+            ),
+            cash_operand_policy=str(
+                parameters.get("cash_operand_policy", "")
+            ),
+            quantity_operand_policy=str(
+                parameters.get("quantity_operand_policy", "")
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class StrategyDefinition:
     strategy_id: str
     strategy_key: str
@@ -234,6 +360,10 @@ class StrategyVersion:
             )
         for key, value in parameters.items():
             contracts[key].validate(value)
+        if self.strategy_key == "trend_hold_break_exit":
+            TrendHoldBreakExitParameters.from_mapping(parameters)
+        elif self.strategy_key == "core_plus_grid":
+            CorePlusGridParameters.from_mapping(parameters)
 
 
 class StrategyCatalog:
@@ -417,6 +547,13 @@ def _decimal(value: object) -> Decimal | None:
     return result if result.is_finite() and result >= 0 else None
 
 
+def _required_decimal(value: object, code: str) -> Decimal:
+    result = _decimal(value)
+    if result is None:
+        raise StrategyContractError(code)
+    return result
+
+
 def _date(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -455,11 +592,13 @@ def _review_rule_ids(value: object) -> bool:
 
 __all__ = [
     "BUILTIN_STRATEGY_KEYS",
+    "CorePlusGridParameters",
     "InvestmentThesisVersion",
     "StrategyCatalog",
     "StrategyContractError",
     "StrategyDefinition",
     "StrategyParameterContract",
     "StrategyVersion",
+    "TrendHoldBreakExitParameters",
     "builtin_strategy_versions",
 ]

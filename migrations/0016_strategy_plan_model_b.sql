@@ -428,6 +428,24 @@ LEFT JOIN plan_risk_constraint_legacy_0016 k USING(plan_version_id)
 LEFT JOIN migration_0016_legacy_mapping m USING(plan_id)
 WHERE m.plan_id IS NULL;
 
+INSERT INTO grid_constraint
+SELECT
+  json_extract(s.value,'$.grid_constraint.grid_constraint_id'),
+  v.plan_version_id,
+  json_extract(s.value,'$.grid_constraint.lower_price'),
+  json_extract(s.value,'$.grid_constraint.upper_price'),
+  json_extract(s.value,'$.grid_constraint.level_count'),
+  json_extract(s.value,'$.grid_constraint.quantity_per_level'),
+  json_extract(s.value,'$.grid_constraint.total_quantity_budget'),
+  json_extract(s.value,'$.grid_constraint.price_basis'),
+  json_extract(s.value,'$.grid_constraint.trigger_mode'),
+  json_extract(s.value,'$.grid_constraint.cooldown_trading_sessions'),
+  json_extract(s.value,'$.grid_constraint._migration_content_hash')
+FROM migration_0016_legacy_mapping m
+JOIN trade_plan_version_legacy_0016 v USING(plan_id)
+JOIN json_each(m.sleeves_json) s
+WHERE json_extract(s.value,'$.sleeve_kind')='grid';
+
 INSERT INTO trade_plan_sleeve
 SELECT
   v.plan_version_id,
@@ -441,10 +459,8 @@ SELECT
   json_extract(s.value,'$.max_notional_value'),
   json_extract(s.value,'$.max_loss_state'),
   json_extract(s.value,'$.max_loss_value'),
-  NULL,
-  canonical_sha256(
-    '0016-mapped-sleeve:' || v.plan_version_id || ':' || s.value
-  )
+  json_extract(s.value,'$.grid_constraint.grid_constraint_id'),
+  json_extract(s.value,'$._migration_content_hash')
 FROM migration_0016_legacy_mapping m
 JOIN trade_plan_version_legacy_0016 v USING(plan_id)
 JOIN json_each(m.sleeves_json) s;

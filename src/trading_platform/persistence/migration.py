@@ -126,6 +126,16 @@ class MigrationRunner:
                     self.connection.execute("PRAGMA foreign_keys=ON")
 
     def _preflight_strategy_plan_0016(self) -> None:
+        from trading_platform.domain.plans import (
+            CoreFloor,
+            CoreSleeve,
+            GridConstraint,
+            GridSleeve,
+            PlanValidationError,
+            validate_sleeve_contract,
+            validate_sleeve_quantities,
+        )
+
         def block(message: str) -> None:
             raise PersistenceError(
                 "STRATEGY_PLAN_HISTORY_UNMIGRATABLE", message
@@ -275,6 +285,110 @@ class MigrationRunner:
                             block("A mapped sleeve value is invalid.")
                     elif value is not None:
                         block("An unknown mapped sleeve value must remain null.")
+            try:
+                typed_sleeves = []
+                for sleeve in sleeves:
+                    sleeve_id = sleeve.get("sleeve_id")
+                    if not isinstance(sleeve_id, str) or not sleeve_id:
+                        block("A mapped sleeve lacks stable identity.")
+
+                    def mapped_decimal(
+                        state_key: str, value_key: str
+                    ) -> Decimal | None:
+                        if sleeve.get(state_key) != "known":
+                            return None
+                        return Decimal(str(sleeve.get(value_key)))
+
+                    floor = CoreFloor(
+                        mapped_decimal(
+                            "core_floor_state", "core_floor_value"
+                        )
+                    )
+                    common = {
+                        "sleeve_id": sleeve_id,
+                        "quantity_budget": mapped_decimal(
+                            "quantity_budget_state",
+                            "quantity_budget_value",
+                        ),
+                        "core_floor": floor,
+                        "max_notional": mapped_decimal(
+                            "max_notional_state", "max_notional_value"
+                        ),
+                        "max_loss": mapped_decimal(
+                            "max_loss_state", "max_loss_value"
+                        ),
+                    }
+                    if sleeve["sleeve_kind"] == "core":
+                        if sleeve.get("grid_constraint") is not None:
+                            block(
+                                "A core sleeve cannot own a grid constraint."
+                            )
+                        typed_sleeves.append(CoreSleeve(**common))
+                    else:
+                        grid = sleeve.get("grid_constraint")
+                        if not isinstance(grid, dict):
+                            block(
+                                "A grid sleeve lacks its explicit constraint."
+                            )
+                        typed_sleeves.append(
+                            GridSleeve(
+                                **common,
+                                constraint=GridConstraint(
+                                    grid_constraint_id=grid.get(
+                                        "grid_constraint_id"
+                                    ),
+                                    lower_price=Decimal(
+                                        str(grid.get("lower_price"))
+                                    ),
+                                    upper_price=Decimal(
+                                        str(grid.get("upper_price"))
+                                    ),
+                                    level_count=grid.get("level_count"),
+                                    quantity_per_level=Decimal(
+                                        str(
+                                            grid.get(
+                                                "quantity_per_level"
+                                            )
+                                        )
+                                    ),
+                                    total_quantity_budget=Decimal(
+                                        str(
+                                            grid.get(
+                                                "total_quantity_budget"
+                                            )
+                                        )
+                                    ),
+                                    price_basis=grid.get("price_basis"),
+                                    trigger_mode=grid.get("trigger_mode"),
+                                    cooldown_trading_sessions=grid.get(
+                                        "cooldown_trading_sessions"
+                                    ),
+                                ),
+                            )
+                        )
+                typed_tuple = tuple(typed_sleeves)
+                validate_sleeve_contract(
+                    str(strategy_version_id), typed_tuple
+                )
+                validate_sleeve_quantities(
+                    typed_tuple, total_quantity=None
+                )
+                for raw_sleeve, typed_sleeve in zip(
+                    sleeves, typed_tuple, strict=True
+                ):
+                    raw_sleeve["_migration_content_hash"] = (
+                        typed_sleeve.content_hash
+                    )
+                    if isinstance(typed_sleeve, GridSleeve):
+                        raw_sleeve["grid_constraint"][
+                            "_migration_content_hash"
+                        ] = typed_sleeve.constraint.content_hash
+            except (
+                PlanValidationError,
+                InvalidOperation,
+                TypeError,
+            ) as error:
+                block(f"Mapped sleeve contract is invalid: {error}")
             expected_rules = {
                 row["rule_id"]
                 for row in self.connection.execute(
