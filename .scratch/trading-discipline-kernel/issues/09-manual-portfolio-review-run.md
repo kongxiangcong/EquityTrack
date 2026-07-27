@@ -64,11 +64,12 @@ Remove `daily` as the public portfolio review entry and update Skill/CLI callers
 
 ## Resolution evidence
 
-- Added the final cohort-C `0017_manual_review_journal.sql` with fail-closed
-  preflight, immutable journal constraints, rollback, and replay coverage. Its
-  SHA-256 is
+- Added the ticket-09 cohort-C baseline `0017_manual_review_journal.sql` with
+  fail-closed preflight, immutable journal constraints, rollback, and replay
+  coverage. Its SHA-256 at the ticket-09 boundary was
   `4BC5B38496A187E04B8CE0513F6BAB387C206C45979AEDF22E5D4053C41BE579`;
-  `0016` remains unchanged and both known persistent roots remain at schema 11.
+  tickets 10–13 complete that same unapplied cohort in place. `0016` remained
+  unchanged and both known persistent roots remained at schema 11.
 - `ManualPortfolioReview` now owns the named start/resume/get task while the
   domain owns review window, outcomes, checkpoints, and deterministic manifest
   construction. SQLite owns context proof, transactions, invocation replay,

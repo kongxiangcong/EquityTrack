@@ -55,6 +55,14 @@ if TYPE_CHECKING:
         ResumeManualPortfolioReview,
         StartManualPortfolioReview,
     )
+    from .decision_tasks import (
+        DecisionTasks,
+        DeferDecisionTask,
+        ListDecisionTasks,
+        ReopenDecisionTasks,
+        ResolveDecisionTask,
+        SupersedeDecisionTask,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
@@ -72,6 +80,7 @@ if TYPE_CHECKING:
         open_chart_workspace,
         open_browser_acceptance_fixture,
         open_decision_workspace,
+        open_decision_tasks,
         open_market,
         open_manual_portfolio_review,
         open_platform_health,
@@ -144,6 +153,12 @@ _EXPORT_MODULES = {
     "ManualPortfolioReview": ".manual_portfolio_review",
     "ResumeManualPortfolioReview": ".manual_portfolio_review",
     "StartManualPortfolioReview": ".manual_portfolio_review",
+    "DecisionTasks": ".decision_tasks",
+    "DeferDecisionTask": ".decision_tasks",
+    "ListDecisionTasks": ".decision_tasks",
+    "ReopenDecisionTasks": ".decision_tasks",
+    "ResolveDecisionTask": ".decision_tasks",
+    "SupersedeDecisionTask": ".decision_tasks",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -172,6 +187,7 @@ _EXPORT_MODULES = {
     "open_chart_workspace": ".bootstrap",
     "open_browser_acceptance_fixture": ".bootstrap",
     "open_decision_workspace": ".bootstrap",
+    "open_decision_tasks": ".bootstrap",
     "open_data_synchronization": ".bootstrap",
     "open_import_preview": ".bootstrap",
     "open_market": ".bootstrap",

@@ -53,11 +53,15 @@ from .strategy_catalog import StrategyQueries
 from .trade_plan_authoring import TradePlanTasks
 from .commands import ApplicationCommandDispatcher
 from .manual_portfolio_review import ManualPortfolioReview
+from .decision_tasks import DecisionTasks
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
 from trading_platform.persistence.manual_portfolio_review import (
     SQLiteManualPortfolioReviewRepository,
+)
+from trading_platform.persistence.decision_tasks import (
+    SQLiteDecisionTaskRepository,
 )
 
 
@@ -283,6 +287,11 @@ def open_application_commands(
                 ),
                 _ledger(store),
             ),
+            DecisionTasks(
+                SQLiteDecisionTaskRepository(
+                    store.connection, store.writer_lock
+                )
+            ),
         )
 
 
@@ -304,6 +313,18 @@ def open_manual_portfolio_review(
                 SQLiteAccountSnapshotProjection(store.connection)
             ),
             _ledger(store),
+        )
+
+
+@contextmanager
+def open_decision_tasks(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[DecisionTasks]:
+    with _store(data_root, migrations_root) as store:
+        yield DecisionTasks(
+            SQLiteDecisionTaskRepository(
+                store.connection, store.writer_lock
+            )
         )
 
 
@@ -467,6 +488,7 @@ __all__ = [
     "open_import_preview",
     "open_market",
     "open_manual_portfolio_review",
+    "open_decision_tasks",
     "open_decision_workspace",
     "open_platform_health",
     "open_platform_operations",

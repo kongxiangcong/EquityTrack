@@ -65,6 +65,13 @@ Only `application/bootstrap.py` wires concrete production adapters. Application
 journey tests cross named task interfaces. Persistence adapter, migration, and
 corruption tests alone may use owned database fault seams.
 
+Manual review materializes eligible `DecisionTask@1` identities in the same
+SQLite transaction as its frozen items and manifest. Task state is projected
+only from append-only `DecisionTaskTransition@1` records. User disposition
+crosses the shared application envelope; typed workflow transitions may reopen
+the same deferred task or supersede it, but no adapter maintains an in-memory
+or broker-derived task state.
+
 ## Data, privacy, and financial boundaries
 
 - Official disclosures are canonical for critical financial facts.

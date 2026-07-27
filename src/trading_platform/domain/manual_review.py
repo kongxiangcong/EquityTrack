@@ -27,6 +27,8 @@ class ManualReviewHolding:
     position_identity: str
     active_plan_id: str | None
     plan_version_id: str | None
+    plan_evaluation_id: str | None
+    evaluation_reason_code: str | None
     strategy_version_id: str | None
     sleeve_graph: tuple[Mapping[str, object], ...]
     data_snapshot_ids: tuple[str, ...]
@@ -128,6 +130,8 @@ class ManualPortfolioReviewItem:
     estimated_state_hash: str
     active_plan_id: str | None
     plan_version_id: str | None
+    plan_evaluation_id: str | None
+    evaluation_reason_code: str | None
     strategy_version_id: str | None
     sleeve_graph: tuple[Mapping[str, object], ...]
     data_snapshot_ids: tuple[str, ...]
@@ -372,6 +376,8 @@ def build_review_items(
             estimated_state_hash=context.estimated_state_hash,
             active_plan_id=holding.active_plan_id,
             plan_version_id=holding.plan_version_id,
+            plan_evaluation_id=holding.plan_evaluation_id,
+            evaluation_reason_code=holding.evaluation_reason_code,
             strategy_version_id=holding.strategy_version_id,
             sleeve_graph=holding.sleeve_graph,
             data_snapshot_ids=holding.data_snapshot_ids,
@@ -469,7 +475,7 @@ def prepare_review_manifest(
             item.review_item_id for item in items
         ),
         "checkpoint_ids": checkpoint_ids,
-        "decision_task_ids": (),
+        "decision_task_ids": _collected_ids(items, "decision_task_ids"),
         "assessment_ids": (),
         "proposal_ids": (),
         "code_identity": code_identity,

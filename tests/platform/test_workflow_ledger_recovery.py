@@ -32,6 +32,8 @@ from tests.platform.test_manual_portfolio_review import (
 from tests.platform.test_plan_confirmation import _authority_root
 from trading_platform.application import (
     GetManualPortfolioReview,
+    ListDecisionTasks,
+    open_decision_tasks,
     open_manual_portfolio_review,
 )
 
@@ -86,6 +88,12 @@ def test_manual_review_checkpoint_and_manifest_survive_restart(
         (before.review_run_id,),
     ).fetchone()[0] == 1
     adapter.close()
+    with open_decision_tasks(data_root) as restarted_tasks:
+        tasks = restarted_tasks.list(
+            ListDecisionTasks("account_local")
+        )
+    assert len(tasks) == 1
+    assert tasks[0].review_run_id == before.review_run_id
 
 
 class CrashAt:

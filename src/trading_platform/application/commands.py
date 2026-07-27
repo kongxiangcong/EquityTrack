@@ -54,6 +54,15 @@ from .manual_portfolio_review import (
     ManualPortfolioReview,
     StartManualPortfolioReview,
 )
+from .decision_tasks import (
+    DecisionTasks,
+    DeferDecisionTask,
+    ResolveDecisionTask,
+)
+from trading_platform.domain.decision_tasks import (
+    DeferralCondition,
+    UserDisposition,
+)
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,8 @@ _IMPLEMENTED = {
     "trade_plan.issue_confirmation_challenge@1",
     "trade_plan.confirm@1",
     "manual_portfolio_review.run@1",
+    "decision_task.defer@1",
+    "decision_task.resolve@1",
 }
 
 
@@ -122,10 +133,12 @@ class ApplicationCommandDispatcher:
         account_snapshots: AccountSnapshotCommands,
         trade_plans: TradePlanTasks,
         manual_reviews: ManualPortfolioReview,
+        decision_tasks: DecisionTasks,
     ) -> None:
         self._account_snapshots = account_snapshots
         self._trade_plans = trade_plans
         self._manual_reviews = manual_reviews
+        self._decision_tasks = decision_tasks
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -240,6 +253,36 @@ class ApplicationCommandDispatcher:
                 transport_actor=transport.identity,
             )
             return command, self._manual_reviews.start(command)
+        if envelope.command_name == "decision_task.defer@1":
+            command = DeferDecisionTask(
+                invocation_id=envelope.invocation_id,
+                decision_task_id=str(payload["decision_task_id"]),
+                condition=DeferralCondition(
+                    target_type=str(payload["defer_target_type"]),
+                    target_value=(
+                        str(payload["defer_target_value"])
+                        if payload.get("defer_target_value") is not None
+                        else None
+                    ),
+                ),
+                occurred_at=str(payload["occurred_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._decision_tasks.defer(command)
+        if envelope.command_name == "decision_task.resolve@1":
+            command = ResolveDecisionTask(
+                invocation_id=envelope.invocation_id,
+                decision_task_id=str(payload["decision_task_id"]),
+                disposition=UserDisposition(str(payload["disposition"])),
+                reason=str(payload["reason"]),
+                occurred_at=str(payload["occurred_at"]),
+                decision_actor=actor.identity,
+                interaction_channel=envelope.interaction_channel.value,
+                transport_actor=transport.identity,
+            )
+            return command, self._decision_tasks.resolve(command)
         plan_actor = PlanCommandActor(
             actor.identity,
             envelope.interaction_channel.value,
@@ -502,7 +545,12 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
     aggregate = next(
         (
             str(payload[key])
-            for key in ("account_id", "plan_id", "draft_id")
+            for key in (
+                "account_id",
+                "plan_id",
+                "draft_id",
+                "decision_task_id",
+            )
             if payload.get(key)
         ),
         "",
@@ -517,6 +565,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
                 "draft_id",
                 "challenge_id",
                 "event_id",
+                "latest_transition_id",
             )
             if payload.get(key)
         ),

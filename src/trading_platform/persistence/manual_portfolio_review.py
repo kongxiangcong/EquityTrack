@@ -17,9 +17,11 @@ from trading_platform.domain.manual_review import (
     ManualReviewHolding,
     ReviewOutcome,
 )
+from trading_platform.domain.decision_tasks import DecisionTask
 from trading_platform.identity import canonical_hash
 
 from .locking import DataRootWriterLock
+from .decision_tasks import SQLiteDecisionTaskRepository
 
 
 class SQLiteManualPortfolioReviewRepository:
@@ -32,6 +34,9 @@ class SQLiteManualPortfolioReviewRepository:
     ) -> None:
         self._connection = connection
         self._writer_lock = writer_lock
+        self._decision_tasks = SQLiteDecisionTaskRepository(
+            connection, writer_lock
+        )
         self.fault_injector = None
 
     def _fault(self, boundary: str) -> None:
@@ -184,6 +189,16 @@ class SQLiteManualPortfolioReviewRepository:
                         str(plan["plan_id"]) if plan is not None else None
                     ),
                     plan_version_id=plan_version_id,
+                    plan_evaluation_id=(
+                        str(evaluation["plan_evaluation_id"])
+                        if evaluation is not None
+                        else None
+                    ),
+                    evaluation_reason_code=(
+                        str(evaluation["resolution_reason_code"])
+                        if evaluation is not None
+                        else None
+                    ),
                     strategy_version_id=(
                         str(plan["strategy_version_id"])
                         if plan is not None
@@ -302,6 +317,7 @@ class SQLiteManualPortfolioReviewRepository:
         *,
         run: ManualPortfolioReviewRun,
         items: tuple[ManualPortfolioReviewItem, ...],
+        decision_tasks: tuple[DecisionTask, ...],
         checkpoints: tuple[ManualPortfolioReviewCheckpoint, ...],
         manifest: ManualPortfolioReviewManifest,
         invocation_id: str,
@@ -315,6 +331,8 @@ class SQLiteManualPortfolioReviewRepository:
         manifest.validate()
         for item in items:
             item.validate()
+        for task in decision_tasks:
+            task.validate()
         for checkpoint in checkpoints:
             checkpoint.validate()
         with self._writer_lock.acquire(
@@ -343,6 +361,9 @@ class SQLiteManualPortfolioReviewRepository:
                 self._insert_manifest(manifest)
                 for item in items:
                     self._insert_item(item)
+                self._decision_tasks.materialize_in_transaction(
+                    decision_tasks
+                )
                 for checkpoint in checkpoints:
                     self._upsert_checkpoint(checkpoint)
                 self._fault("manual_review.before_terminal_update")
@@ -545,7 +566,7 @@ class SQLiteManualPortfolioReviewRepository:
     def _insert_item(self, item: ManualPortfolioReviewItem) -> None:
         self._connection.execute(
             "INSERT INTO manual_portfolio_review_item VALUES("
-            + ",".join("?" for _ in range(29))
+            + ",".join("?" for _ in range(31))
             + ")",
             (
                 item.review_item_id,
@@ -558,6 +579,8 @@ class SQLiteManualPortfolioReviewRepository:
                 item.estimated_state_hash,
                 item.active_plan_id,
                 item.plan_version_id,
+                item.plan_evaluation_id,
+                item.evaluation_reason_code,
                 item.strategy_version_id,
                 self._json(item.sleeve_graph),
                 self._json(item.data_snapshot_ids),

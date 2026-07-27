@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -95,11 +96,14 @@ def test_window_uses_last_successful_cutoff_to_selected_complete_session(
     assert first.window_end_inclusive == "2026-07-27"
     assert first.status == "succeeded_with_limits"
     item_outcome = SQLiteOwningAdapterFixture(data_root)
-    assert item_outcome.execute(
-        "SELECT outcome FROM manual_portfolio_review_item "
+    item = item_outcome.execute(
+        "SELECT outcome,decision_task_ids_json "
+        "FROM manual_portfolio_review_item "
         "WHERE review_run_id=?",
         (first.review_run_id,),
-    ).fetchone()[0] == "REVIEW_REQUIRED"
+    ).fetchone()
+    assert item["outcome"] == "REVIEW_REQUIRED"
+    assert len(json.loads(item["decision_task_ids_json"])) == 1
     item_outcome.close()
 
     _complete_session(data_root, "2026-07-31")
@@ -224,6 +228,9 @@ def test_no_action_evaluation_produces_no_change_without_task(
         (review.review_run_id,),
     ).fetchone()
     assert tuple(item) == ("NO_CHANGE", "[]")
+    assert connection.execute(
+        "SELECT count(*) FROM decision_task"
+    ).fetchone()[0] == 0
     connection.close()
 
 
@@ -389,6 +396,10 @@ def test_failed_run_does_not_advance_cutoff_and_can_be_resumed(
     assert connection.execute(
         "SELECT count(*) FROM manual_portfolio_review_checkpoint "
         "WHERE review_run_id=?",
+        (failed_id,),
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT count(*) FROM decision_task WHERE review_run_id=?",
         (failed_id,),
     ).fetchone()[0] == 0
     connection.close()

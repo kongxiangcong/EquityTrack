@@ -35,6 +35,8 @@ CREATE TABLE manual_portfolio_review_item (
   estimated_state_hash TEXT NOT NULL,
   active_plan_id TEXT,
   plan_version_id TEXT REFERENCES trade_plan_version(plan_version_id),
+  plan_evaluation_id TEXT REFERENCES plan_evaluation(plan_evaluation_id),
+  evaluation_reason_code TEXT,
   strategy_version_id TEXT REFERENCES strategy_version(strategy_version_id),
   sleeve_graph_json TEXT NOT NULL,
   data_snapshot_ids_json TEXT NOT NULL,
@@ -139,7 +141,13 @@ CREATE TABLE decision_task_transition (
   content_hash TEXT NOT NULL UNIQUE,
   schema_version TEXT NOT NULL CHECK(schema_version='DecisionTaskTransition@1'),
   UNIQUE(decision_task_id,transition_seq),
-  CHECK((to_status='deferred' AND defer_target_type IS NOT NULL) OR to_status<>'deferred')
+  CHECK((to_status='deferred' AND defer_target_type IS NOT NULL) OR to_status<>'deferred'),
+  CHECK(
+    (from_status='open' AND to_status='deferred' AND trigger_kind='user_disposition' AND disposition='deferred')
+    OR (from_status='open' AND to_status='resolved' AND trigger_kind='user_disposition' AND disposition IN ('executed','skipped','overridden','not_applicable'))
+    OR (from_status='deferred' AND to_status='open' AND trigger_kind IN ('date_or_session','next_review','evidence_trigger') AND disposition IS NULL)
+    OR (from_status IN ('open','deferred') AND to_status='superseded' AND trigger_kind IN ('plan_superseded','condition_invalidated') AND disposition IS NULL)
+  )
 );
 
 CREATE TABLE action_log_entry (

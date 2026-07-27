@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Protocol
 
 from trading_platform.domain.manual_review import (
+    ManualPortfolioReviewCheckpoint,
     ManualPortfolioReviewItem,
     ManualPortfolioReviewManifest,
     ManualPortfolioReviewRun,
@@ -14,6 +15,11 @@ from trading_platform.domain.manual_review import (
     build_review_items,
     build_review_run,
     prepare_review_manifest,
+)
+from trading_platform.domain.decision_tasks import (
+    DecisionTask,
+    finalize_decision_tasks,
+    prepare_decision_tasks,
 )
 from trading_platform.domain.workflow import NodeDefinition, WorkflowDefinition
 from trading_platform.identity import canonical_hash
@@ -113,6 +119,7 @@ class ManualPortfolioReviewRepository(Protocol):
         *,
         run: ManualPortfolioReviewRun,
         items: tuple[ManualPortfolioReviewItem, ...],
+        decision_tasks: tuple[DecisionTask, ...],
         checkpoints: tuple[ManualPortfolioReviewCheckpoint, ...],
         manifest: ManualPortfolioReviewManifest,
         invocation_id: str,
@@ -235,6 +242,7 @@ class ManualPortfolioReview:
             return run
         try:
             items = build_review_items(run, context)
+            items, task_seeds = prepare_decision_tasks(run, items)
             completed_at = command.requested_at
             manifest_identity, checkpoints = prepare_review_manifest(
                 run=run,
@@ -246,6 +254,9 @@ class ManualPortfolioReview:
             )
             content_hash = canonical_hash(manifest_identity)
             manifest_id = f"manual_review_manifest_{content_hash[:24]}"
+            decision_tasks = finalize_decision_tasks(
+                task_seeds, manifest_id
+            )
             payload = {
                 **manifest_identity,
                 "manifest_id": manifest_id,
@@ -287,6 +298,7 @@ class ManualPortfolioReview:
             result = self._repository.commit(
                 run=run,
                 items=items,
+                decision_tasks=decision_tasks,
                 checkpoints=checkpoints,
                 manifest=manifest,
                 invocation_id=command.invocation_id,
