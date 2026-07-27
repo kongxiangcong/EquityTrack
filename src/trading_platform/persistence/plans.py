@@ -80,13 +80,7 @@ class SQLiteTradePlanRepository:
             or draft.transport_actor != command.actor.transport_actor
         ):
             raise PlanValidationError("PLAN_DRAFT_CREATE_INVALID")
-        request_hash = canonical_hash(
-            {
-                "command": "CreateTradePlanDraft",
-                "draft_hash": draft.content_hash,
-                "actor": command.actor,
-            }
-        )
+        request_hash = canonical_hash(command)
         replay = self._command_receipt(
             command.invocation_id, request_hash
         )
@@ -166,15 +160,7 @@ class SQLiteTradePlanRepository:
     ) -> TradePlanDraft:
         current = self._load_draft(command.draft_id)
         candidate = self._revised_draft(current, command)
-        request_hash = canonical_hash(
-            {
-                "command": "ReviseTradePlanDraft",
-                "draft_id": command.draft_id,
-                "expected_revision": command.expected_revision,
-                "candidate_hash": candidate.content_hash,
-                "actor": command.actor,
-            }
-        )
+        request_hash = canonical_hash(command)
         replay = self._command_receipt(
             command.invocation_id, request_hash
         )
@@ -251,15 +237,7 @@ class SQLiteTradePlanRepository:
     def reject_draft(
         self, command: "RejectTradePlanDraft"
     ) -> PlanDraftRejected:
-        request_hash = canonical_hash(
-            {
-                "command": "RejectTradePlanDraft",
-                "draft_id": command.draft_id,
-                "expected_revision": command.expected_revision,
-                "rejected_at": command.rejected_at,
-                "actor": command.actor,
-            }
-        )
+        request_hash = canonical_hash(command)
         replay = self._command_receipt(
             command.invocation_id, request_hash
         )
@@ -326,17 +304,7 @@ class SQLiteTradePlanRepository:
         self, command: "IssuePlanConfirmationChallenge"
     ) -> PlanConfirmationChallenge:
         draft = self._load_draft(command.draft_id)
-        request_hash = canonical_hash(
-            {
-                "command": "IssuePlanConfirmationChallenge",
-                "draft_id": command.draft_id,
-                "expected_revision": command.expected_revision,
-                "activation_intent": command.activation_intent,
-                "issued_at": command.issued_at,
-                "expires_at": command.expires_at,
-                "actor": command.actor,
-            }
-        )
+        request_hash = canonical_hash(command)
         replay = self._command_receipt(
             command.invocation_id, request_hash
         )
@@ -425,18 +393,7 @@ class SQLiteTradePlanRepository:
             PlanConfirmationResult,
         )
 
-        request_hash = canonical_hash(
-            {
-                "command": "ConfirmTradePlanVersion",
-                "challenge_id": command.challenge_id,
-                "expected_revision": command.expected_revision,
-                "expected_draft_hash": command.expected_draft_hash,
-                "expected_diff_hash": command.expected_diff_hash,
-                "activation_intent": command.activation_intent,
-                "approved_at": command.approved_at,
-                "actor": command.actor,
-            }
-        )
+        request_hash = canonical_hash(command)
         replay = self._command_receipt(
             command.invocation_id, request_hash
         )

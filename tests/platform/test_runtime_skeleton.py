@@ -12,6 +12,9 @@ from pathlib import Path
 import pytest
 
 from trading_platform.application import (
+    ApplicationCommandEnvelopeV1,
+    ApplicationCommandFailure,
+    ApplicationCommandResult,
     ConfirmAccountSnapshot,
     CompareConfirmedAccountState,
     CreateAccountSnapshotDraft,
@@ -25,6 +28,7 @@ from trading_platform.application import (
     open_platform_health,
     open_platform_operations,
     open_account_snapshot_commands,
+    open_application_commands,
     open_account_snapshot_queries,
     open_account_state_queries,
     open_strategy_queries,
@@ -90,6 +94,13 @@ def test_account_snapshot_is_exposed_only_as_named_application_tasks(
     assert callable(open_account_snapshot_commands)
     assert callable(open_account_snapshot_queries)
     assert callable(open_account_state_queries)
+
+
+def test_mutations_have_one_public_envelope_dispatch_seam() -> None:
+    assert ApplicationCommandEnvelopeV1.__name__ == "ApplicationCommandEnvelopeV1"
+    assert ApplicationCommandResult.__name__ == "ApplicationCommandResult"
+    assert ApplicationCommandFailure.__name__ == "ApplicationCommandFailure"
+    assert callable(open_application_commands)
 
 
 def test_strategy_catalog_is_exposed_only_as_named_read_tasks() -> None:

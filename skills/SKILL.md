@@ -30,6 +30,53 @@ python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
 ```
 
+All formal business mutations use one serialized route:
+
+```powershell
+python -m trading_platform.cli application-command --data-root <root> --envelope-file <command.json>
+```
+
+`command.json` must be exactly `ApplicationCommandEnvelope@1`. The application,
+not Skill or CLI, validates the versioned payload, computes the canonical
+request hash, enforces capability, invokes the named task, and emits
+`ApplicationCommandResult@1` or a typed failure.
+Skill is the interaction channel, not the decision actor. A Skill request transported by Codex therefore
+uses `interaction_channel = skill` and `transport_actor = agent:codex`; it may
+use `decision_actor = user:<id>` only after the user explicitly confirms that
+exact command. CLI is also only an adapter and never upgrades actor capability.
+
+The finite mutation contracts are:
+
+```text
+account_snapshot.create_draft@1     CreateAccountSnapshotDraft@1
+account_snapshot.update_draft@1     UpdateAccountSnapshotDraft@1
+account_snapshot.confirm@1          ConfirmAccountSnapshot@1
+trade_plan.create_draft@1           CreateTradePlanDraft@1
+trade_plan.revise_draft@1           ReviseTradePlanDraft@1
+trade_plan.reject_draft@1           RejectTradePlanDraft@1
+trade_plan.issue_confirmation_challenge@1
+                                     IssuePlanConfirmationChallenge@1
+trade_plan.confirm@1                ConfirmTradePlanDraft@1
+manual_portfolio_review.run@1       RunManualPortfolioReview@1
+decision_task.defer@1               DeferDecisionTask@1
+decision_task.resolve@1             ResolveDecisionTask@1
+execution_record.declare@1          DeclareExecutionRecord@1
+execution_record.correct@1          CorrectExecutionRecord@1
+discipline_review.confirm@1         ConfirmDisciplineReview@1
+plan_change_proposal.accept@1       AcceptPlanChangeProposal@1
+plan_change_proposal.reject@1       RejectPlanChangeProposal@1
+```
+
+The registry is closed. Commands whose owning ticket has not landed fail
+closed with `COMMAND_NOT_AVAILABLE`; their presence here reserves the canonical
+name and payload contract and does not claim the capability is implemented.
+Agents may create or revise drafts. Account confirmation, plan confirmation,
+task disposition, execution truth, and review confirmation require the user as
+decision actor. Plan confirmation additionally requires the unexpired,
+unconsumed challenge ID in `approval.challenge_id`. Never use arbitrary Shell,
+SQL, filesystem paths, provider destinations, credentials, or ad-hoc SQLite
+access as an application-command payload.
+
 Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
 
 Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.

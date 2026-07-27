@@ -9,6 +9,7 @@ import pytest
 
 from tests.platform.test_chart_annotations import ROOT, _root
 from trading_platform.web_server import LocalChartWorkspaceServer
+from trading_platform.application import ApplicationCommandEnvelopeV1
 
 
 def _server(tmp_path: Path):
@@ -215,3 +216,12 @@ def test_secret_and_personal_paths_never_reach_dom_logs_or_artifacts(
     assert blocked.value.code == 403
     server.close()
     root.close()
+
+
+def test_application_command_decode_failure_never_echoes_payload_secret() -> None:
+    marker = "command-payload-secret-must-not-leak"
+    with pytest.raises(ValueError) as caught:
+        ApplicationCommandEnvelopeV1.from_bytes(
+            json.dumps({"payload": {"credential": marker}}).encode()
+        )
+    assert marker not in str(caught.value)

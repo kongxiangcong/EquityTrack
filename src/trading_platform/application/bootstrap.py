@@ -51,6 +51,7 @@ from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
 from .account_state import AccountStateQueries, EstimatedAccountWorkspace
 from .strategy_catalog import StrategyQueries
 from .trade_plan_authoring import TradePlanTasks
+from .commands import ApplicationCommandDispatcher
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
 from trading_platform.persistence.strategies import SQLiteStrategyRepository
@@ -296,6 +297,26 @@ def open_trade_plan(
 
 
 @contextmanager
+def open_application_commands(
+    data_root: Path, migrations_root: Path | None = None
+) -> Iterator[ApplicationCommandDispatcher]:
+    with _store(data_root, migrations_root) as store:
+        yield ApplicationCommandDispatcher(
+            AccountSnapshotCommands(
+                SQLiteAccountSnapshotRepository(
+                    store.connection, store.writer_lock
+                ),
+                AccountSnapshotService(),
+            ),
+            TradePlanTasks(
+                SQLiteTradePlanRepository(
+                    store.connection, store.writer_lock
+                )
+            ),
+        )
+
+
+@contextmanager
 def open_update_authorizations(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[UpdateAuthorizations]:
@@ -442,6 +463,7 @@ __all__ = [
     "open_account_current_export",
     "open_account_snapshot_commands",
     "open_account_snapshot_queries",
+    "open_application_commands",
     "open_account_state_queries",
     "open_strategy_queries",
     "open_account_acceptance",

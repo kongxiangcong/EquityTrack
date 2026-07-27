@@ -36,12 +36,26 @@ if TYPE_CHECKING:
         GetAccountSnapshot,
         UpdateAccountSnapshotDraft,
     )
+    from .command_envelope import (
+        ApplicationCommandEnvelopeV1,
+        ApprovalCapability,
+        CommandEnvelopeError,
+        DecisionActor,
+        InteractionChannel,
+        TransportActor,
+    )
+    from .commands import (
+        ApplicationCommandDispatcher,
+        ApplicationCommandFailure,
+        ApplicationCommandResult,
+    )
     from .browser_acceptance import BrowserAcceptanceFixtureResult
     from .bootstrap import (
         open_acceptance_evidence,
         open_account_current_export,
         open_account_snapshot_commands,
         open_account_snapshot_queries,
+        open_application_commands,
         open_account_state_queries,
         open_strategy_queries,
         open_account_acceptance,
@@ -69,9 +83,6 @@ if TYPE_CHECKING:
     )
     from .command_codecs import (
         CommandCodecError,
-        decode_market_snapshot_command,
-        decode_plan_evaluation_command,
-        decode_watchlist_identity,
     )
     from .contracts import (
         Capability,
@@ -114,6 +125,15 @@ _EXPORT_MODULES = {
     "CreateAccountSnapshotDraft": ".account_snapshots",
     "GetAccountSnapshot": ".account_snapshots",
     "UpdateAccountSnapshotDraft": ".account_snapshots",
+    "ApplicationCommandEnvelopeV1": ".command_envelope",
+    "ApprovalCapability": ".command_envelope",
+    "CommandEnvelopeError": ".command_envelope",
+    "DecisionActor": ".command_envelope",
+    "InteractionChannel": ".command_envelope",
+    "TransportActor": ".command_envelope",
+    "ApplicationCommandDispatcher": ".commands",
+    "ApplicationCommandFailure": ".commands",
+    "ApplicationCommandResult": ".commands",
     "BrowserAcceptanceFixtureResult": ".browser_acceptance",
     "ChartAnnotations": ".web_tasks",
     "ChartWorkspace": ".web_tasks",
@@ -128,14 +148,12 @@ _EXPORT_MODULES = {
     "DecisionWorkspace": ".web_tasks",
     "UpdateAuthorizations": ".web_tasks",
     "WorkspaceUpdateCommand": ".web_tasks",
-    "decode_market_snapshot_command": ".command_codecs",
-    "decode_plan_evaluation_command": ".command_codecs",
     "decode_research_workflow_request": ".research_request_codec",
-    "decode_watchlist_identity": ".command_codecs",
     "open_acceptance_evidence": ".bootstrap",
     "open_account_current_export": ".bootstrap",
     "open_account_snapshot_commands": ".bootstrap",
     "open_account_snapshot_queries": ".bootstrap",
+    "open_application_commands": ".bootstrap",
     "open_account_state_queries": ".bootstrap",
     "open_strategy_queries": ".bootstrap",
     "open_account_acceptance": ".bootstrap",

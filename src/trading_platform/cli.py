@@ -20,6 +20,7 @@ from trading_platform.application import (
     open_data_synchronization,
     open_import_preview,
     open_market,
+    open_application_commands,
     open_platform_health,
     open_platform_operations,
     open_project_verification,
@@ -37,9 +38,8 @@ from trading_platform.application import (
     HealthQuery,
     ResumeWorkflowCommand,
     StartResearchWorkflow,
-    decode_market_snapshot_command,
-    decode_plan_evaluation_command,
-    decode_watchlist_identity,
+    ApplicationCommandEnvelopeV1,
+    ApplicationCommandFailure,
     decode_research_workflow_request,
 )
 from trading_platform.operations import OperationError
@@ -84,18 +84,11 @@ def _parser() -> argparse.ArgumentParser:
         "--kind", choices=("manifest", "artifact", "source"), required=True
     )
     archive.add_argument("--id", required=True)
-    watch_add = sub.add_parser("watchlist-add")
-    watch_add.add_argument("--data-root", type=Path, required=True)
-    watch_add.add_argument("--invocation-id", required=True)
-    watch_add.add_argument("--identity-file", type=Path, required=True)
+    application_command = sub.add_parser("application-command")
+    application_command.add_argument("--data-root", type=Path, required=True)
+    application_command.add_argument("--envelope-file", type=Path, required=True)
     watch_list = sub.add_parser("watchlist-list")
     watch_list.add_argument("--data-root", type=Path, required=True)
-    market_build = sub.add_parser("market-build")
-    market_build.add_argument("--data-root", type=Path, required=True)
-    market_build.add_argument("--command-file", type=Path, required=True)
-    market_evaluate = sub.add_parser("market-evaluate")
-    market_evaluate.add_argument("--data-root", type=Path, required=True)
-    market_evaluate.add_argument("--command-file", type=Path, required=True)
     market_show = sub.add_parser("market-show")
     market_show.add_argument("--data-root", type=Path, required=True)
     market_show.add_argument("--market-snapshot-id", required=True)
@@ -190,41 +183,35 @@ def main(argv: list[str] | None = None) -> int:
                     result = asdict(archive_task.artifact(args.id))
                 else:
                     result = dict(archive_task.source_payload(args.id))
-        elif operation == "watchlist-add":
-            with open_watchlist(args.data_root) as watchlist:
-                result = asdict(
-                    watchlist.add(
-                        args.invocation_id,
-                        decode_watchlist_identity(args.identity_file.read_bytes()),
+        elif operation == "application-command":
+            command = ApplicationCommandEnvelopeV1.from_bytes(
+                args.envelope_file.read_bytes()
+            )
+            with open_application_commands(args.data_root) as dispatcher:
+                dispatched = dispatcher.dispatch(command)
+            if isinstance(dispatched, ApplicationCommandFailure):
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "operation": operation,
+                            "error": asdict(dispatched),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
                     )
                 )
+                return 2
+            result = asdict(dispatched)
         elif operation == "watchlist-list":
             with open_watchlist(args.data_root) as watchlist:
                 result = {"items": [asdict(item) for item in watchlist.list()]}
         elif operation in {
-            "market-build",
-            "market-evaluate",
             "market-show",
             "evaluation-show",
         }:
             with open_market(args.data_root) as market_task:
-                if operation == "market-build":
-                    result = asdict(
-                        market_task.build_market_snapshot(
-                            decode_market_snapshot_command(
-                                args.command_file.read_bytes()
-                            )
-                        )
-                    )
-                elif operation == "market-evaluate":
-                    result = asdict(
-                        market_task.evaluate_plan(
-                            decode_plan_evaluation_command(
-                                args.command_file.read_bytes()
-                            )
-                        )
-                    )
-                elif operation == "market-show":
+                if operation == "market-show":
                     result = asdict(
                         market_task.get_market_snapshot(args.market_snapshot_id)
                     )

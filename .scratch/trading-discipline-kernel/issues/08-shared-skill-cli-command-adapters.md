@@ -1,6 +1,6 @@
 # 08 — Shared Skill and CLI command adapters
 
-**Status:** ready-for-agent  
+**Status:** resolved
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** 07
@@ -43,3 +43,43 @@ New Web pages, arbitrary Shell/SQL/filesystem tools, generic command buses, sche
 ## One-way cutover
 
 Replace stale Skill/CLI instructions and direct task invocations in the same change. Delete superseded commands instead of retaining aliases or wrapper forwarders.
+
+## Claim record
+
+- External seams: one serialized `ApplicationCommandEnvelope@1`, one typed
+  result/failure schema, CLI stdin/file decoding, and the active Skill
+  command contract.
+- Deep-module ownership: `command_envelope.py` owns finite envelope identity
+  and actor/channel/transport capability facts; `commands.py` owns command
+  selection, central authorization, dispatch, result normalization, and
+  redaction; named application tasks retain all business behavior.
+- Old paths to replace: CLI operation-specific mutation decoding and direct
+  task invocation, Skill examples that name retired commands, and any
+  channel-local actor or capability decision.
+- Superseded artifacts to delete: duplicate account/plan command codecs,
+  direct adapter-to-persistence instructions, generic command routing,
+  arbitrary tool payloads, and legacy result/failure shapes.
+
+## Resolution evidence
+
+- Added the finite `ApplicationCommandEnvelope@1` decoder, actor/channel/
+  transport types, central capability matrix, typed result/failure contracts,
+  and the `open_application_commands` composition seam.
+- Replaced CLI-local watchlist/market mutation codecs and commands with the
+  single `application-command --envelope-file` route. Removed the retired byte
+  decoders and their public exports; retained only nested typed provider-job
+  value translation.
+- Skill now names the closed 16-command trading-discipline registry, explicit
+  user capability rules, plan challenge requirement, and fail-closed
+  `COMMAND_NOT_AVAILABLE` behavior for commands owned by later tickets.
+- Account and plan dispatcher results now expose the exact request hash stored
+  in `application_command_receipt`; plan persistence uses the same canonical
+  application-command identity instead of a repository-local hash recipe.
+- Focused gate: 55 passed in 38.64 seconds across envelope, Skill, CLI,
+  runtime/security, account, plan confirmation, Model B, and market regression
+  suites. The dedicated envelope suite also passed 6 tests in 2.30 seconds,
+  including account replay/receipt equality and plan
+  create/challenge/confirm/activation through the dispatcher.
+- Migration 0016 remained unchanged at SHA-256
+  `732FAC8AB6DBE393E8B62595D57730247A8929F5EE271CCE380C28E0FF58AA62`.
+  See `evidence/08-shared-command-envelope.md`.

@@ -10,11 +10,7 @@ from pathlib import Path
 import pytest
 
 from trading_platform.application import (
-    CommandCodecError,
     SecurityIdentity,
-    decode_market_snapshot_command,
-    decode_plan_evaluation_command,
-    decode_watchlist_identity,
     open_account_current_export,
     open_account_acceptance,
     open_account_history,
@@ -68,6 +64,63 @@ def test_health_cli_uses_named_task_and_preserves_json_envelope(tmp_path: Path) 
     assert envelope["operation"] == "health"
     assert envelope["result"]["capabilities"]["health"] == "available"
     assert envelope["result"]["capabilities"]["persistence"] == "available"
+
+
+def test_cli_application_command_uses_shared_envelope_and_dispatcher(
+    tmp_path: Path,
+) -> None:
+    from tests.platform.test_account_snapshots import _draft, _ready_root
+
+    data_root = _ready_root(tmp_path)
+    command_file = tmp_path / "command.json"
+    command_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "ApplicationCommandEnvelope@1",
+                "command_name": "account_snapshot.create_draft@1",
+                "invocation_id": "cli-envelope:create:1",
+                "payload_schema_version": "CreateAccountSnapshotDraft@1",
+                "expected_revision": None,
+                "decision_actor": {
+                    "actor_type": "agent",
+                    "actor_id": "codex",
+                },
+                "interaction_channel": "skill",
+                "transport_actor": {
+                    "actor_type": "agent",
+                    "actor_id": "codex",
+                },
+                "approval": None,
+                "payload": {"draft": asdict(_draft())},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "trading_platform.cli",
+            "application-command",
+            "--data-root",
+            str(data_root),
+            "--envelope-file",
+            str(command_file),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    envelope = json.loads(completed.stdout)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert envelope["operation"] == "application-command"
+    assert envelope["result"]["schema_version"] == "ApplicationCommandResult@1"
+    assert envelope["result"]["command_name"] == "account_snapshot.create_draft@1"
 
 
 def test_named_task_openers_never_bootstrap_or_migrate_implicitly(
@@ -151,38 +204,6 @@ def test_application_tasks_depend_inward_and_composition_has_no_locator() -> Non
     assert "ProductionCompositionRoot" not in bootstrap
     assert "service_lookup" not in bootstrap
     assert "task_bag" not in bootstrap
-
-
-@pytest.mark.parametrize(
-    ("decoder", "code", "substep"),
-    (
-        (
-            decode_watchlist_identity,
-            "WATCHLIST_IDENTITY_INVALID",
-            "watchlist_identity.decode",
-        ),
-        (
-            decode_market_snapshot_command,
-            "MARKET_SNAPSHOT_COMMAND_INVALID",
-            "market_snapshot_command.decode",
-        ),
-        (
-            decode_plan_evaluation_command,
-            "PLAN_EVALUATION_COMMAND_INVALID",
-            "plan_evaluation_command.decode",
-        ),
-    ),
-)
-def test_json_command_codecs_fail_with_stable_redacted_diagnostics(
-    decoder, code: str, substep: str
-) -> None:
-    with pytest.raises(CommandCodecError) as caught:
-        decoder(b'{"secret":"must-not-appear"}')
-
-    assert caught.value.code == code
-    assert caught.value.substep == substep
-    assert caught.value.cause_type in {"KeyError", "TypeError"}
-    assert "must-not-appear" not in str(caught.value)
 
 
 def test_research_cli_failure_is_typed_actionable_and_redacted(tmp_path: Path) -> None:

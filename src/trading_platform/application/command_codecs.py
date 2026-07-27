@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from trading_platform.application.contracts import SecurityIdentity
@@ -18,31 +17,6 @@ class CommandCodecError(ValueError):
         self.code = code
         self.substep = substep
         self.cause_type = cause_type
-
-
-def decode_watchlist_identity_value(value: Any) -> SecurityIdentity:
-    try:
-        if not isinstance(value, dict):
-            raise TypeError("identity must be an object")
-        return SecurityIdentity(**value)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-        raise CommandCodecError(
-            "WATCHLIST_IDENTITY_INVALID",
-            "watchlist_identity.decode",
-            type(error).__name__,
-        ) from None
-
-
-def decode_watchlist_identity(payload: bytes) -> SecurityIdentity:
-    try:
-        value = json.loads(payload)
-    except json.JSONDecodeError as error:
-        raise CommandCodecError(
-            "WATCHLIST_IDENTITY_INVALID",
-            "watchlist_identity.decode",
-            type(error).__name__,
-        ) from None
-    return decode_watchlist_identity_value(value)
 
 
 def decode_provider_security_identity_value(value: Any) -> SecurityIdentity:
@@ -79,24 +53,12 @@ def decode_market_snapshot_command_value(value: Any) -> BuildMarketSnapshotComma
             raise TypeError("market command must contain a code identity object")
         value["code_identity"] = CodeIdentity(**value["code_identity"])
         return BuildMarketSnapshotCommand(**value)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise CommandCodecError(
             "MARKET_SNAPSHOT_COMMAND_INVALID",
             "market_snapshot_command.decode",
             type(error).__name__,
         ) from None
-
-
-def decode_market_snapshot_command(payload: bytes) -> BuildMarketSnapshotCommand:
-    try:
-        value = json.loads(payload)
-    except json.JSONDecodeError as error:
-        raise CommandCodecError(
-            "MARKET_SNAPSHOT_COMMAND_INVALID",
-            "market_snapshot_command.decode",
-            type(error).__name__,
-        ) from None
-    return decode_market_snapshot_command_value(value)
 
 
 def decode_plan_evaluation_command_value(value: Any) -> EvaluatePlanCommand:
@@ -173,34 +135,17 @@ def decode_plan_evaluation_command_value(value: Any) -> EvaluatePlanCommand:
             ),
             resource_conflict=resource_conflict,
         )
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise CommandCodecError(
             "PLAN_EVALUATION_COMMAND_INVALID",
             "plan_evaluation_command.decode",
             type(error).__name__,
         ) from None
-
-
-def decode_plan_evaluation_command(payload: bytes) -> EvaluatePlanCommand:
-    try:
-        value = json.loads(payload)
-    except json.JSONDecodeError as error:
-        raise CommandCodecError(
-            "PLAN_EVALUATION_COMMAND_INVALID",
-            "plan_evaluation_command.decode",
-            type(error).__name__,
-        ) from None
-    return decode_plan_evaluation_command_value(value)
-
 
 
 __all__ = [
     "CommandCodecError",
-    "decode_market_snapshot_command",
     "decode_market_snapshot_command_value",
-    "decode_plan_evaluation_command",
     "decode_plan_evaluation_command_value",
     "decode_provider_security_identity_value",
-    "decode_watchlist_identity",
-    "decode_watchlist_identity_value",
 ]
