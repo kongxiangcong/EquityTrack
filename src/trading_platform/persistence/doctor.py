@@ -52,6 +52,31 @@ class DoctorService:
         errors.extend(self.workflow_ledger.audit_integrity(IntegrityScope()).errors)
         if "plan_evaluation" in tables:
             if self.connection.execute("SELECT e.plan_evaluation_id FROM plan_evaluation e LEFT JOIN plan_rule_evaluation r USING(plan_evaluation_id) GROUP BY e.plan_evaluation_id HAVING count(r.rule_order)!=e.rule_count LIMIT 1").fetchone(): errors.append("PLAN_EVALUATION_INCOMPLETE")
-        if "trade_plan_version" in tables and self.connection.execute("SELECT 1 FROM trade_plan_version WHERE user_input_source!='user_fixture_input' LIMIT 1").fetchone(): errors.append("PLAN_INPUT_SOURCE_INVALID")
+        if "strategy_version" in tables:
+            public_strategies = tuple(
+                row[0]
+                for row in self.connection.execute(
+                    "SELECT strategy_key || '@' || version_no "
+                    "FROM strategy_version "
+                    "WHERE publicly_selectable=1 AND status='active' "
+                    "ORDER BY strategy_key"
+                )
+            )
+            if public_strategies != (
+                "core_plus_grid@1",
+                "trend_hold_break_exit@1",
+            ):
+                errors.append("STRATEGY_REGISTRY_INVALID")
+        if "trade_plan_master" in tables and self.connection.execute(
+            "SELECT 1 FROM trade_plan_master "
+            "WHERE length(trim(account_id))=0 OR length(trim(security_id))=0 "
+            "OR (legacy_read_only=0 AND strategy_version_id IS NULL) LIMIT 1"
+        ).fetchone():
+            errors.append("PLAN_OWNERSHIP_INVALID")
+        if "trade_plan_version" in tables and self.connection.execute(
+            "SELECT 1 FROM trade_plan_version "
+            "WHERE graph_sealed<>1 OR length(trim(graph_seal_hash))=0 LIMIT 1"
+        ).fetchone():
+            errors.append("PLAN_GRAPH_UNSEALED")
         if "chart_annotation_version" in tables and self.connection.execute("SELECT v.annotation_version_id FROM chart_annotation_version v LEFT JOIN chart_annotation_anchor a USING(annotation_version_id) WHERE v.status='active' GROUP BY v.annotation_version_id HAVING count(a.anchor_no)=0 LIMIT 1").fetchone(): errors.append("ANNOTATION_ANCHOR_MISSING")
         return DoctorReport("passed" if not errors else "failed", checks, tuple(sorted(set(errors))))

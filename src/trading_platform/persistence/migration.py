@@ -63,6 +63,7 @@ class MigrationRunner:
                     "0013_source_policy_official_evidence.sql",
                     "0014_research_evaluation.sql",
                     "0015_account_snapshot_version.sql",
+                    "0016_strategy_plan_model_b.sql",
                 }
             )
             try:
@@ -75,13 +76,19 @@ class MigrationRunner:
                         self._preflight_source_policy_0013()
                     elif path.name == "0014_research_evaluation.sql":
                         self._preflight_research_evaluation_0014()
-                    else:
+                    elif path.name == "0015_account_snapshot_version.sql":
                         self._preflight_account_snapshot_0015()
+                    else:
+                        self._preflight_strategy_plan_0016()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
                     if fail_after_statement == statement_number:
                         raise PersistenceError("MIGRATION_INJECTED_FAILURE", "Injected inside migration transaction.")
+                if path.name == "0016_strategy_plan_model_b.sql":
+                    from .strategies import install_builtin_strategy_versions
+
+                    install_builtin_strategy_versions(self.connection)
                 if rebuilds_parent_tables:
                     violations = self.connection.execute(
                         "PRAGMA foreign_key_check"
@@ -95,7 +102,12 @@ class MigrationRunner:
                                 else (
                                     "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE"
                                     if path.name == "0014_research_evaluation.sql"
-                                    else "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE"
+                                    else (
+                                        "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE"
+                                        if path.name
+                                        == "0015_account_snapshot_version.sql"
+                                        else "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+                                    )
                                 )
                             ),
                             f"Migration {index:04d} produced invalid foreign-key lineage.",
@@ -112,6 +124,77 @@ class MigrationRunner:
                 if rebuilds_parent_tables:
                     self.connection.execute("PRAGMA legacy_alter_table=OFF")
                     self.connection.execute("PRAGMA foreign_keys=ON")
+
+    def _preflight_strategy_plan_0016(self) -> None:
+        def block(message: str) -> None:
+            raise PersistenceError(
+                "STRATEGY_PLAN_HISTORY_UNMIGRATABLE", message
+            )
+
+        missing_owner = self.connection.execute(
+            "SELECT p.plan_id FROM trade_plan p "
+            "LEFT JOIN ("
+            "SELECT v.plan_id,count(DISTINCT r.account_id) AS account_count "
+            "FROM trade_plan_version v "
+            "LEFT JOIN plan_account_snapshot_reference r USING(plan_version_id) "
+            "GROUP BY v.plan_id"
+            ") o USING(plan_id) "
+            "WHERE coalesce(o.account_count,0)<>1 LIMIT 1"
+        ).fetchone()
+        if missing_owner is not None:
+            block("A legacy plan lacks one explicit account owner.")
+
+        inconsistent_security = self.connection.execute(
+            "SELECT p.plan_id FROM trade_plan p "
+            "JOIN trade_plan_version v USING(plan_id) "
+            "WHERE p.security_id<>v.security_id LIMIT 1"
+        ).fetchone()
+        if inconsistent_security is not None:
+            block("A legacy plan has inconsistent security ownership.")
+
+        unmapped_active = self.connection.execute(
+            "SELECT plan_id FROM trade_plan "
+            "WHERE lifecycle_status='active' LIMIT 1"
+        ).fetchone()
+        if unmapped_active is not None:
+            block(
+                "An active legacy plan lacks an explicit user-approved "
+                "LegacySleeveMapping@1 artifact."
+            )
+
+        inconsistent_activation = self.connection.execute(
+            "SELECT a.activation_id FROM plan_activation a "
+            "JOIN trade_plan p USING(plan_id) "
+            "WHERE a.ended_at IS NULL AND p.lifecycle_status<>'active' LIMIT 1"
+        ).fetchone()
+        if inconsistent_activation is not None:
+            block("Legacy lifecycle and open activation disagree.")
+
+        legacy_draft = self.connection.execute(
+            "SELECT draft_id FROM trade_plan_draft LIMIT 1"
+        ).fetchone()
+        if legacy_draft is not None:
+            block(
+                "A legacy mutable draft cannot be classified as immutable "
+                "Model B history."
+            )
+
+        incomplete_rule = self.connection.execute(
+            "SELECT r.rule_id FROM plan_rule r "
+            "LEFT JOIN plan_rule_condition c "
+            "USING(plan_version_id,rule_no) "
+            "WHERE c.plan_version_id IS NULL LIMIT 1"
+        ).fetchone()
+        if incomplete_rule is not None:
+            block("A legacy plan rule lacks its sealed condition.")
+
+        invalid_version = self.connection.execute(
+            "SELECT plan_version_id FROM trade_plan_version "
+            "WHERE length(trim(content_hash))=0 OR length(trim(content_json))=0 "
+            "LIMIT 1"
+        ).fetchone()
+        if invalid_version is not None:
+            block("A legacy plan version lacks preserved content identity.")
 
     def _preflight_account_snapshot_0015(self) -> None:
         def block(message: str) -> None:

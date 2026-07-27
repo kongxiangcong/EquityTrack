@@ -17,6 +17,8 @@ from trading_platform.application import (
     CreateAccountSnapshotDraft,
     GetAccountSnapshot,
     GetEstimatedAccountState,
+    GetStrategyCatalog,
+    GetStrategyVersion,
     Capability,
     CapabilityStatus,
     HealthQuery,
@@ -25,6 +27,7 @@ from trading_platform.application import (
     open_account_snapshot_commands,
     open_account_snapshot_queries,
     open_account_state_queries,
+    open_strategy_queries,
 )
 from trading_platform.domain.account_snapshots import (
     AccountSnapshotDraft,
@@ -87,6 +90,14 @@ def test_account_snapshot_is_exposed_only_as_named_application_tasks(
     assert callable(open_account_snapshot_commands)
     assert callable(open_account_snapshot_queries)
     assert callable(open_account_state_queries)
+
+
+def test_strategy_catalog_is_exposed_only_as_named_read_tasks() -> None:
+    assert {
+        GetStrategyCatalog.__name__,
+        GetStrategyVersion.__name__,
+    } == {"GetStrategyCatalog", "GetStrategyVersion"}
+    assert callable(open_strategy_queries)
 
 
 def test_production_web_index_references_tracked_build_assets() -> None:

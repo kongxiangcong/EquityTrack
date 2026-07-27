@@ -11,6 +11,11 @@ if TYPE_CHECKING:
         CompareConfirmedAccountState,
         GetEstimatedAccountState,
     )
+    from .strategy_catalog import (
+        GetStrategyCatalog,
+        GetStrategyVersion,
+        StrategyQueries,
+    )
     from .account_snapshots import (
         AccountSnapshotCommands,
         AccountSnapshotQueries,
@@ -26,6 +31,7 @@ if TYPE_CHECKING:
         open_account_snapshot_commands,
         open_account_snapshot_queries,
         open_account_state_queries,
+        open_strategy_queries,
         open_account_acceptance,
         open_account_history,
         open_daily_research_cycle,
@@ -78,6 +84,9 @@ _EXPORT_MODULES = {
     "AccountStateQueries": ".account_state",
     "CompareConfirmedAccountState": ".account_state",
     "GetEstimatedAccountState": ".account_state",
+    "GetStrategyCatalog": ".strategy_catalog",
+    "GetStrategyVersion": ".strategy_catalog",
+    "StrategyQueries": ".strategy_catalog",
     "AccountSnapshotCommands": ".account_snapshots",
     "AccountSnapshotQueries": ".account_snapshots",
     "ConfirmAccountSnapshot": ".account_snapshots",
@@ -108,6 +117,7 @@ _EXPORT_MODULES = {
     "open_account_snapshot_commands": ".bootstrap",
     "open_account_snapshot_queries": ".bootstrap",
     "open_account_state_queries": ".bootstrap",
+    "open_strategy_queries": ".bootstrap",
     "open_account_acceptance": ".bootstrap",
     "open_account_history": ".bootstrap",
     "open_chart_annotations": ".bootstrap",

@@ -5,6 +5,59 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 import re
 
+from trading_platform.identity import canonical_hash
+
+
+@dataclass(frozen=True)
+class TradePlanMasterId:
+    account_id: str
+    security_id: str
+    value: str
+
+    @classmethod
+    def derive(
+        cls, account_id: str, security_id: str
+    ) -> "TradePlanMasterId":
+        if not account_id or not security_id:
+            raise PlanValidationError("PLAN_OWNERSHIP_REQUIRED")
+        digest = canonical_hash(
+            {
+                "schema_version": "TradePlanMasterId@1",
+                "account_id": account_id,
+                "security_id": security_id,
+            }
+        )
+        return cls(
+            account_id=account_id,
+            security_id=security_id,
+            value=f"trade_plan_master_{digest[:24]}",
+        )
+
+
+@dataclass(frozen=True)
+class TradePlanMaster:
+    plan_id: TradePlanMasterId
+    strategy_version_id: str
+    lifecycle_status: str
+    transition_seq: int
+    created_at: str
+    schema_version: str = "TradePlanMaster@1"
+
+    def validate(self) -> None:
+        expected = TradePlanMasterId.derive(
+            self.plan_id.account_id, self.plan_id.security_id
+        )
+        if (
+            self.schema_version != "TradePlanMaster@1"
+            or self.plan_id != expected
+            or not self.strategy_version_id
+            or self.lifecycle_status
+            not in {"inactive", "active", "ended", "legacy_read_only"}
+            or self.transition_seq < 0
+            or not self.created_at
+        ):
+            raise PlanValidationError("PLAN_MASTER_INVALID")
+
 
 @dataclass(frozen=True)
 class PlanReference:

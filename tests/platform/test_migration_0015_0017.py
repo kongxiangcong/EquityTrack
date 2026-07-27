@@ -206,7 +206,7 @@ def test_fresh_and_populated_roots_upgrade_idempotently(tmp_path: Path) -> None:
     fresh.migrate()
     assert fresh.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 15
+    ).fetchone()[0] == 16
     fresh.close()
 
     data_root, _ = _legacy_root(tmp_path)
@@ -325,4 +325,109 @@ def test_account_snapshot_migration_rolls_back_and_replays_after_crash(
     assert store.connection.execute(
         "SELECT count(*) FROM account_snapshot_version"
     ).fetchone()[0] == 1
+    store.close()
+
+
+def test_strategy_plan_0016_installs_full_cohort_schema_idempotently(
+    tmp_path: Path,
+) -> None:
+    store = PlatformStore(tmp_path / "strategy-fresh", ROOT / "migrations")
+    store.migrate()
+    store.migrate()
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 16
+    expected_tables = {
+        "investment_thesis_version",
+        "strategy_definition",
+        "strategy_version",
+        "strategy_parameter_contract",
+        "trade_plan_master",
+        "trade_plan_draft",
+        "trade_plan_version",
+        "trade_plan_sleeve",
+        "trade_plan_rule",
+        "grid_constraint",
+        "plan_confirmation_challenge",
+        "user_approval_receipt",
+        "plan_activation",
+    }
+    installed = {
+        row[0]
+        for row in store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    assert expected_tables <= installed
+    public_versions = tuple(
+        row[0]
+        for row in store.connection.execute(
+            "SELECT strategy_key || '@' || version_no "
+            "FROM strategy_version WHERE publicly_selectable=1 "
+            "ORDER BY strategy_key"
+        )
+    )
+    assert public_versions == ("core_plus_grid@1", "trend_hold_break_exit@1")
+    store.close()
+
+
+def test_strategy_plan_0016_preflight_blocks_unmapped_active_legacy_plan(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _legacy_root(tmp_path)
+    through_15 = _copy_migrations(tmp_path, 15)
+    store = PlatformStore(data_root, through_15)
+    store.migrate()
+    store.connection.execute(
+        "UPDATE trade_plan SET lifecycle_status='active' "
+        "WHERE plan_id='plan_legacy'"
+    )
+    store.connection.commit()
+    before = tuple(store.connection.iterdump())
+    store.close()
+
+    blocked = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        blocked.migrate()
+    assert failure.value.code == "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+    assert blocked.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 15
+    assert blocked.connection.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE name='strategy_definition'"
+    ).fetchone() is None
+    after = tuple(blocked.connection.iterdump())
+    blocked.close()
+    assert after == before
+
+
+def test_strategy_plan_0016_rolls_back_and_replays_after_injected_failure(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "strategy-crash"
+    through_15 = _copy_migrations(tmp_path, 15)
+    prior = PlatformStore(data_root, through_15)
+    prior.migrate()
+    prior.close()
+
+    store = PlatformStore(data_root, ROOT / "migrations")
+    with pytest.raises(PersistenceError) as failure:
+        store.migrate(fail_after=20)
+    assert failure.value.code == "MIGRATION_INJECTED_FAILURE"
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 15
+    assert store.connection.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE name='strategy_definition'"
+    ).fetchone() is None
+    store.migrate()
+    assert store.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 16
+    assert store.connection.execute(
+        "SELECT count(*) FROM strategy_version "
+        "WHERE publicly_selectable=1"
+    ).fetchone()[0] == 2
     store.close()

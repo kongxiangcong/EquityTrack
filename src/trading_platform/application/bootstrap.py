@@ -51,8 +51,10 @@ from .web_tasks import (
 from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
 from .account_state import AccountStateQueries, EstimatedAccountWorkspace
+from .strategy_catalog import StrategyQueries
 from trading_platform.domain.account_state import ExecutionRecordReader
 from trading_platform.domain.account_snapshots import AccountSnapshotService
+from trading_platform.persistence.strategies import SQLiteStrategyRepository
 
 
 def _repo_root() -> Path:
@@ -384,6 +386,15 @@ def open_account_state_queries(
         )
 
 
+@contextmanager
+def open_strategy_queries(
+    data_root: Path,
+    migrations_root: Path | None = None,
+) -> Iterator[StrategyQueries]:
+    with _store(data_root, migrations_root) as store:
+        yield StrategyQueries(SQLiteStrategyRepository(store.connection))
+
+
 def open_platform_operations(data_root: Path) -> PlatformOperations:
     return PlatformOperations(data_root)
 
@@ -428,6 +439,7 @@ __all__ = [
     "open_account_snapshot_commands",
     "open_account_snapshot_queries",
     "open_account_state_queries",
+    "open_strategy_queries",
     "open_account_acceptance",
     "open_account_history",
     "open_acceptance_evidence",
