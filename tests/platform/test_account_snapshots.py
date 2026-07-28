@@ -228,9 +228,7 @@ def test_confirmation_is_atomic_immutable_and_idempotent(tmp_path: Path) -> None
         "SELECT count(*) FROM account_snapshot_transition"
     ).fetchone() == (1,)
     with pytest.raises(sqlite3.IntegrityError, match="IMMUTABLE"):
-        connection.execute(
-            "UPDATE account_snapshot_version SET currency='USD'"
-        )
+        connection.execute("UPDATE account_snapshot_version SET currency='USD'")
     connection.rollback()
     connection.execute(
         "CREATE TRIGGER inject_snapshot_failure BEFORE INSERT ON application_event "
@@ -240,7 +238,9 @@ def test_confirmation_is_atomic_immutable_and_idempotent(tmp_path: Path) -> None
     connection.close()
 
     second = replace(
-        _draft(), draft_id="draft_local_2", previous_snapshot_version_id=first.account_snapshot_version_id
+        _draft(),
+        draft_id="draft_local_2",
+        previous_snapshot_version_id=first.account_snapshot_version_id,
     )
     with open_account_snapshot_commands(data_root) as commands:
         commands.execute(
@@ -307,9 +307,7 @@ def test_update_requires_current_revision_and_required_identity_validation(
         assert isinstance(updated, AccountSnapshotDraft)
         assert updated.revision == 2
         assert updated.cash_value == "12.5"
-        with pytest.raises(
-            AccountSnapshotError, match="SNAPSHOT_DRAFT_REVISION_STALE"
-        ):
+        with pytest.raises(AccountSnapshotError, match="SNAPSHOT_DRAFT_REVISION_STALE"):
             commands.execute(
                 UpdateAccountSnapshotDraft(
                     invocation_id="snapshot:update:stale",
@@ -360,3 +358,27 @@ def test_update_requires_current_revision_and_required_identity_validation(
                     transport_actor_id="codex",
                 )
             )
+
+
+def test_nav_reconciliation_conflict_invalidates_draft(tmp_path: Path) -> None:
+    data_root = _ready_root(tmp_path)
+    original = _draft(cash_state="known", cash_value="10")
+    mismatch = replace(
+        original,
+        draft_id="draft_nav_mismatch",
+        nav_state="known",
+        nav_value="100",
+        positions=(
+            replace(
+                original.positions[0],
+                market_value_state="known",
+                market_value_value="50",
+            ),
+        ),
+    )
+
+    persisted = _create(data_root, mismatch)
+
+    assert persisted.validation_state == "invalid"
+    assert "NAV_RECONCILIATION_MISMATCH" in persisted.validation_errors
+    assert "nav_reconciliation_conflict" in persisted.capability_impacts

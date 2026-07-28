@@ -6,6 +6,8 @@ from enum import Enum
 from typing import Mapping
 
 from trading_platform.domain.account_snapshots import (
+    AccountRegistration,
+    AccountSecurityIdentity,
     AccountSnapshotDraft,
     AccountSnapshotError,
     AccountSnapshotPosition,
@@ -35,6 +37,7 @@ from .account_snapshots import (
     AccountSnapshotCommands,
     ConfirmAccountSnapshot,
     CreateAccountSnapshotDraft,
+    RegisterAccountForSnapshots,
     UpdateAccountSnapshotDraft,
 )
 from .command_envelope import (
@@ -106,15 +109,14 @@ class ApplicationCommandFailure:
 
 
 _CAPABILITIES = {
+    "account_snapshot.register_account@2": ApprovalCapability.ACCOUNT_CONFIRMATION,
     "account_snapshot.create_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "account_snapshot.update_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "account_snapshot.confirm@1": ApprovalCapability.ACCOUNT_CONFIRMATION,
     "trade_plan.create_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "trade_plan.revise_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "trade_plan.reject_draft@1": ApprovalCapability.DRAFT_MUTATION,
-    "trade_plan.issue_confirmation_challenge@1": (
-        ApprovalCapability.DRAFT_MUTATION
-    ),
+    "trade_plan.issue_confirmation_challenge@1": (ApprovalCapability.DRAFT_MUTATION),
     "trade_plan.confirm@1": ApprovalCapability.PLAN_CONFIRMATION,
     "manual_portfolio_review.run@1": ApprovalCapability.DRAFT_MUTATION,
     "decision_task.defer@1": ApprovalCapability.TASK_DISPOSITION,
@@ -124,15 +126,12 @@ _CAPABILITIES = {
     "discipline_review.confirm@1": ApprovalCapability.REVIEW_CONFIRMATION,
     "plan_impact_assessment.create@1": ApprovalCapability.DRAFT_MUTATION,
     "plan_change_proposal.create@1": ApprovalCapability.DRAFT_MUTATION,
-    "plan_change_proposal.accept@1": (
-        ApprovalCapability.PROPOSAL_DISPOSITION
-    ),
-    "plan_change_proposal.reject@1": (
-        ApprovalCapability.PROPOSAL_DISPOSITION
-    ),
+    "plan_change_proposal.accept@1": (ApprovalCapability.PROPOSAL_DISPOSITION),
+    "plan_change_proposal.reject@1": (ApprovalCapability.PROPOSAL_DISPOSITION),
 }
 
 _IMPLEMENTED = {
+    "account_snapshot.register_account@2",
     "account_snapshot.create_draft@1",
     "account_snapshot.update_draft@1",
     "account_snapshot.confirm@1",
@@ -185,7 +184,13 @@ class ApplicationCommandDispatcher:
             return self._failure(envelope, "COMMAND_NOT_AVAILABLE")
         try:
             command, result = self._execute(envelope)
-        except (AccountSnapshotError, PlanValidationError, ValueError, KeyError, TypeError) as error:
+        except (
+            AccountSnapshotError,
+            PlanValidationError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as error:
             return self._failure(
                 envelope, getattr(error, "code", "COMMAND_PAYLOAD_INVALID")
             )
@@ -219,14 +224,18 @@ class ApplicationCommandDispatcher:
             and not envelope.command_name.startswith("account_snapshot.")
         ):
             return self._failure(envelope, "WEB_MUTATION_CAPABILITY_DENIED")
-        if capability in {
-            ApprovalCapability.ACCOUNT_CONFIRMATION,
-            ApprovalCapability.PLAN_CONFIRMATION,
-            ApprovalCapability.TASK_DISPOSITION,
-            ApprovalCapability.EXECUTION_TRUTH,
-            ApprovalCapability.REVIEW_CONFIRMATION,
-            ApprovalCapability.PROPOSAL_DISPOSITION,
-        } and actor != "user":
+        if (
+            capability
+            in {
+                ApprovalCapability.ACCOUNT_CONFIRMATION,
+                ApprovalCapability.PLAN_CONFIRMATION,
+                ApprovalCapability.TASK_DISPOSITION,
+                ApprovalCapability.EXECUTION_TRUTH,
+                ApprovalCapability.REVIEW_CONFIRMATION,
+                ApprovalCapability.PROPOSAL_DISPOSITION,
+            }
+            and actor != "user"
+        ):
             return self._failure(envelope, "USER_DECISION_CAPABILITY_REQUIRED")
         if (
             capability is ApprovalCapability.PLAN_CONFIRMATION
@@ -235,9 +244,7 @@ class ApplicationCommandDispatcher:
             return self._failure(envelope, "PLAN_CONFIRMATION_CHALLENGE_REQUIRED")
         return None
 
-    def _execute(
-        self, envelope: ApplicationCommandEnvelopeV1
-    ) -> tuple[object, object]:
+    def _execute(self, envelope: ApplicationCommandEnvelopeV1) -> tuple[object, object]:
         payload = envelope.payload
         actor = envelope.decision_actor
         transport = envelope.transport_actor
@@ -249,6 +256,11 @@ class ApplicationCommandDispatcher:
             "transport_actor_type": transport.actor_type,
             "transport_actor_id": transport.actor_id,
         }
+        if envelope.command_name == "account_snapshot.register_account@2":
+            command = RegisterAccountForSnapshots(
+                registration=_account_registration(payload), **common
+            )
+            return command, self._account_snapshots.execute(command)
         if envelope.command_name == "account_snapshot.create_draft@1":
             command = CreateAccountSnapshotDraft(
                 draft=_account_draft(payload["draft"]), **common
@@ -273,13 +285,10 @@ class ApplicationCommandDispatcher:
                 invocation_id=envelope.invocation_id,
                 account_id=str(payload["account_id"]),
                 requested_at=str(payload["requested_at"]),
-                selected_complete_session=str(
-                    payload["selected_complete_session"]
-                ),
+                selected_complete_session=str(payload["selected_complete_session"]),
                 first_window_start_exclusive=(
                     str(payload["first_window_start_exclusive"])
-                    if payload.get("first_window_start_exclusive")
-                    is not None
+                    if payload.get("first_window_start_exclusive") is not None
                     else None
                 ),
                 code_identity=str(payload["code_identity"]),
@@ -380,9 +389,7 @@ class ApplicationCommandDispatcher:
         if envelope.command_name == "discipline_review.confirm@1":
             command = ConfirmDisciplineReviewVersion(
                 invocation_id=envelope.invocation_id,
-                discipline_review_id=str(
-                    payload["discipline_review_id"]
-                ),
+                discipline_review_id=str(payload["discipline_review_id"]),
                 expected_version_no=_revision(envelope),
                 confirmed_at=str(payload["confirmed_at"]),
                 decision_actor=actor.identity,
@@ -399,13 +406,10 @@ class ApplicationCommandDispatcher:
                 impact_kind=str(payload["impact_kind"]),
                 materiality=str(payload["materiality"]),
                 uncertainties=tuple(
-                    str(value)
-                    for value in payload.get("uncertainties", ())
+                    str(value) for value in payload.get("uncertainties", ())
                 ),
                 what_changed=str(payload["what_changed"]),
-                what_would_change_the_view=str(
-                    payload["what_would_change_the_view"]
-                ),
+                what_would_change_the_view=str(payload["what_would_change_the_view"]),
                 model_identity=str(payload["model_identity"]),
                 policy_identity=str(payload["policy_identity"]),
                 prompt_identity=str(payload["prompt_identity"]),
@@ -420,9 +424,7 @@ class ApplicationCommandDispatcher:
             command = CreatePlanChangeProposal(
                 invocation_id=envelope.invocation_id,
                 assessment_id=str(payload["assessment_id"]),
-                proposed_content=_mapping(
-                    payload["proposed_content"]
-                ),
+                proposed_content=_mapping(payload["proposed_content"]),
                 parameters=_mapping(payload["parameters"]),
                 created_by=actor.actor_type,
                 created_at=str(payload["created_at"]),
@@ -444,8 +446,7 @@ class ApplicationCommandDispatcher:
                 draft_id=str(payload["draft_id"]),
                 expected_draft_revision=(
                     int(payload["expected_draft_revision"])
-                    if payload.get("expected_draft_revision")
-                    is not None
+                    if payload.get("expected_draft_revision") is not None
                     else None
                 ),
                 decided_at=str(payload["decided_at"]),
@@ -502,17 +503,12 @@ class ApplicationCommandDispatcher:
                 actor=plan_actor,
             )
             return command, self._trade_plans.execute(command)
-        if (
-            envelope.command_name
-            == "trade_plan.issue_confirmation_challenge@1"
-        ):
+        if envelope.command_name == "trade_plan.issue_confirmation_challenge@1":
             command = IssuePlanConfirmationChallenge(
                 invocation_id=envelope.invocation_id,
                 draft_id=str(payload["draft_id"]),
                 expected_revision=_revision(envelope),
-                activation_intent=ActivationIntent(
-                    str(payload["activation_intent"])
-                ),
+                activation_intent=ActivationIntent(str(payload["activation_intent"])),
                 issued_at=str(payload["issued_at"]),
                 expires_at=(
                     str(payload["expires_at"])
@@ -528,9 +524,7 @@ class ApplicationCommandDispatcher:
             expected_revision=_revision(envelope),
             expected_draft_hash=str(payload["expected_draft_hash"]),
             expected_diff_hash=str(payload["expected_diff_hash"]),
-            activation_intent=ActivationIntent(
-                str(payload["activation_intent"])
-            ),
+            activation_intent=ActivationIntent(str(payload["activation_intent"])),
             approved_at=str(payload["approved_at"]),
             actor=plan_actor,
         )
@@ -577,6 +571,23 @@ def _account_draft(value: object) -> AccountSnapshotDraft:
     return AccountSnapshotDraft(**fields)
 
 
+def _account_registration(value: object) -> AccountRegistration:
+    if not isinstance(value, Mapping):
+        raise TypeError("account registration object required")
+    securities = value.get("securities", ())
+    if not isinstance(securities, (list, tuple)):
+        raise TypeError("securities array required")
+    fields = dict(value)
+    fields["securities"] = tuple(
+        AccountSecurityIdentity(**dict(identity))
+        for identity in securities
+        if isinstance(identity, Mapping)
+    )
+    if len(fields["securities"]) != len(securities):
+        raise TypeError("security identity object required")
+    return AccountRegistration(**fields)
+
+
 def _mapping(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise TypeError("object required")
@@ -601,9 +612,7 @@ def _plan_graph(value: object) -> TradePlanGraph:
             if raw_version.get("investment_thesis_version_id") is not None
             else None
         ),
-        account_snapshot_version_id=str(
-            raw_version["account_snapshot_version_id"]
-        ),
+        account_snapshot_version_id=str(raw_version["account_snapshot_version_id"]),
         data_snapshot_id=str(raw_version["data_snapshot_id"]),
         horizon_start=str(raw_version["horizon_start"]),
         horizon_end=str(raw_version["horizon_end"]),
@@ -621,9 +630,7 @@ def _plan_graph(value: object) -> TradePlanGraph:
         content_hash=str(raw_version["content_hash"]),
         graph_seal_hash=str(raw_version["graph_seal_hash"]),
         confirmed_at=str(raw_version["confirmed_at"]),
-        user_approval_receipt_id=str(
-            raw_version["user_approval_receipt_id"]
-        ),
+        user_approval_receipt_id=str(raw_version["user_approval_receipt_id"]),
     )
     sleeves = tuple(_plan_sleeve(_mapping(raw)) for raw in payload.get("sleeves", ()))
     rules = tuple(_plan_rule(_mapping(raw)) for raw in payload.get("rules", ()))
@@ -645,11 +652,7 @@ def _plan_graph(value: object) -> TradePlanGraph:
 
 def _plan_sleeve(raw: Mapping[str, object]) -> CoreSleeve | GridSleeve:
     def decimal_value(state_key: str, value_key: str) -> Decimal | None:
-        return (
-            Decimal(str(raw[value_key]))
-            if raw[state_key] == "known"
-            else None
-        )
+        return Decimal(str(raw[value_key])) if raw[state_key] == "known" else None
 
     common = {
         "sleeve_id": str(raw["sleeve_id"]),
@@ -687,11 +690,7 @@ def _plan_rule(raw: Mapping[str, object]) -> TradePlanRule:
         rule_kind=str(raw["rule_kind"]),
         priority=RulePriority(str(raw["priority"])),
         scope=RuleScope(str(raw["scope"])),
-        sleeve_id=(
-            str(raw["sleeve_id"])
-            if raw.get("sleeve_id") is not None
-            else None
-        ),
+        sleeve_id=(str(raw["sleeve_id"]) if raw.get("sleeve_id") is not None else None),
         effect=str(raw["effect"]),
         applies_to=str(raw["applies_to"]),
         candidate_intent=candidate_from_dict(raw.get("candidate_intent")),
@@ -737,6 +736,7 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
             str(payload[key])
             for key in (
                 "account_snapshot_version_id",
+                "registration_id",
                 "plan_version_id",
                 "review_run_id",
                 "draft_id",

@@ -15,6 +15,7 @@ from trading_platform.application import (
     ApplicationCommandFailure,
     ApplicationCommandResult,
     open_application_commands,
+    open_platform_operations,
 )
 from trading_platform.application.command_envelope import COMMAND_REGISTRY
 
@@ -110,8 +111,7 @@ def test_skill_cli_and_web_codecs_share_request_hash_and_result_schema(
     assert first.revision_or_version_id == replay.revision_or_version_id
     connection = sqlite3.connect(data_root / "platform.sqlite3")
     stored_hash = connection.execute(
-        "SELECT request_hash FROM application_command_receipt "
-        "WHERE invocation_id=?",
+        "SELECT request_hash FROM application_command_receipt " "WHERE invocation_id=?",
         (first.invocation_id,),
     ).fetchone()[0]
     connection.close()
@@ -144,6 +144,237 @@ def test_actor_channel_transport_are_distinct_and_agent_confirmation_is_denied(
     assert denied.request_hash
 
 
+def test_user_registers_screenshot_account_identity_before_creating_draft(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    assert open_platform_operations(data_root).bootstrap()["status"] == "passed"
+    registration_payload = {
+        "account_id": "account_kong",
+        "alias": "kong",
+        "base_currency": "CNY",
+        "source_kind": "user_declared_from_broker_screenshot",
+        "redacted_source_ref": "local-screenshot:portfolio-20260728",
+        "registered_at": "2026-07-28T22:37:00+08:00",
+        "securities": [
+            {
+                "market": "SZSE",
+                "code": code,
+                "currency": "CNY",
+                "observed_on": "2026-07-28",
+            }
+            for code in ("002407", "002155", "002241", "002897")
+        ],
+    }
+    with open_application_commands(data_root) as dispatcher:
+        registered = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:register",
+                    actor_type="user",
+                    payload=registration_payload,
+                )
+            )
+        )
+        assert isinstance(registered, ApplicationCommandResult)
+        assert registered.result_type == "AccountRegistration"
+        replayed = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:register",
+                    actor_type="user",
+                    payload=registration_payload,
+                )
+            )
+        )
+        assert replayed == registered
+        identities = {
+            item["code"]: item["security_id"]
+            for item in registered.result["securities"]
+        }
+        assert set(identities) == {"002407", "002155", "002241", "002897"}
+        second_payload = {
+            **registration_payload,
+            "account_id": "account_second",
+            "alias": "second",
+            "registered_at": "2026-07-29T22:37:00+08:00",
+            "securities": [
+                {**identity, "observed_on": "2026-07-29"}
+                for identity in registration_payload["securities"]
+            ],
+        }
+        second = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:register:second",
+                    actor_type="user",
+                    payload=second_payload,
+                )
+            )
+        )
+        assert isinstance(second, ApplicationCommandResult)
+        assert {
+            item["code"]: item["security_id"] for item in second.result["securities"]
+        } == identities
+
+        draft = {
+            "draft_id": "draft_kong_20260728",
+            "account_id": registered.result["account_id"],
+            "revision": 1,
+            "status": "open",
+            "source_kind": "user_declared_from_broker_screenshot",
+            "redacted_source_ref": "local-screenshot:portfolio-20260728",
+            "as_of_at": "2026-07-28",
+            "as_of_precision": "date",
+            "timezone": "Asia/Shanghai",
+            "session_semantics": "complete_session",
+            "currency": "CNY",
+            "cash_state": "known",
+            "cash_value": "102.10",
+            "nav_state": "known",
+            "nav_value": "105442.10",
+            "fees_state": "unknown",
+            "fees_value": None,
+            "positions": [
+                {
+                    "security_id": identities[code],
+                    "total_quantity": quantity,
+                    "available_quantity_state": "known",
+                    "available_quantity_value": quantity,
+                    "cost_state": "known",
+                    "cost_value": cost,
+                    "market_value_state": "known",
+                    "market_value_value": market_value,
+                }
+                for code, quantity, cost, market_value in (
+                    ("002407", "1000", "30.628", "34200.00"),
+                    ("002155", "1000", "22.133", "22310.00"),
+                    ("002241", "900", "22.403", "20565.00"),
+                    ("002897", "500", "96.601", "28265.00"),
+                )
+            ],
+            "created_by": "agent:codex",
+        }
+        created = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    invocation_id="envelope:kong:draft:create",
+                    payload={"draft": draft},
+                )
+            )
+        )
+        confirmed = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.confirm@1",
+                    payload_schema_version="ConfirmAccountSnapshot@1",
+                    invocation_id="envelope:kong:draft:confirm",
+                    actor_type="user",
+                    expected_revision=1,
+                    payload={"draft_id": "draft_kong_20260728"},
+                )
+            )
+        )
+
+    assert isinstance(created, ApplicationCommandResult)
+    assert created.result["validation_state"] == "valid"
+    assert created.result["account_id"] == "account_kong"
+    assert isinstance(confirmed, ApplicationCommandResult)
+    assert confirmed.result_type == "AccountSnapshotVersion"
+    assert confirmed.result["confirmed_by"] == "user:local-user"
+    assert confirmed.result["source_draft_id"] == "draft_kong_20260728"
+
+
+def test_agent_cannot_register_user_declared_account_identity(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    assert open_platform_operations(data_root).bootstrap()["status"] == "passed"
+    with open_application_commands(data_root) as dispatcher:
+        denied = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:register:denied",
+                    payload={
+                        "account_id": "account_kong",
+                        "alias": "kong",
+                        "base_currency": "CNY",
+                        "source_kind": "user_declared_from_broker_screenshot",
+                        "redacted_source_ref": "local-screenshot:portfolio-20260728",
+                        "registered_at": "2026-07-28T22:37:00+08:00",
+                        "securities": [],
+                    },
+                )
+            )
+        )
+
+    assert isinstance(denied, ApplicationCommandFailure)
+    assert denied.code == "USER_DECISION_CAPABILITY_REQUIRED"
+
+
+def test_account_registration_fails_closed_on_future_security_identity(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    assert open_platform_operations(data_root).bootstrap()["status"] == "passed"
+
+    def registration(
+        account_id: str, alias: str, observed_on: str
+    ) -> dict[str, object]:
+        return {
+            "account_id": account_id,
+            "alias": alias,
+            "base_currency": "CNY",
+            "source_kind": "user_declared_from_broker_screenshot",
+            "redacted_source_ref": f"local-screenshot:{alias}",
+            "registered_at": f"{observed_on}T22:37:00+08:00",
+            "securities": [
+                {
+                    "market": "SZSE",
+                    "code": "002407",
+                    "currency": "CNY",
+                    "observed_on": observed_on,
+                }
+            ],
+        }
+
+    with open_application_commands(data_root) as dispatcher:
+        future = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:future",
+                    actor_type="user",
+                    payload=registration("account_future", "future", "2026-07-29"),
+                )
+            )
+        )
+        conflict = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(
+                _encoded(
+                    command_name="account_snapshot.register_account@2",
+                    payload_schema_version="RegisterAccountForSnapshots@2",
+                    invocation_id="envelope:account:earlier",
+                    actor_type="user",
+                    payload=registration("account_earlier", "earlier", "2026-07-28"),
+                )
+            )
+        )
+
+    assert isinstance(future, ApplicationCommandResult)
+    assert isinstance(conflict, ApplicationCommandFailure)
+    assert conflict.code == "SECURITY_IDENTIFIER_TEMPORAL_CONFLICT"
+
+
 def test_plan_create_challenge_and_confirmation_use_the_same_dispatcher(
     tmp_path: Path,
 ) -> None:
@@ -174,12 +405,8 @@ def test_plan_create_challenge_and_confirmation_use_the_same_dispatcher(
         challenge = dispatcher.dispatch(
             ApplicationCommandEnvelopeV1.from_bytes(
                 _encoded(
-                    command_name=(
-                        "trade_plan.issue_confirmation_challenge@1"
-                    ),
-                    payload_schema_version=(
-                        "IssuePlanConfirmationChallenge@1"
-                    ),
+                    command_name=("trade_plan.issue_confirmation_challenge@1"),
+                    payload_schema_version=("IssuePlanConfirmationChallenge@1"),
                     invocation_id="envelope:plan:challenge",
                     actor_type="user",
                     expected_revision=1,
@@ -202,24 +429,18 @@ def test_plan_create_challenge_and_confirmation_use_the_same_dispatcher(
                 actor_type="user",
                 expected_revision=1,
                 payload={
-                    "expected_draft_hash": raw_challenge[
-                        "expected_draft_hash"
+                    "expected_draft_hash": raw_challenge["expected_draft_hash"],
+                    "expected_diff_hash": raw_challenge["canonical_diff"][
+                        "content_hash"
                     ],
-                    "expected_diff_hash": raw_challenge[
-                        "canonical_diff"
-                    ]["content_hash"],
                     "activation_intent": "confirm_and_activate",
                     "approved_at": "2026-07-27T01:10:00+08:00",
                 },
             )
         )
-        confirm["approval"] = {
-            "challenge_id": raw_challenge["challenge_id"]
-        }
+        confirm["approval"] = {"challenge_id": raw_challenge["challenge_id"]}
         confirmed = dispatcher.dispatch(
-            ApplicationCommandEnvelopeV1.from_bytes(
-                json.dumps(confirm).encode()
-            )
+            ApplicationCommandEnvelopeV1.from_bytes(json.dumps(confirm).encode())
         )
     assert isinstance(confirmed, ApplicationCommandResult)
     assert confirmed.result_type == "PlanConfirmationResult"
@@ -228,8 +449,7 @@ def test_plan_create_challenge_and_confirmation_use_the_same_dispatcher(
     )
     connection = sqlite3.connect(data_root / "platform.sqlite3")
     stored_hash = connection.execute(
-        "SELECT request_hash FROM application_command_receipt "
-        "WHERE invocation_id=?",
+        "SELECT request_hash FROM application_command_receipt " "WHERE invocation_id=?",
         (confirmed.invocation_id,),
     ).fetchone()[0]
     connection.close()
@@ -283,6 +503,7 @@ def test_system_and_first_release_web_plan_mutations_fail_closed(
 
 def test_all_mutations_cross_named_tasks_and_envelope() -> None:
     assert COMMAND_REGISTRY == (
+        "account_snapshot.register_account@2",
         "account_snapshot.create_draft@1",
         "account_snapshot.update_draft@1",
         "account_snapshot.confirm@1",
@@ -303,8 +524,7 @@ def test_all_mutations_cross_named_tasks_and_envelope() -> None:
         "plan_change_proposal.reject@1",
     )
     cli = (
-        Path(__file__).resolve().parents[2]
-        / "src/trading_platform/cli.py"
+        Path(__file__).resolve().parents[2] / "src/trading_platform/cli.py"
     ).read_text(encoding="utf-8")
     assert 'add_parser("application-command")' in cli
     assert 'add_parser("watchlist-add")' not in cli
@@ -315,9 +535,7 @@ def test_all_mutations_cross_named_tasks_and_envelope() -> None:
 def test_envelope_failure_redacts_payload_values() -> None:
     secret = "must-not-leak"
     try:
-        ApplicationCommandEnvelopeV1.from_bytes(
-            json.dumps({"secret": secret}).encode()
-        )
+        ApplicationCommandEnvelopeV1.from_bytes(json.dumps({"secret": secret}).encode())
     except ValueError as error:
         assert getattr(error, "code") == "COMMAND_ENVELOPE_INVALID"
         assert getattr(error, "substep") == "application_command_envelope.decode"

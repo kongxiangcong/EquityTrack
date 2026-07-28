@@ -47,6 +47,7 @@ exact command. CLI is also only an adapter and never upgrades actor capability.
 The finite mutation contracts are:
 
 ```text
+account_snapshot.register_account@2 RegisterAccountForSnapshots@2
 account_snapshot.create_draft@1     CreateAccountSnapshotDraft@1
 account_snapshot.update_draft@1     UpdateAccountSnapshotDraft@1
 account_snapshot.confirm@1          ConfirmAccountSnapshot@1
@@ -67,6 +68,16 @@ plan_change_proposal.create@1       CreatePlanChangeProposal@1
 plan_change_proposal.accept@1       AcceptPlanChangeProposal@1
 plan_change_proposal.reject@1       RejectPlanChangeProposal@1
 ```
+
+`account_snapshot.register_account@2` is the only low-friction registration
+path for a new local account whose first evidence is a user-declared broker
+screenshot. It requires `decision_actor = user:<id>`, registers the local
+account alias and base currency, and records each user-confirmed current
+A-share code with an `observed_on` lower bound that does not claim a listing
+date or pre-observation validity. It persists an immutable command receipt,
+fails closed on a conflicting security-master identity, and does not create or
+confirm an account snapshot, reconstruct transactions, or upgrade screenshot
+evidence to broker reconciliation.
 
 The registry is closed. Commands whose owning ticket has not landed fail
 closed with `COMMAND_NOT_AVAILABLE`; their presence here reserves the canonical

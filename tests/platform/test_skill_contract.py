@@ -14,6 +14,7 @@ def test_skill_uses_shared_application_command_envelope_and_no_direct_storage() 
         "--data-root <root> --envelope-file <command.json>"
     ) in skill
     for command in (
+        "account_snapshot.register_account@2",
         "account_snapshot.create_draft@1",
         "account_snapshot.confirm@1",
         "trade_plan.issue_confirmation_challenge@1",

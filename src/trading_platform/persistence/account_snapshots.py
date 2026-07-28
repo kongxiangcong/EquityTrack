@@ -10,9 +10,12 @@ from trading_platform.application.account_snapshots import (
     ConfirmAccountSnapshot,
     CreateAccountSnapshotDraft,
     GetAccountSnapshot,
+    RegisterAccountForSnapshots,
     UpdateAccountSnapshotDraft,
 )
 from trading_platform.domain.account_snapshots import (
+    AccountRegistration,
+    AccountSecurityIdentity,
     AccountSnapshotDraft,
     AccountSnapshotError,
     AccountSnapshotPosition,
@@ -39,15 +42,58 @@ class SQLiteAccountSnapshotRepository:
         self._writer_lock = writer_lock
         self._service = AccountSnapshotService()
 
+    def register_account(
+        self,
+        command: RegisterAccountForSnapshots,
+        registration: AccountRegistration,
+    ) -> AccountRegistration:
+        request_hash = canonical_hash(command)
+        replay = self._receipt(command.invocation_id, request_hash)
+        if replay is not None:
+            return registration
+        with self._writer_lock.acquire(
+            f"account-registration:{registration.account_id}"
+        ):
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                replay = self._receipt(command.invocation_id, request_hash)
+                if replay is not None:
+                    self._connection.rollback()
+                    return registration
+                self._insert_or_verify_account(registration)
+                self._insert_or_verify_securities(registration.securities)
+                now = datetime.now(timezone.utc).isoformat()
+                self._insert_receipt(
+                    command.invocation_id,
+                    "account_snapshot.register_account@2",
+                    request_hash,
+                    "AccountRegistration",
+                    registration.account_id,
+                    registration.registration_id,
+                    self._actor(
+                        command.decision_actor_type,
+                        command.decision_actor_id,
+                    ),
+                    command.interaction_channel,
+                    self._actor(
+                        command.transport_actor_type,
+                        command.transport_actor_id,
+                    ),
+                    now,
+                )
+                self._connection.commit()
+                return registration
+            except Exception:
+                self._connection.rollback()
+                raise
+
     def create_draft(
         self, command: CreateAccountSnapshotDraft, draft: AccountSnapshotDraft
     ) -> AccountSnapshotDraft:
         request_hash = canonical_hash(command)
         replay = self._receipt(command.invocation_id, request_hash)
         if replay is not None:
-            return load_draft_record(
-                self._connection, replay["revision_or_version_id"]
-            )
+            return load_draft_record(self._connection, replay["revision_or_version_id"])
         now = datetime.now(timezone.utc).isoformat()
         prepared = replace(draft, created_at=now, updated_at=now)
         prepared = self._service.prepare(
@@ -55,9 +101,7 @@ class SQLiteAccountSnapshotRepository:
         )
         owns_transaction = not self._connection.in_transaction
         lock = (
-            self._writer_lock.acquire(
-                f"account-snapshot-draft:{prepared.account_id}"
-            )
+            self._writer_lock.acquire(f"account-snapshot-draft:{prepared.account_id}")
             if owns_transaction
             else nullcontext()
         )
@@ -104,9 +148,7 @@ class SQLiteAccountSnapshotRepository:
         request_hash = canonical_hash(command)
         replay = self._receipt(command.invocation_id, request_hash)
         if replay is not None:
-            return load_draft_record(
-                self._connection, replay["revision_or_version_id"]
-            )
+            return load_draft_record(self._connection, replay["revision_or_version_id"])
         current = load_draft_record(self._connection, draft.draft_id)
         if current.status != "open":
             raise AccountSnapshotError("SNAPSHOT_DRAFT_NOT_OPEN")
@@ -124,9 +166,7 @@ class SQLiteAccountSnapshotRepository:
             ),
             self._latest_version(draft.account_id),
         )
-        with self._writer_lock.acquire(
-            f"account-snapshot-draft:{prepared.account_id}"
-        ):
+        with self._writer_lock.acquire(f"account-snapshot-draft:{prepared.account_id}"):
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 row = self._connection.execute(
@@ -171,9 +211,7 @@ class SQLiteAccountSnapshotRepository:
                 raise
         return prepared
 
-    def confirm(
-        self, command: ConfirmAccountSnapshot
-    ) -> AccountSnapshotVersion:
+    def confirm(self, command: ConfirmAccountSnapshot) -> AccountSnapshotVersion:
         request_hash = canonical_hash(command)
         replay = self._receipt(command.invocation_id, request_hash)
         if replay is not None:
@@ -190,9 +228,7 @@ class SQLiteAccountSnapshotRepository:
         if draft.validation_state != "valid":
             raise AccountSnapshotError("SNAPSHOT_DRAFT_INVALID")
         now = datetime.now(timezone.utc).isoformat()
-        with self._writer_lock.acquire(
-            f"account-snapshot-confirm:{draft.account_id}"
-        ):
+        with self._writer_lock.acquire(f"account-snapshot-confirm:{draft.account_id}"):
             replay = self._receipt(command.invocation_id, request_hash)
             if replay is not None:
                 return load_version_record(
@@ -311,9 +347,7 @@ class SQLiteAccountSnapshotRepository:
                 transition_hash = canonical_hash(
                     {
                         "transition_id": transition_id,
-                        "from": prior.account_snapshot_version_id
-                        if prior
-                        else None,
+                        "from": prior.account_snapshot_version_id if prior else None,
                         "to": version_id,
                         "reason": reason,
                         "actor": actor,
@@ -349,7 +383,9 @@ class SQLiteAccountSnapshotRepository:
                         "AccountSnapshotConfirmed",
                         "AccountSnapshotVersion",
                         version_id,
-                        json.dumps(event_payload, sort_keys=True, separators=(",", ":")),
+                        json.dumps(
+                            event_payload, sort_keys=True, separators=(",", ":")
+                        ),
                         now,
                         event_hash,
                     ),
@@ -415,9 +451,7 @@ class SQLiteAccountSnapshotRepository:
         ).fetchone()
         if row is None:
             raise AccountSnapshotError("SNAPSHOT_NOT_FOUND")
-        return load_version_record(
-            self._connection, row["account_snapshot_version_id"]
-        )
+        return load_version_record(self._connection, row["account_snapshot_version_id"])
 
     def latest(self, account_id: str) -> AccountSnapshotVersion | None:
         return self._latest_version(account_id)
@@ -431,16 +465,118 @@ class SQLiteAccountSnapshotRepository:
             raise AccountSnapshotError("ACCOUNT_NOT_FOUND")
         if account["base_currency"] != draft.currency:
             raise AccountSnapshotError("ACCOUNT_CURRENCY_MISMATCH")
-        known = {
-            row["security_id"]
-            for row in self._connection.execute(
-                "SELECT security_id FROM security WHERE security_id IN "
-                f"({','.join('?' for _ in draft.positions)})",
-                tuple(position.security_id for position in draft.positions),
-            )
-        } if draft.positions else set()
+        known = (
+            {
+                row["security_id"]
+                for row in self._connection.execute(
+                    "SELECT security_id FROM security WHERE security_id IN "
+                    f"({','.join('?' for _ in draft.positions)})",
+                    tuple(position.security_id for position in draft.positions),
+                )
+            }
+            if draft.positions
+            else set()
+        )
         if known != {position.security_id for position in draft.positions}:
             raise AccountSnapshotError("POSITION_SECURITY_NOT_FOUND")
+
+    def _insert_or_verify_account(self, registration: AccountRegistration) -> None:
+        alias = self._connection.execute(
+            "SELECT account_id FROM account WHERE alias=?",
+            (registration.alias,),
+        ).fetchone()
+        if alias is not None and alias["account_id"] != registration.account_id:
+            raise AccountSnapshotError("ACCOUNT_ALIAS_CONFLICT")
+        row = self._connection.execute(
+            "SELECT alias,base_currency,source_snapshot_hash "
+            "FROM account WHERE account_id=?",
+            (registration.account_id,),
+        ).fetchone()
+        if row is None:
+            self._connection.execute(
+                "INSERT INTO account VALUES(?,?,?,?,?)",
+                (
+                    registration.account_id,
+                    registration.alias,
+                    registration.base_currency,
+                    registration.registered_at,
+                    registration.content_hash,
+                ),
+            )
+            return
+        if (
+            row["alias"] != registration.alias
+            or row["base_currency"] != registration.base_currency
+            or row["source_snapshot_hash"] != registration.content_hash
+        ):
+            raise AccountSnapshotError("ACCOUNT_IDENTITY_CONFLICT")
+
+    def _insert_or_verify_securities(
+        self, identities: tuple[AccountSecurityIdentity, ...]
+    ) -> None:
+        for identity in identities:
+            security = self._connection.execute(
+                "SELECT currency FROM security WHERE security_id=?",
+                (identity.security_id,),
+            ).fetchone()
+            if security is None:
+                self._connection.execute(
+                    "INSERT INTO security VALUES(?,?)",
+                    (identity.security_id, identity.currency),
+                )
+            elif security["currency"] != identity.currency:
+                raise AccountSnapshotError("SECURITY_CURRENCY_CONFLICT")
+            identifiers = self._connection.execute(
+                "SELECT i.security_id,s.currency "
+                "FROM security_identifier i JOIN security s USING(security_id) "
+                "WHERE i.market=? AND i.code=? AND i.valid_from<=? "
+                "AND (i.valid_to IS NULL OR i.valid_to>?)",
+                (
+                    identity.market,
+                    identity.code,
+                    identity.observed_on,
+                    identity.observed_on,
+                ),
+            ).fetchall()
+            if len(identifiers) > 1:
+                raise AccountSnapshotError("SECURITY_IDENTIFIER_AMBIGUOUS")
+            if not identifiers:
+                any_identifier = self._connection.execute(
+                    "SELECT security_id FROM security_identifier "
+                    "WHERE market=? AND code=? LIMIT 1",
+                    (identity.market, identity.code),
+                ).fetchone()
+                if any_identifier is not None:
+                    raise AccountSnapshotError("SECURITY_IDENTIFIER_TEMPORAL_CONFLICT")
+                identifier_id = (
+                    "security_identifier_"
+                    + canonical_hash(
+                        {
+                            "security_id": identity.security_id,
+                            "market": identity.market,
+                            "code": identity.code,
+                            "observed_on": identity.observed_on,
+                        }
+                    )[:24]
+                )
+                self._connection.execute(
+                    "INSERT INTO security_identifier VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        identifier_id,
+                        identity.security_id,
+                        identity.market,
+                        identity.code,
+                        identity.observed_on,
+                        "date",
+                        None,
+                        None,
+                    ),
+                )
+            elif (
+                identifiers[0]["security_id"] != identity.security_id
+                or identifiers[0]["currency"] != identity.currency
+            ):
+                raise AccountSnapshotError("SECURITY_IDENTIFIER_CONFLICT")
 
     def _insert_draft(self, draft: AccountSnapshotDraft) -> None:
         self._connection.execute(
@@ -542,16 +678,12 @@ class SQLiteAccountSnapshotRepository:
             (account_id,),
         ).fetchone()
         return (
-            load_version_record(
-                self._connection, row["account_snapshot_version_id"]
-            )
+            load_version_record(self._connection, row["account_snapshot_version_id"])
             if row is not None
             else None
         )
 
-    def _receipt(
-        self, invocation_id: str, request_hash: str
-    ) -> sqlite3.Row | None:
+    def _receipt(self, invocation_id: str, request_hash: str) -> sqlite3.Row | None:
         row = self._connection.execute(
             "SELECT * FROM application_command_receipt WHERE invocation_id=?",
             (invocation_id,),
@@ -574,8 +706,7 @@ class SQLiteAccountSnapshotRepository:
         created_at: str,
     ) -> None:
         self._connection.execute(
-            "INSERT INTO application_command_receipt VALUES("
-            "?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO application_command_receipt VALUES(" "?,?,?,?,?,?,?,?,?,?,?)",
             (
                 invocation_id,
                 command_name,
@@ -618,9 +749,7 @@ class SQLiteAccountSnapshotProjection:
         ).fetchone()
         if row is None:
             raise AccountSnapshotError("SNAPSHOT_NOT_FOUND")
-        return load_version_record(
-            self._connection, row["account_snapshot_version_id"]
-        )
+        return load_version_record(self._connection, row["account_snapshot_version_id"])
 
     def latest(self, account_id: str) -> AccountSnapshotVersion | None:
         row = self._connection.execute(
@@ -629,19 +758,13 @@ class SQLiteAccountSnapshotProjection:
             (account_id,),
         ).fetchone()
         return (
-            load_version_record(
-                self._connection, row["account_snapshot_version_id"]
-            )
+            load_version_record(self._connection, row["account_snapshot_version_id"])
             if row is not None
             else None
         )
 
-    def version(
-        self, account_snapshot_version_id: str
-    ) -> AccountSnapshotVersion:
-        return load_version_record(
-            self._connection, account_snapshot_version_id
-        )
+    def version(self, account_snapshot_version_id: str) -> AccountSnapshotVersion:
+        return load_version_record(self._connection, account_snapshot_version_id)
 
     def account_ids(self) -> tuple[str, ...]:
         return tuple(

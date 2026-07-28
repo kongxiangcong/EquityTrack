@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
+import re
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -37,6 +38,29 @@ class AccountSnapshotPosition:
 
 
 @dataclass(frozen=True)
+class AccountSecurityIdentity:
+    market: str
+    code: str
+    currency: str
+    observed_on: str
+    security_id: str = ""
+    content_hash: str = ""
+
+
+@dataclass(frozen=True)
+class AccountRegistration:
+    account_id: str
+    alias: str
+    base_currency: str
+    source_kind: str
+    redacted_source_ref: str
+    registered_at: str
+    securities: tuple[AccountSecurityIdentity, ...]
+    registration_id: str = ""
+    content_hash: str = ""
+
+
+@dataclass(frozen=True)
 class AccountSnapshotDraft:
     draft_id: str
     account_id: str
@@ -47,9 +71,7 @@ class AccountSnapshotDraft:
     as_of_at: str
     as_of_precision: Literal["date", "instant"]
     timezone: str
-    session_semantics: Literal[
-        "complete_session", "intraday", "legacy_unknown"
-    ]
+    session_semantics: Literal["complete_session", "intraday", "legacy_unknown"]
     currency: str
     cash_state: ValueState
     cash_value: str | None
@@ -124,6 +146,87 @@ class AccountSnapshotService:
 
     _VALUE_STATES = {"known", "unknown", "not_applicable"}
     _SESSION_SEMANTICS = {"complete_session", "intraday", "legacy_unknown"}
+    _A_SHARE_MARKETS = {"SSE", "SZSE", "BSE"}
+    _SCREENSHOT_SOURCE = "user_declared_from_broker_screenshot"
+
+    def prepare_registration(
+        self, registration: AccountRegistration
+    ) -> AccountRegistration:
+        if not re.fullmatch(
+            r"account_[a-z0-9][a-z0-9_-]{1,63}", registration.account_id
+        ):
+            raise AccountSnapshotError("ACCOUNT_ID_INVALID")
+        alias = registration.alias.strip()
+        if not alias:
+            raise AccountSnapshotError("ACCOUNT_ALIAS_REQUIRED")
+        currency = registration.base_currency.upper()
+        if currency != "CNY":
+            raise AccountSnapshotError("ACCOUNT_CURRENCY_UNSUPPORTED")
+        if registration.source_kind != self._SCREENSHOT_SOURCE:
+            raise AccountSnapshotError("ACCOUNT_REGISTRATION_SOURCE_UNSUPPORTED")
+        if not registration.redacted_source_ref.strip():
+            raise AccountSnapshotError("ACCOUNT_SOURCE_REFERENCE_REQUIRED")
+        try:
+            registered_at = datetime.fromisoformat(registration.registered_at)
+        except ValueError as error:
+            raise AccountSnapshotError("ACCOUNT_REGISTERED_AT_INVALID") from error
+        if registered_at.tzinfo is None:
+            raise AccountSnapshotError("ACCOUNT_REGISTERED_AT_OFFSET_REQUIRED")
+
+        seen: set[tuple[str, str]] = set()
+        identities: list[AccountSecurityIdentity] = []
+        for identity in registration.securities:
+            market = identity.market.upper()
+            code = identity.code.strip()
+            security_currency = identity.currency.upper()
+            key = (market, code)
+            if market not in self._A_SHARE_MARKETS:
+                raise AccountSnapshotError("SECURITY_MARKET_UNSUPPORTED")
+            if not re.fullmatch(r"\d{6}", code):
+                raise AccountSnapshotError("SECURITY_CODE_INVALID")
+            if security_currency != "CNY":
+                raise AccountSnapshotError("SECURITY_CURRENCY_UNSUPPORTED")
+            try:
+                observed_on = date.fromisoformat(identity.observed_on)
+            except ValueError as error:
+                raise AccountSnapshotError("SECURITY_OBSERVED_ON_INVALID") from error
+            if observed_on > registered_at.date():
+                raise AccountSnapshotError("SECURITY_OBSERVED_AFTER_REGISTRATION")
+            if key in seen:
+                raise AccountSnapshotError("SECURITY_IDENTITY_DUPLICATE")
+            seen.add(key)
+            security_id = identity.security_id or (
+                "security_" + canonical_hash({"market": market, "code": code})[:24]
+            )
+            if not re.fullmatch(r"security_[a-z0-9_]{3,64}", security_id):
+                raise AccountSnapshotError("SECURITY_ID_INVALID")
+            normalized = AccountSecurityIdentity(
+                market=market,
+                code=code,
+                currency=security_currency,
+                observed_on=observed_on.isoformat(),
+                security_id=security_id,
+            )
+            identities.append(
+                replace(normalized, content_hash=canonical_hash(normalized))
+            )
+
+        prepared = replace(
+            registration,
+            alias=alias,
+            base_currency=currency,
+            securities=tuple(
+                sorted(identities, key=lambda item: (item.market, item.code))
+            ),
+            registration_id="",
+            content_hash="",
+        )
+        content_hash = canonical_hash(prepared)
+        return replace(
+            prepared,
+            registration_id=f"account_registration_{content_hash[:24]}",
+            content_hash=content_hash,
+        )
 
     def prepare(
         self,
@@ -198,9 +301,11 @@ class AccountSnapshotService:
             )
             normalized = replace(
                 position,
-                total_quantity=self._render(total)
-                if total is not None
-                else position.total_quantity,
+                total_quantity=(
+                    self._render(total)
+                    if total is not None
+                    else position.total_quantity
+                ),
                 available_quantity_value=self._normalized_optional(
                     position.available_quantity_state,
                     position.available_quantity_value,
@@ -217,6 +322,32 @@ class AccountSnapshotService:
             prepared_positions.append(
                 replace(normalized, content_hash=canonical_hash(normalized))
             )
+        if (
+            draft.nav_state == "known"
+            and draft.cash_state == "known"
+            and all(
+                position.market_value_state == "known"
+                for position in prepared_positions
+            )
+        ):
+            nav = self._decimal(draft.nav_value)
+            cash = self._decimal(draft.cash_value)
+            market_values = tuple(
+                self._decimal(position.market_value_value)
+                for position in prepared_positions
+            )
+            if (
+                nav is not None
+                and cash is not None
+                and all(value is not None for value in market_values)
+                and nav
+                != cash
+                + sum(
+                    (value for value in market_values if value is not None),
+                    Decimal(0),
+                )
+            ):
+                errors.append("NAV_RECONCILIATION_MISMATCH")
         if draft.corrects_snapshot_version_id and not (
             draft.correction_reason and draft.correction_reason.strip()
         ):
@@ -224,6 +355,8 @@ class AccountSnapshotService:
         if draft.revises_snapshot_version_id and draft.corrects_snapshot_version_id:
             errors.append("SNAPSHOT_RELATION_AMBIGUOUS")
         impacts = self._capability_impacts(draft, tuple(prepared_positions))
+        if "NAV_RECONCILIATION_MISMATCH" in errors:
+            impacts = tuple(sorted((*impacts, "nav_reconciliation_conflict")))
         canonical_diff = self._canonical_diff(draft, tuple(prepared_positions), prior)
         canonical_diff_hash = canonical_hash(canonical_diff)
         prepared = replace(
@@ -291,17 +424,11 @@ class AccountSnapshotService:
             "session_semantics": draft.session_semantics,
             "currency": draft.currency.upper(),
             "cash_state": draft.cash_state,
-            "cash_value": self._normalized_optional(
-                draft.cash_state, draft.cash_value
-            ),
+            "cash_value": self._normalized_optional(draft.cash_state, draft.cash_value),
             "nav_state": draft.nav_state,
-            "nav_value": self._normalized_optional(
-                draft.nav_state, draft.nav_value
-            ),
+            "nav_value": self._normalized_optional(draft.nav_state, draft.nav_value),
             "fees_state": draft.fees_state,
-            "fees_value": self._normalized_optional(
-                draft.fees_state, draft.fees_value
-            ),
+            "fees_value": self._normalized_optional(draft.fees_state, draft.fees_value),
             "positions": position_values(positions),
         }
         return json.dumps(
@@ -400,6 +527,8 @@ class AccountSnapshotService:
 
 
 __all__ = [
+    "AccountRegistration",
+    "AccountSecurityIdentity",
     "AccountSnapshotDraft",
     "AccountSnapshotError",
     "AccountSnapshotPosition",

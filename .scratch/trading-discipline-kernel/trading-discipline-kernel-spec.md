@@ -388,6 +388,27 @@ HardRule 永不产生 ExecutionRecord。`blocked` 是 run/item 事实；`manual_
 
 ## 11. AccountSnapshot graph
 
+### 11.0 New local account registration
+
+`RegisterAccountForSnapshots@2` is the only low-friction identity prerequisite
+when the first account evidence is a user-declared broker screenshot. It
+requires a user decision actor and supplies:
+
+```text
+account_id, alias, base_currency
+source_kind = user_declared_from_broker_screenshot
+redacted_source_ref, registered_at
+securities[]:
+  market, code, currency, observed_on
+```
+
+`observed_on` is only the lower bound at which the user confirmed the current
+code mapping. It is not a listing date and does not assert pre-observation
+validity. The application derives stable internal security IDs, fails closed
+on conflicting security-master identity, and writes one immutable idempotent
+receipt. Registration does not create or confirm a snapshot and does not
+upgrade screenshot evidence to broker reconciliation.
+
 ### 11.1 Draft
 
 `AccountSnapshotDraft@1`：
@@ -841,6 +862,7 @@ ApplicationCommandReceipt@1:
 首版 mutation registry 是闭集：
 
 ```text
+account_snapshot.register_account@2
 account_snapshot.create_draft@1
 account_snapshot.update_draft@1
 account_snapshot.confirm@1

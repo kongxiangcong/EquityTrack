@@ -4,11 +4,23 @@ from dataclasses import dataclass
 from typing import Protocol, TypeAlias
 
 from trading_platform.domain.account_snapshots import (
+    AccountRegistration,
     AccountSnapshotDraft,
     AccountSnapshotError,
     AccountSnapshotService,
     AccountSnapshotVersion,
 )
+
+
+@dataclass(frozen=True)
+class RegisterAccountForSnapshots:
+    invocation_id: str
+    registration: AccountRegistration
+    decision_actor_type: str
+    decision_actor_id: str
+    interaction_channel: str
+    transport_actor_type: str
+    transport_actor_id: str
 
 
 @dataclass(frozen=True)
@@ -54,13 +66,20 @@ class GetAccountSnapshot:
 
 
 AccountSnapshotCommand: TypeAlias = (
-    CreateAccountSnapshotDraft
+    RegisterAccountForSnapshots
+    | CreateAccountSnapshotDraft
     | UpdateAccountSnapshotDraft
     | ConfirmAccountSnapshot
 )
 
 
 class AccountSnapshotRepository(Protocol):
+    def register_account(
+        self,
+        command: RegisterAccountForSnapshots,
+        registration: AccountRegistration,
+    ) -> AccountRegistration: ...
+
     def create_draft(
         self, command: CreateAccountSnapshotDraft, draft: AccountSnapshotDraft
     ) -> AccountSnapshotDraft: ...
@@ -69,9 +88,7 @@ class AccountSnapshotRepository(Protocol):
         self, command: UpdateAccountSnapshotDraft, draft: AccountSnapshotDraft
     ) -> AccountSnapshotDraft: ...
 
-    def confirm(
-        self, command: ConfirmAccountSnapshot
-    ) -> AccountSnapshotVersion: ...
+    def confirm(self, command: ConfirmAccountSnapshot) -> AccountSnapshotVersion: ...
 
     def get(
         self, query: GetAccountSnapshot
@@ -93,7 +110,7 @@ class AccountSnapshotCommands:
 
     def execute(
         self, command: AccountSnapshotCommand
-    ) -> AccountSnapshotDraft | AccountSnapshotVersion:
+    ) -> AccountRegistration | AccountSnapshotDraft | AccountSnapshotVersion:
         if not command.invocation_id:
             raise AccountSnapshotError("COMMAND_INVOCATION_ID_REQUIRED")
         if (
@@ -104,6 +121,11 @@ class AccountSnapshotCommands:
             or not command.transport_actor_id
         ):
             raise AccountSnapshotError("COMMAND_ACTOR_METADATA_INVALID")
+        if isinstance(command, RegisterAccountForSnapshots):
+            if command.decision_actor_type != "user":
+                raise AccountSnapshotError("USER_CONFIRMATION_CAPABILITY_REQUIRED")
+            registration = self._service.prepare_registration(command.registration)
+            return self._repository.register_account(command, registration)
         if isinstance(command, CreateAccountSnapshotDraft):
             if command.draft.status != "open":
                 raise AccountSnapshotError("SNAPSHOT_DRAFT_STATUS_INVALID")
@@ -146,6 +168,7 @@ class AccountSnapshotQueries:
 
 
 __all__ = [
+    "RegisterAccountForSnapshots",
     "AccountSnapshotCommands",
     "AccountSnapshotQueries",
     "ConfirmAccountSnapshot",

@@ -29,11 +29,13 @@ if TYPE_CHECKING:
         TradePlanTasks,
     )
     from .account_snapshots import (
+        AccountRegistration,
         AccountSnapshotCommands,
         AccountSnapshotQueries,
         ConfirmAccountSnapshot,
         CreateAccountSnapshotDraft,
         GetAccountSnapshot,
+        RegisterAccountForSnapshots,
         UpdateAccountSnapshotDraft,
     )
     from .command_envelope import (
@@ -150,6 +152,7 @@ if TYPE_CHECKING:
     )
 
 _EXPORT_MODULES = {
+    "AccountRegistration": "trading_platform.domain.account_snapshots",
     "AccountStateQueries": ".account_state",
     "CompareConfirmedAccountState": ".account_state",
     "GetEstimatedAccountState": ".account_state",
@@ -171,6 +174,7 @@ _EXPORT_MODULES = {
     "ConfirmAccountSnapshot": ".account_snapshots",
     "CreateAccountSnapshotDraft": ".account_snapshots",
     "GetAccountSnapshot": ".account_snapshots",
+    "RegisterAccountForSnapshots": ".account_snapshots",
     "UpdateAccountSnapshotDraft": ".account_snapshots",
     "ApplicationCommandEnvelopeV1": ".command_envelope",
     "ApprovalCapability": ".command_envelope",

@@ -71,15 +71,14 @@ class TransportActor:
 
 
 _PAYLOAD_SCHEMAS = {
+    "account_snapshot.register_account@2": "RegisterAccountForSnapshots@2",
     "account_snapshot.create_draft@1": "CreateAccountSnapshotDraft@1",
     "account_snapshot.update_draft@1": "UpdateAccountSnapshotDraft@1",
     "account_snapshot.confirm@1": "ConfirmAccountSnapshot@1",
     "trade_plan.create_draft@1": "CreateTradePlanDraft@1",
     "trade_plan.revise_draft@1": "ReviseTradePlanDraft@1",
     "trade_plan.reject_draft@1": "RejectTradePlanDraft@1",
-    "trade_plan.issue_confirmation_challenge@1": (
-        "IssuePlanConfirmationChallenge@1"
-    ),
+    "trade_plan.issue_confirmation_challenge@1": ("IssuePlanConfirmationChallenge@1"),
     "trade_plan.confirm@1": "ConfirmTradePlanDraft@1",
     "manual_portfolio_review.run@1": "RunManualPortfolioReview@1",
     "decision_task.defer@1": "DeferDecisionTask@1",
@@ -118,8 +117,7 @@ class ApplicationCommandEnvelopeV1:
         if not self.invocation_id:
             raise CommandEnvelopeError("COMMAND_INVOCATION_ID_REQUIRED")
         if self.expected_revision is not None and (
-            isinstance(self.expected_revision, bool)
-            or self.expected_revision < 1
+            isinstance(self.expected_revision, bool) or self.expected_revision < 1
         ):
             raise CommandEnvelopeError("COMMAND_EXPECTED_REVISION_INVALID")
         if not isinstance(self.payload, Mapping):
@@ -135,9 +133,7 @@ class ApplicationCommandEnvelopeV1:
             decision = raw["decision_actor"]
             transport = raw["transport_actor"]
             approval = raw.get("approval")
-            if not isinstance(decision, Mapping) or not isinstance(
-                transport, Mapping
-            ):
+            if not isinstance(decision, Mapping) or not isinstance(transport, Mapping):
                 raise TypeError("actor object required")
             if approval is not None and not isinstance(approval, Mapping):
                 raise TypeError("approval object required")
@@ -154,16 +150,13 @@ class ApplicationCommandEnvelopeV1:
                 decision_actor=DecisionActor(
                     str(decision["actor_type"]), str(decision["actor_id"])
                 ),
-                interaction_channel=InteractionChannel(
-                    str(raw["interaction_channel"])
-                ),
+                interaction_channel=InteractionChannel(str(raw["interaction_channel"])),
                 transport_actor=TransportActor(
                     str(transport["actor_type"]), str(transport["actor_id"])
                 ),
                 approval_challenge_id=(
                     str(approval["challenge_id"])
-                    if approval is not None
-                    and approval.get("challenge_id") is not None
+                    if approval is not None and approval.get("challenge_id") is not None
                     else None
                 ),
                 payload=raw["payload"],
