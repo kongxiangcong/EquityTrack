@@ -208,7 +208,7 @@ def test_fresh_and_populated_roots_upgrade_idempotently(tmp_path: Path) -> None:
     fresh.migrate()
     assert fresh.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 17
+    ).fetchone()[0] == 18
     fresh.close()
 
     data_root, _ = _legacy_root(tmp_path)
@@ -338,7 +338,7 @@ def test_strategy_plan_0016_installs_full_cohort_schema_idempotently(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 17
+    ).fetchone()[0] == 18
     expected_tables = {
         "investment_thesis_version",
         "strategy_definition",
@@ -830,7 +830,7 @@ def test_strategy_plan_0016_rolls_back_and_replays_after_injected_failure(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 17
+    ).fetchone()[0] == 18
     assert store.connection.execute(
         "SELECT count(*) FROM strategy_version "
         "WHERE publicly_selectable=1"
@@ -846,7 +846,7 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 17
+    ).fetchone()[0] == 18
     expected = {
         "manual_portfolio_review_run",
         "manual_portfolio_review_item",
@@ -999,8 +999,65 @@ def test_manual_review_0017_rolls_back_and_replays_after_injected_failure(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 17
+    ).fetchone()[0] == 18
+
+
+def test_terminal_financial_0018_is_installed_and_immutable(
+    tmp_path: Path,
+) -> None:
+    store = PlatformStore(tmp_path / "terminal-financial", ROOT / "migrations")
+    store.migrate()
+    columns = {
+        row["name"]
+        for row in store.connection.execute(
+            "PRAGMA table_info(terminal_financial_statement_version)"
+        )
+    }
+    assert {
+        "normalized_version_id",
+        "security_id",
+        "statement_kind",
+        "period_end",
+        "extracted_fields_json",
+    } <= columns
+    triggers = {
+        row["name"]
+        for row in store.connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name="
+            "'terminal_financial_statement_version'"
+        )
+    }
+    assert triggers == {
+        "terminal_financial_statement_no_update",
+        "terminal_financial_statement_no_delete",
+    }
     store.close()
+
+
+def test_migration_identity_is_stable_across_lf_and_crlf_checkouts(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "newline-portable"
+    lf_root = _copy_migrations(tmp_path, 18)
+    first = PlatformStore(data_root, lf_root)
+    first.migrate()
+    first.close()
+
+    crlf_root = tmp_path / "migrations-crlf"
+    crlf_root.mkdir()
+    for source in sorted(lf_root.glob("*.sql")):
+        text = source.read_text(encoding="utf-8")
+        (crlf_root / source.name).write_bytes(
+            text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+        )
+
+    reopened = PlatformStore(data_root, crlf_root)
+    reopened.migrate()
+    assert reopened.connection.execute(
+        "SELECT max(version) FROM schema_migration"
+    ).fetchone()[0] == 18
+    reopened.close()
 
 
 def test_manual_review_0017_preflight_collision_is_a_noop(

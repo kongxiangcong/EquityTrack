@@ -905,7 +905,7 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
                     "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
                     "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
                     "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
-                    "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
+                    "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "optional" if dataset == "cashflow" else "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "quarantine" if dataset == "cashflow" else "block"} for dataset in ("trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow")],
                 },
                 "request": {
                     "invocation_id": "missing-credential",
@@ -1127,7 +1127,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
                         "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
                         "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
                         "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
-                        "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "block"} for dataset in ("trade_cal", "market_universe", "daily")],
+                        "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "optional" if dataset == "cashflow" else "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "quarantine" if dataset == "cashflow" else "block"} for dataset in ("trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow")],
                     },
                     "request": {
                         "invocation_id": "i",

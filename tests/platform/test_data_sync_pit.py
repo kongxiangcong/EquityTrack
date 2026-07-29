@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import Capability, CapabilityStatus, HealthQuery, SecurityIdentity
 from trading_platform.data.providers import FixtureProvider, TransportResponse, TushareCompatibleProvider
-from trading_platform.domain.data import CompletenessRequirement, DistributionQualification, FallbackMode, FetchStatus, FixtureRights, FreshnessStatus, MarketDataCapability, ProviderCapabilityStatus, QualifiedEquivalentBinding, QualityStatus, QueryPolicy, SnapshotPurpose, SourceAuthority, SourceFailureDisposition, SourcePolicy, SourceRights, SourceRoute, SyncRequest, SyncStatus, TradingCalendarQuery
+from trading_platform.domain.data import CompletenessRequirement, DistributionQualification, FallbackMode, FetchStatus, FinancialStatementQuery, FixtureRights, FreshnessStatus, MarketDataCapability, ProviderCapabilityStatus, QualifiedEquivalentBinding, QualityStatus, QueryPolicy, SnapshotPurpose, SourceAuthority, SourceFailureDisposition, SourcePolicy, SourceRights, SourceRoute, SyncRequest, SyncStatus, TradingCalendarQuery
 
 
 def _bytes(rows: list[dict[str, object]]) -> bytes:
@@ -175,6 +175,69 @@ def test_tushare_transport_failures_have_typed_redacted_outcomes() -> None:
     assert rejected.error_code != expired.error_code
 
 
+def test_tushare_financial_statement_queries_use_typed_api_contract() -> None:
+    calls: list[dict[str, object]] = []
+
+    def transport(request):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        return TransportResponse(
+            json.dumps(
+                {
+                    "code": 0,
+                    "data": {
+                        "fields": ["ts_code", "ann_date", "end_date"],
+                        "items": [["002897.SZ", "20260429", "20260331"]],
+                    },
+                }
+            ).encode(),
+            {},
+        )
+
+    provider = TushareCompatibleProvider(
+        "gateway",
+        "tushare-http@2",
+        "http://127.0.0.1:9/",
+        "secret-not-logged",
+        "source",
+        "terms@1",
+        transport,
+    )
+    for dataset in ("income", "balancesheet", "cashflow"):
+        result = provider.fetch(
+            FinancialStatementQuery(
+                "financial-query",
+                "security_yihua",
+                "002897",
+                "SZSE",
+                dataset,
+                "2025-01-01",
+                "2026-07-28",
+                None,
+                "security_yihua",
+                True,
+            )
+        )
+        assert result.envelopes[0].status is FetchStatus.COMPLETE
+
+    assert [call["api_name"] for call in calls] == [
+        "income",
+        "balancesheet",
+        "cashflow",
+    ]
+    assert all(
+        call["params"] == {
+            "ts_code": "002897.SZ",
+            "start_date": "20250101",
+            "end_date": "20260728",
+        }
+        for call in calls
+    )
+    assert "secret-not-logged" not in json.dumps(
+        [{"api_name": call["api_name"], "params": call["params"]} for call in calls]
+    )
+
+
 def test_partial_provider_response_is_persisted_and_blocks_required_route(tmp_path: Path) -> None:
     class PartialFixtureProvider(FixtureProvider):
         def fetch(self, request):
@@ -289,14 +352,100 @@ def test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path(tm
     root = PlatformTaskFixture(tmp_path, **_composition(provider, "preconfigured_tushare_compatible_non_official", SourceAuthority.STRUCTURED_AGGREGATOR, "gateway-terms-unknown"))
     root.watchlist.add("watch:yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
     result = root.data.sync(replace(_request("authorized-live"), network_authorized=True))
-    assert result.status is SyncStatus.MISSING
+    assert result.status is SyncStatus.COMPLETE
     assert calls == ["trade_cal", "stock_basic", "daily"]
     row = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT open_decimal,close_decimal,volume_decimal,amount_decimal FROM ohlcv_version").fetchone()
     assert tuple(row) == ("88.51", "82.33", "221879.03", "1926373.75544")
     attempts_json = json.dumps([dict(row) for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT * FROM provider_attempt")])
     assert "not-logged-secret" not in attempts_json
     assert "preconfigured_tushare_compatible_non_official" in attempts_json
-    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM data_snapshot_member").fetchone()[0] == 0
+    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM data_snapshot_member").fetchone()[0] > 0
+    root.close()
+
+
+def test_single_security_universes_do_not_cross_contaminate_snapshots(
+    tmp_path: Path,
+) -> None:
+    def transport(request):
+        body = json.loads(request.data.decode("utf-8"))
+        code = body["params"].get("ts_code", "002897.SZ")
+        if body["api_name"] == "trade_cal":
+            response = {
+                "data": {
+                    "fields": ["exchange", "cal_date", "is_open"],
+                    "items": [["SZSE", "20260710", 1]],
+                }
+            }
+        elif body["api_name"] == "stock_basic":
+            response = {
+                "data": {
+                    "fields": ["ts_code", "list_date"],
+                    "items": [[code, "20100101"]],
+                }
+            }
+        else:
+            response = {
+                "data": {
+                    "fields": [
+                        "ts_code",
+                        "trade_date",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "vol",
+                        "amount",
+                    ],
+                    "items": [
+                        [code, "20260710", 10, 11, 9, 10, 100, 1000]
+                    ],
+                }
+            }
+        return TransportResponse(json.dumps(response).encode(), {})
+
+    provider = TushareCompatibleProvider(
+        "gateway",
+        "tushare-http@2",
+        "http://127.0.0.1:9/",
+        "secret",
+        "source:terminal",
+        "terms@1",
+        transport,
+    )
+    root = PlatformTaskFixture(
+        tmp_path,
+        **_composition(
+            provider,
+            "source:terminal",
+            SourceAuthority.STRUCTURED_AGGREGATOR,
+            "terms@1",
+        ),
+    )
+    securities = (
+        ("security_first", "002897"),
+        ("security_second", "002407"),
+    )
+    for security_id, code in securities:
+        root.watchlist.add(
+            f"watch:{security_id}",
+            SecurityIdentity(
+                security_id,
+                "SZSE",
+                code,
+                "CNY",
+                "2010-01-01",
+            ),
+        )
+        result = root.data.sync(
+            replace(
+                _request(f"sync:{security_id}"),
+                security_id=security_id,
+                security_code=code,
+                network_authorized=True,
+            )
+        )
+        assert result.status is SyncStatus.COMPLETE
+        assert result.coverage.missing == 0
     root.close()
 
 

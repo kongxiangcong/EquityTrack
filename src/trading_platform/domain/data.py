@@ -298,6 +298,24 @@ class OfficialFilingQuery:
 
 
 @dataclass(frozen=True)
+class FinancialStatementQuery:
+    invocation_id: str
+    security_id: str
+    security_code: str
+    venue: str
+    dataset: str
+    start_date: str
+    end_date: str
+    dataset_cursor: str | None
+    scope_id: str
+    network_authorized: bool
+
+    def __post_init__(self) -> None:
+        if self.dataset not in {"income", "balancesheet", "cashflow"}:
+            raise ValueError("FINANCIAL_STATEMENT_DATASET_INVALID")
+
+
+@dataclass(frozen=True)
 class ForecastActualQuery:
     invocation_id: str
     security_id: str
@@ -316,6 +334,7 @@ TypedDatasetQuery = (
     | DailyOhlcvQuery
     | SecurityMasterQuery
     | OfficialFilingQuery
+    | FinancialStatementQuery
     | ForecastActualQuery
 )
 
@@ -361,6 +380,19 @@ class QueryPolicy:
                 request.security_id,
                 request.security_code,
                 request.market,
+                start_date,
+                end_date,
+                cursor,
+                request.security_id,
+                request.network_authorized,
+            )
+        if dataset in {"income", "balancesheet", "cashflow"}:
+            return FinancialStatementQuery(
+                request.invocation_id,
+                request.security_id,
+                request.security_code,
+                request.market,
+                dataset,
                 start_date,
                 end_date,
                 cursor,

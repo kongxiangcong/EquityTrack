@@ -87,10 +87,29 @@ def canonical_preconfigured_source_policy() -> SourcePolicy:
         SourceRights(True, True, True, True, False, "2026-07-24"),
         tuple(
             SourceRoute(
-                dataset, 1, CompletenessRequirement.REQUIRED, 1,
-                FallbackMode.NO_FALLBACK, SourceFailureDisposition.BLOCK,
+                dataset,
+                1,
+                (
+                    CompletenessRequirement.OPTIONAL
+                    if dataset == "cashflow"
+                    else CompletenessRequirement.REQUIRED
+                ),
+                1,
+                FallbackMode.NO_FALLBACK,
+                (
+                    SourceFailureDisposition.QUARANTINE
+                    if dataset == "cashflow"
+                    else SourceFailureDisposition.BLOCK
+                ),
             )
-            for dataset in ("trade_cal", "market_universe", "daily")
+            for dataset in (
+                "trade_cal",
+                "market_universe",
+                "daily",
+                "income",
+                "balancesheet",
+                "cashflow",
+            )
         ),
     )
 

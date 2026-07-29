@@ -11,12 +11,11 @@ import pytest
 
 from trading_platform.application.workflow_ledger import WorkflowPersistenceError
 from pathlib import Path
-from trading_platform.acceptance import AcceptanceEvidenceService
-
 from trading_platform.operations import OperationError
 from trading_platform.persistence import PlatformStore
 from trading_platform.provider_qualification import LedgerQualifiedEquivalentAuthority
 from trading_platform.application import (
+    open_acceptance_evidence,
     open_platform_operations,
     open_provider_qualification,
 )
@@ -30,6 +29,9 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
         "trade_cal": {"code": 0, "data": {"fields": ["exchange", "cal_date", "is_open"], "items": [["SZSE", "20260710", 1]]}},
         "stock_basic": {"code": 0, "data": {"fields": ["ts_code", "list_date"], "items": [["002897.SZ", "20170907"]]}},
         "daily": {"code": 0, "data": {"fields": ["ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"], "items": [["002897.SZ", "20260710", 88.51, 91.0, 82.33, 82.33, 221879.03, 1926373.75544]]}},
+        "income": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "revenue", "n_income_attr_p"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 1000.0, 100.0]]}},
+        "balancesheet": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "money_cap", "st_borr"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 500.0, 200.0]]}},
+        "cashflow": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "n_cashflow_act", "c_pay_acq_const_fiolta"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 150.0, 50.0]]}},
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -62,7 +64,7 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
             },
             "query_policy": {
                 "schema_version": "QueryPolicy@1",
-                "lookback_days": 7,
+                "lookback_days": 550,
                 "market_universe_list_status": "L",
                 "adjustment_mode": "none",
             },
@@ -85,13 +87,28 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
                 "routes": [
                     {
                         "dataset": dataset,
-                        "freshness_max_stale_days": 1,
-                        "completeness": "required",
-                        "retry_max_attempts": 1,
+                            "freshness_max_stale_days": 1,
+                        "completeness": (
+                            "optional"
+                            if dataset == "cashflow"
+                            else "required"
+                        ),
+                            "retry_max_attempts": 1,
                         "fallback": "no_fallback",
-                        "failure_disposition": "block",
+                        "failure_disposition": (
+                            "quarantine"
+                            if dataset == "cashflow"
+                            else "block"
+                        ),
                     }
-                    for dataset in ("trade_cal", "market_universe", "daily")
+                    for dataset in (
+                        "trade_cal",
+                        "market_universe",
+                        "daily",
+                        "income",
+                        "balancesheet",
+                        "cashflow",
+                    )
                 ],
             },
             "request": {
@@ -103,7 +120,14 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
                 "market_timezone": "Asia/Shanghai",
                 "market": "SZSE",
                 "snapshot_purpose": "workflow",
-                "datasets": ["trade_cal", "market_universe", "daily"],
+                "datasets": [
+                    "trade_cal",
+                    "market_universe",
+                    "daily",
+                    "income",
+                    "balancesheet",
+                    "cashflow",
+                ],
                 "network_authorized": True,
                 "offline": False,
             },
@@ -127,6 +151,22 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
         ) as replay_qualification:
             replay_result = replay_qualification.run()
         assert replay_result.receipt_artifact_id == result.receipt_artifact_id
+        cached_job = json.loads(job_path.read_text(encoding="utf-8"))
+        cached_job["request"]["invocation_id"] = "qualify-cached"
+        cached_job_path = tmp_path / "cached-job.json"
+        cached_job_path.write_text(
+            json.dumps(cached_job),
+            encoding="utf-8",
+        )
+        with open_provider_qualification(
+            tmp_path / "data",
+            cached_job_path,
+            provider_runtime=LoopbackTushareRuntime(
+                f"http://127.0.0.1:{server.server_port}/"
+            ),
+        ) as cached_qualification:
+            cached_result = cached_qualification.run()
+        assert cached_result.status == "qualified"
 
     finally:
         server.shutdown()
@@ -134,15 +174,30 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
 
     assert result.status == "qualified"
     assert result.provider_identity == "preconfigured_tushare_compatible_non_official"
-    assert {item.dataset for item in result.attempts} == {"trade_cal", "market_universe", "daily"}
+    assert {item.dataset for item in result.attempts} == {
+        "trade_cal",
+        "market_universe",
+        "daily",
+        "income",
+        "balancesheet",
+        "cashflow",
+    }
     assert all(item.status == "complete" and item.raw_sha256 is not None and len(item.raw_sha256) == 64 for item in result.attempts)
     assert "secret-not-for-artifacts" not in json.dumps(result.to_dict())
-    assert calls == ["trade_cal", "stock_basic", "daily"]
+    expected_calls = [
+        "trade_cal",
+        "stock_basic",
+        "daily",
+        "income",
+        "balancesheet",
+        "cashflow",
+    ]
+    assert calls == expected_calls * 2
     artifact_id = result.receipt_artifact_id
-    nonproduction_failures: list[str] = []
-    nonproduction = AcceptanceEvidenceService._live_qualification(
-        result.to_dict(), nonproduction_failures
-    )
+    live = open_acceptance_evidence(
+        tmp_path / "data",
+        Path(__file__).resolve().parents[2],
+    )._live_status(artifact_id)
     repo = Path(__file__).resolve().parents[2]
     store = PlatformStore(tmp_path / "data", repo / "migrations")
     try:
@@ -157,7 +212,7 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
     finally:
         store.close()
 
-    assert nonproduction["status"] == "failed" and "LIVE_QUALIFICATION_EVIDENCE_INVALID" in nonproduction_failures
+    assert live["status"] == "qualified"
     assert artifact_id.startswith("artifact_")
     with sqlite3.connect(tmp_path / "data/platform.sqlite3") as connection:
         receipt = connection.execute(

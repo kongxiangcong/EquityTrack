@@ -217,9 +217,26 @@ class QualificationReceiptStore:
             attempts = receipt["attempts"]
             if not isinstance(attempts, list) or not attempts:
                 raise TypeError("attempt evidence missing")
+            snapshot_attempt_ids = {
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT DISTINCT v.source_attempt_id "
+                    "FROM data_snapshot_member m "
+                    "JOIN normalized_version v "
+                    "USING(normalized_version_id) "
+                    "WHERE m.data_snapshot_id=?",
+                    (receipt.get("data_snapshot_id"),),
+                )
+            }
             attempt_ids: set[str] = set()
             for attempt in attempts:
-                self._validate_attempt(receipt, attempt, invocation_id)
+                self._validate_attempt(
+                    receipt,
+                    attempt,
+                    invocation_id,
+                    str(attempt["attempt_id"])
+                    in snapshot_attempt_ids,
+                )
                 attempt_ids.add(str(attempt["attempt_id"]))
             self._validate_snapshot(receipt, attempt_ids)
             return receipt
@@ -234,7 +251,11 @@ class QualificationReceiptStore:
 
 
     def _validate_attempt(
-        self, receipt: Mapping[str, object], attempt: object, invocation_id: str
+        self,
+        receipt: Mapping[str, object],
+        attempt: object,
+        invocation_id: str,
+        snapshot_lineage: bool,
     ) -> None:
         if not isinstance(attempt, dict):
             raise TypeError("attempt object required")
@@ -246,8 +267,12 @@ class QualificationReceiptStore:
         ).fetchone()
         if row is None:
             raise TypeError("attempt lineage missing")
+        if (
+            row["invocation_id"] != invocation_id
+            and not snapshot_lineage
+        ):
+            raise TypeError("attempt invocation mismatch")
         expected = {
-            "invocation_id": invocation_id,
             "provider_id": receipt["provider_id"],
             "adapter_version": receipt["adapter_version"],
             "dataset": attempt["dataset"],

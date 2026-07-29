@@ -23,7 +23,7 @@ CAPABILITY_SPECS = (
     CapabilitySpec(
         "research_core",
         "基础研究",
-        required_official=("revenue", "net_income", "cash", "debt"),
+        required_sourced=("revenue", "net_income", "cash", "debt"),
         optional_fields=("cfo", "eps", "current_price", "market_cap", "working_capital"),
     ),
     CapabilitySpec(
@@ -94,13 +94,13 @@ CAPABILITY_SPECS = (
     CapabilitySpec(
         "conditional_research_plan",
         "条件研究计划",
-        required_official=("revenue", "net_income"),
+        required_sourced=("revenue", "net_income"),
         optional_fields=("cfo", "current_price", "working_capital", "cash", "debt"),
     ),
     CapabilitySpec(
         "research_report",
         "完整研究报告",
-        required_official=("revenue", "net_income"),
+        required_sourced=("revenue", "net_income"),
         optional_fields=("cfo", "cash", "debt", "current_price", "market_cap"),
     ),
 )

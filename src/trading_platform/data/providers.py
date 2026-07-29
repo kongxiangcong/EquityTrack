@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 
 from trading_platform.domain.data import (
     DailyOhlcvQuery,
+    FinancialStatementQuery,
     MarketDataCapability,
     ProviderCapability,
     ProviderCapabilityStatus,
@@ -117,6 +118,12 @@ def _query_identity(query: TypedDatasetQuery) -> dict[str, str]:
             "security_id": query.security_id,
             "security_code": query.security_code,
             "venue": query.venue,
+            "start_date": _wire_date(query.start_date),
+            "end_date": _wire_date(query.end_date),
+        }
+    if isinstance(query, FinancialStatementQuery):
+        return {
+            "ts_code": _tushare_code(query.security_code, query.venue),
             "start_date": _wire_date(query.start_date),
             "end_date": _wire_date(query.end_date),
         }

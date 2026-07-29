@@ -432,11 +432,16 @@ class WorkflowLedger:
             rows = self.__connection.execute(
                 "SELECT m.normalized_version_id,r.dataset,p.source_identity,"
                 "p.source_authority,p.real_source_url,p.retrieved_at,"
-                "v.published_at,v.available_at,v.quality_status "
+                "v.published_at,v.available_at,v.quality_status,"
+                "t.extracted_fields_json,o.session_date,o.close_decimal,"
+                "o.currency "
                 "FROM data_snapshot_member m "
                 "JOIN normalized_version v USING(normalized_version_id) "
                 "JOIN normalized_record r USING(normalized_record_id) "
                 "JOIN provider_attempt p ON p.attempt_id=v.source_attempt_id "
+                "LEFT JOIN terminal_financial_statement_version t "
+                "USING(normalized_version_id) "
+                "LEFT JOIN ohlcv_version o USING(normalized_version_id) "
                 "WHERE m.data_snapshot_id=? ORDER BY m.member_order",
                 (query.data_snapshot_id,),
             ).fetchall()
@@ -461,6 +466,35 @@ class WorkflowLedger:
                         published_at=str(row["published_at"]),
                         available_at=str(row["available_at"]),
                         quality_status=str(row["quality_status"]),
+                        extracted_fields=(
+                            tuple(json.loads(row["extracted_fields_json"]))
+                            if row["extracted_fields_json"] is not None
+                            else (
+                                (
+                                    {
+                                        "field_name": "current_price",
+                                        "subject_id": str(snapshot["scope_id"]),
+                                        "semantic_role": "current_price",
+                                        "period": str(row["session_date"]),
+                                        "value": str(row["close_decimal"]),
+                                        "unit": "CNY/share",
+                                        "currency": str(row["currency"]),
+                                        "extraction_method": "normalized_ohlcv:close",
+                                        "confidence": "medium",
+                                        "notes": (
+                                            "Structured market-data candidate; "
+                                            "not official filing evidence."
+                                        ),
+                                    },
+                                )
+                                if (
+                                    row["close_decimal"] is not None
+                                    and str(row["session_date"])
+                                    == str(snapshot["effective_session_date"])
+                                )
+                                else ()
+                            )
+                        ),
                     )
                     for row in rows
                 ),

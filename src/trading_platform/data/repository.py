@@ -273,6 +273,20 @@ class DataRepository:
     def snapshot_members(self, snapshot_id: str) -> tuple[tuple[str, str], ...]:
         return tuple((str(row[0]), str(row[1])) for row in self.connection.execute("SELECT m.normalized_version_id,r.dataset FROM data_snapshot_member m JOIN normalized_version v USING(normalized_version_id) JOIN normalized_record r USING(normalized_record_id) WHERE m.data_snapshot_id=? ORDER BY m.member_order", (snapshot_id,)))
 
+    def snapshot_source_attempt_ids(
+        self, snapshot_id: str
+    ) -> tuple[str, ...]:
+        return tuple(
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT DISTINCT v.source_attempt_id "
+                "FROM data_snapshot_member m "
+                "JOIN normalized_version v USING(normalized_version_id) "
+                "WHERE m.data_snapshot_id=? ORDER BY v.source_attempt_id",
+                (snapshot_id,),
+            )
+        )
+
     def validate_fixture_location(self, rights: FixtureRights) -> None:
         if rights.repository_redistribution_allowed and rights.packaged_distribution_allowed:
             return
@@ -322,18 +336,41 @@ class DataRepository:
         reused_count = 0
         with self._writer_scope(f"normalize:{attempt_id}"):
             with self._write_transaction():
+                current_attempt = self.connection.execute(
+                    "SELECT provider_id,source_authority,"
+                    "source_policy_identity FROM provider_attempt "
+                    "WHERE attempt_id=?",
+                    (attempt_id,),
+                ).fetchone()
+                if current_attempt is None:
+                    raise PersistenceError(
+                        "PROVIDER_ATTEMPT_MISSING",
+                        "Normalization requires a persisted provider attempt.",
+                    )
                 for item in items:
                     record_id = f"record_{canonical_hash({'dataset': item.dataset, 'key': item.natural_key})[:24]}"
                     content = json.dumps(item.payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
                     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                     self.connection.execute("INSERT OR IGNORE INTO normalized_record VALUES(?,?,?)", (record_id, item.dataset, item.natural_key))
-                    existing = self.connection.execute("SELECT normalized_version_id FROM normalized_version WHERE normalized_record_id=? AND content_hash=?", (record_id, content_hash)).fetchone()
+                    existing = self.connection.execute(
+                        "SELECT nv.normalized_version_id "
+                        "FROM normalized_version nv "
+                        "JOIN provider_attempt pa "
+                        "ON pa.attempt_id=nv.source_attempt_id "
+                        "WHERE nv.normalized_record_id=? "
+                        "AND nv.content_hash=? "
+                        "AND pa.source_policy_identity=?",
+                        (
+                            record_id,
+                            content_hash,
+                            current_attempt["source_policy_identity"],
+                        ),
+                    ).fetchone()
                     if existing:
                         version_id = existing[0]
                         reused_count += 1
                     else:
                         previous = self.connection.execute("SELECT nv.normalized_version_id,nv.revision_no,pa.provider_id,pa.source_authority FROM normalized_version nv JOIN provider_attempt pa ON pa.attempt_id=nv.source_attempt_id WHERE nv.normalized_record_id=? ORDER BY nv.revision_no DESC LIMIT 1", (record_id,)).fetchone()
-                        current_attempt = self.connection.execute("SELECT provider_id,source_authority FROM provider_attempt WHERE attempt_id=?", (attempt_id,)).fetchone()
                         authority_rank = {"official": 4, "structured_aggregator": 3, "secondary": 2, "fixture": 1}
                         if previous and previous["provider_id"] != current_attempt["provider_id"] and authority_rank.get(current_attempt["source_authority"], 0) <= authority_rank.get(previous["source_authority"], 0):
                             issue_id = f"quality_{canonical_hash({'record': record_id, 'code': 'SOURCE_CONFLICT'})[:24]}"
@@ -341,7 +378,7 @@ class DataRepository:
                             batch_blocked = True
                             continue
                         revision = 1 if previous is None else previous["revision_no"] + 1
-                        version_id = f"version_{canonical_hash({'record': record_id, 'content': content_hash})[:24]}"
+                        version_id = f"version_{canonical_hash({'record': record_id, 'content': content_hash, 'source_policy': current_attempt['source_policy_identity']})[:24]}"
                         self.connection.execute(
                             "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (version_id, record_id, revision, content_hash, attempt_id, item.event_at, item.published_at, item.published_precision, item.available_at, item.availability_basis, item.retrieved_at, item.quality.value, previous["normalized_version_id"] if previous else None),
@@ -448,6 +485,39 @@ class DataRepository:
                     filing_identity_hash,
                 ),
             )
+        elif item.dataset in {"income", "balancesheet", "cashflow"}:
+            extracted_fields_json = json.dumps(
+                row["extracted_fields"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            statement_identity_hash = canonical_hash(
+                {
+                    "security_id": row["security_id"],
+                    "statement_kind": row["statement_kind"],
+                    "period_end": row["period_end"],
+                    "report_type": row["report_type"],
+                    "update_flag": row.get("update_flag", ""),
+                    "fields": row["extracted_fields"],
+                }
+            )
+            self.connection.execute(
+                "INSERT INTO terminal_financial_statement_version "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    version_id,
+                    row["security_id"],
+                    row["statement_kind"],
+                    row["period_end"],
+                    row["report_type"],
+                    row.get("update_flag", ""),
+                    row["currency"],
+                    row["accounting_standard"],
+                    extracted_fields_json,
+                    statement_identity_hash,
+                ),
+            )
 
     def build_snapshot(
         self, request: SyncRequest, admitted: Iterable[tuple[str, str]],
@@ -492,7 +562,15 @@ class DataRepository:
         if not sessions:
             return SyncResult(SyncStatus.MISSING, None, request.requested_date, None, FreshnessStatus.MISSING, QualityStatus.BLOCKING, (), Coverage(0, 0, 0, 0), NextStep.SYNC_TRADE_CALENDAR, 0, "no_cutoff_legal_calendar", None, self.distribution_qualification(), disposition)
         effective_session, calendar_version = sessions[0]
-        universe = self.connection.execute("SELECT market_universe_version_id FROM market_universe_version WHERE market_scope_id=? AND as_of_at<=? ORDER BY as_of_at DESC LIMIT 1", (request.market, request.as_of_at.isoformat())).fetchone()
+        universe = self.connection.execute(
+            "SELECT v.market_universe_version_id "
+            "FROM market_universe_version v "
+            "JOIN market_universe_member m "
+            "USING(market_universe_version_id) "
+            "WHERE m.security_id=? AND v.as_of_at<=? "
+            "ORDER BY v.as_of_at DESC LIMIT 1",
+            (request.security_id, request.as_of_at.isoformat()),
+        ).fetchone()
         universe_payloads = [] if universe is None else self.connection.execute("SELECT * FROM market_universe_member WHERE market_universe_version_id=? ORDER BY security_id", (universe[0],)).fetchall()
         expected = len(universe_payloads)
         eligible_ids = {row["security_id"] for row in universe_payloads if row["listed_from"] <= effective_session and (row["delisted_after"] is None or row["delisted_after"] > effective_session)}
@@ -507,12 +585,17 @@ class DataRepository:
         coverage = Coverage(expected, len(eligible_ids), excluded, missing)
         quality = QualityStatus.BLOCKING if missing or universe is None else QualityStatus.PASS
         eligible_members = [(version_id, role) for version_id, role in members if self.connection.execute("SELECT quality_status FROM normalized_version WHERE normalized_version_id=?", (version_id,)).fetchone()[0] in {"pass", "warning"}]
-        membership_hash = canonical_hash([{"id": item[0], "role": item[1]} for item in eligible_members])
+        membership_hash = canonical_hash(
+            [
+                {"id": item[0], "role": item[1]}
+                for item in eligible_members
+            ]
+        )
         stale_by_days = max(0, (date.fromisoformat(request.requested_date) - date.fromisoformat(effective_session)).days - 1)
         freshness = (
             FreshnessStatus.VALID if stale_by_days <= freshness_max_stale_days else FreshnessStatus.STALE
         )
-        snapshot_id = f"snapshot_{canonical_hash({'purpose': request.snapshot_purpose, 'scope': request.security_id, 'cutoff': request.as_of_at, 'members': membership_hash, 'query': query_policy_identity, 'source': source_policy_identity, 'freshness': 'freshness@1'})[:24]}"
+        snapshot_id = f"snapshot_{canonical_hash({'purpose': request.snapshot_purpose, 'scope': request.security_id, 'cutoff': request.as_of_at, 'members': membership_hash, 'universe': universe[0] if universe is not None else None, 'query': query_policy_identity, 'source': source_policy_identity, 'freshness': 'freshness@1'})[:24]}"
         if not admission_complete or freshness is FreshnessStatus.STALE:
             return SyncResult(SyncStatus.BLOCKED, None, request.requested_date, effective_session, freshness, QualityStatus.BLOCKING, (), coverage, NextStep.RESOLVE_MISSING_CROSS_SECTION, stale_by_days, "effective_complete_session", None, self.distribution_qualification(), disposition)
 
@@ -522,7 +605,25 @@ class DataRepository:
         with self._writer_scope(f"snapshot:{snapshot_id}"):
             with self._write_transaction():
                 self.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (snapshot_id, request.security_id, request.snapshot_purpose.value, request.requested_date, effective_session, request.as_of_at.isoformat(), request.market_timezone, calendar_version, query_policy_identity, source_policy_identity, "freshness@1", membership_hash, freshness.value, "blocking" if quality is QualityStatus.BLOCKING else "pass", expected, len(eligible_ids), excluded, missing, stale_by_days, "effective_complete_session", last_success_at))
+                if self.connection.execute(
+                    "SELECT 1 FROM data_snapshot WHERE data_snapshot_id=?",
+                    (snapshot_id,),
+                ).fetchone() is None:
+                    raise PersistenceError(
+                        "SNAPSHOT_IDENTITY_CONFLICT",
+                        "Snapshot identity was rejected by an existing "
+                        "immutable uniqueness commitment.",
+                    )
                 if universe is not None:
+                    if self.connection.execute(
+                        "SELECT 1 FROM market_universe_version "
+                        "WHERE market_universe_version_id=?",
+                        (universe[0],),
+                    ).fetchone() is None:
+                        raise PersistenceError(
+                            "MARKET_UNIVERSE_REFERENCE_MISSING",
+                            "Selected market-universe version is missing.",
+                        )
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], request.market))
                 for ordinal, (version_id, role) in enumerate(eligible_members):
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", (snapshot_id, version_id, role, ordinal))

@@ -183,6 +183,7 @@ class AcceptanceEvidenceService:
                 self.repo_root / "migrations" / "0015_account_snapshot_version.sql",
                 self.repo_root / "migrations" / "0016_strategy_plan_model_b.sql",
                 self.repo_root / "migrations" / "0017_manual_review_journal.sql",
+                self.repo_root / "migrations" / "0018_terminal_financial_evidence.sql",
             )
         }
         migration_manifest = evidence_root / "migration-hashes.json"
@@ -190,7 +191,7 @@ class AcceptanceEvidenceService:
             json.dumps(
                 {
                     "schema_version": "KernelMigrationHashEvidence@1",
-                    "expected_versions": [15, 16, 17],
+                    "expected_versions": [15, 16, 17, 18],
                     "script_sha256": migration_hashes,
                 },
                 sort_keys=True,

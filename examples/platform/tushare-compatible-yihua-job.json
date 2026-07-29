@@ -7,7 +7,7 @@
   },
   "query_policy": {
     "schema_version": "QueryPolicy@1",
-    "lookback_days": 7,
+    "lookback_days": 550,
     "market_universe_list_status": "L",
     "adjustment_mode": "none"
   },
@@ -51,6 +51,30 @@
         "retry_max_attempts": 1,
         "fallback": "no_fallback",
         "failure_disposition": "block"
+      },
+      {
+        "dataset": "income",
+        "freshness_max_stale_days": 1,
+        "completeness": "required",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "block"
+      },
+      {
+        "dataset": "balancesheet",
+        "freshness_max_stale_days": 1,
+        "completeness": "required",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "block"
+      },
+      {
+        "dataset": "cashflow",
+        "freshness_max_stale_days": 1,
+        "completeness": "optional",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "quarantine"
       }
     ]
   },
@@ -63,7 +87,7 @@
     "market_timezone": "Asia/Shanghai",
     "market": "SZSE",
     "snapshot_purpose": "workflow",
-    "datasets": ["trade_cal", "market_universe", "daily"],
+    "datasets": ["trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow"],
     "network_authorized": true,
     "offline": false
   },

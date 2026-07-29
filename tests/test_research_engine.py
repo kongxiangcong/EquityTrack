@@ -272,6 +272,27 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertIn("d_and_a", run.capabilities["financial_model"].estimated_fields)
         self.assertIn("d_and_a", run.capabilities["dcf"].estimated_fields)
 
+    def test_terminal_financial_facts_support_limited_research_not_valuation(self) -> None:
+        manifest = json.loads(json.dumps(self.manifest, ensure_ascii=False))
+        for source in manifest["sources"]:
+            if source["tier"] == "official":
+                source["tier"] = "terminal"
+
+        run = ResearchEngine().run(
+            ResearchRequest(
+                manifest=manifest,
+                research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
+                as_of_date="2026-07-07",
+            )
+        )
+
+        self.assertNotEqual("blocked", run.capabilities["research_core"].status)
+        self.assertNotEqual("blocked", run.capabilities["research_report"].status)
+        self.assertTrue(run.permissions["research_report"])
+        self.assertFalse(run.permissions["formal_per_share_valuation"])
+        self.assertEqual("blocked", run.capabilities["financial_model"].status)
+        self.assertEqual("blocked", run.methods["dcf"].status)
+
     def test_manifest_estimate_tier_never_counts_as_sourced_market_data(self) -> None:
         self.manifest["sources"] = [
             source

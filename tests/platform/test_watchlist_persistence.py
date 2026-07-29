@@ -132,6 +132,38 @@ def test_doctor_is_read_only_and_checks_required_references(tmp_path: Path) -> N
     store.close()
 
 
+def test_doctor_distinguishes_redundant_identifier_history_from_conflict(
+    tmp_path: Path,
+) -> None:
+    store = PlatformStore(tmp_path, ROOT / "migrations")
+    store.migrate()
+    store.watchlist.add(
+        "identifier-owner",
+        SecurityIdentity(
+            "stable",
+            "SZSE",
+            "002897",
+            "CNY",
+            "2017-09-07",
+        ),
+    )
+    store.connection.execute(
+        "INSERT INTO security_identifier VALUES"
+        "('redundant','stable','SZSE','002897','2026-07-10','date',NULL,NULL)"
+    )
+    store.connection.commit()
+    assert "DOMAIN_IDENTIFIER_CONFLICT" not in store.doctor().errors
+
+    store.connection.execute("INSERT INTO security VALUES('other','CNY')")
+    store.connection.execute(
+        "INSERT INTO security_identifier VALUES"
+        "('conflict','other','SZSE','002897','2026-07-11','date',NULL,NULL)"
+    )
+    store.connection.commit()
+    assert "DOMAIN_IDENTIFIER_CONFLICT" in store.doctor().errors
+    store.close()
+
+
 def test_corrupt_existing_migration_backup_blocks_upgrade(tmp_path: Path) -> None:
     migration_root = tmp_path / "migrations"; migration_root.mkdir()
     first = ROOT / "migrations/0001_core_identity_objects.sql"

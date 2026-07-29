@@ -56,7 +56,7 @@ def test_limited_view_exposes_unknowns_without_rating_or_target_language(
     )
     serialized = json.dumps(view, ensure_ascii=False).lower()
 
-    assert view["status"] == "blocked"
+    assert view["status"] == "completed_with_limits"
     assert view["valuation_view"]["status"] == "not_ready"
     assert view["key_uncertainties"]
     for forbidden in ("buy", "sell", "hold", "买入", "卖出", "持有"):

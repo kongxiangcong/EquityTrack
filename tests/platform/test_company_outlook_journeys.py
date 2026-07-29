@@ -29,7 +29,7 @@ def test_a_share_outlook_is_bound_to_official_frozen_snapshot_evidence(
     root.close()
 
 
-def test_missing_semantic_financial_inputs_fail_closed_to_data_insufficient(
+def test_nonofficial_semantic_financial_inputs_complete_with_valuation_limits(
     tmp_path: Path,
 ) -> None:
     root = _root(tmp_path)
@@ -41,7 +41,7 @@ def test_missing_semantic_financial_inputs_fail_closed_to_data_insufficient(
         root.archive.decision_view(result.workflow_run_id).json_bytes
     )
 
-    assert source["status"] == "blocked"
+    assert source["status"] == "completed_with_limits"
     assert view["valuation_view"]["status"] == "not_ready"
     assert view["valuation_artifact_record_id"] is None
     assert view["forecast_artifact_record_id"] is None

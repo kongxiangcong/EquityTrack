@@ -35,7 +35,11 @@ class DoctorService:
         if tuple(self.connection.execute("PRAGMA foreign_key_check")): errors.append("FOREIGN_KEY_FAILED")
         tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not self.REQUIRED_TABLES.issubset(tables): errors.append("SCHEMA_REQUIRED_TABLE_MISSING")
-        duplicate_active = self.connection.execute("SELECT security_id FROM security_identifier WHERE valid_to IS NULL GROUP BY market,code HAVING count(*) > 1").fetchone()
+        duplicate_active = self.connection.execute(
+            "SELECT market,code FROM security_identifier "
+            "WHERE valid_to IS NULL GROUP BY market,code "
+            "HAVING count(DISTINCT security_id) > 1"
+        ).fetchone()
         if duplicate_active: errors.append("DOMAIN_IDENTIFIER_CONFLICT")
         bad_artifact = self.connection.execute("SELECT a.artifact_id FROM artifact a LEFT JOIN object_blob o ON o.sha256=a.object_sha256 WHERE o.sha256 IS NULL LIMIT 1").fetchone()
         bad_relation = self.connection.execute("SELECT r.artifact_id FROM artifact_relation r LEFT JOIN artifact a USING(artifact_id) WHERE a.artifact_id IS NULL LIMIT 1").fetchone()

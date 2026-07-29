@@ -118,7 +118,7 @@ def test_request_v2_produces_one_canonical_view_manifest_and_no_trade_state(
     )
     assert view["data_snapshot_id"] == "snapshot_filing"
     assert view["valuation_artifact_record_id"] is None
-    assert view["status"] == "blocked"
+    assert view["status"] == "completed_with_limits"
     assert before == after
     root.close()
 

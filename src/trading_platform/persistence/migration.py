@@ -12,6 +12,13 @@ from pathlib import Path
 from .locking import DataRootWriterLock, PersistenceError
 
 
+def _migration_digest(path: Path) -> str:
+    canonical_bytes = path.read_text(encoding="utf-8").replace(
+        "\r\n", "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
+
+
 def _legacy_rule_to_ast_v2(payload: object):
     from trading_platform.domain.rules import RuleAstV2
 
@@ -91,7 +98,7 @@ class MigrationRunner:
             if not path.name.startswith(f"{index:04d}_"):
                 raise PersistenceError("MIGRATION_SEQUENCE_INVALID", "Migration sequence is not contiguous.")
             row = applied.get(index)
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = _migration_digest(path)
             if row and (row["name"] != path.name or row["sha256"] != digest):
                 raise PersistenceError("MIGRATION_HASH_DRIFT", f"Migration {index} differs from its ledger entry.")
         return files, applied
@@ -109,7 +116,7 @@ class MigrationRunner:
         if applied and pending:
             self._backup_and_verify(max(applied))
         for index, path in pending:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = _migration_digest(path)
             rebuilds_parent_tables = (
                 path.name
                 in {

@@ -166,7 +166,23 @@ class ProviderQualificationService:
             return decode_provider_qualification_receipt(replay.payload, replay.artifact_id)
 
         result = self._synchronization.run()
-        evidence = self._data.provider_attempt_evidence(result.attempt_ids)
+        lineage_attempt_ids = tuple(
+            dict.fromkeys(
+                (
+                    *result.attempt_ids,
+                    *(
+                        self._data.snapshot_source_attempt_ids(
+                            result.snapshot_id
+                        )
+                        if result.snapshot_id is not None
+                        else ()
+                    ),
+                )
+            )
+        )
+        evidence = self._data.provider_attempt_evidence(
+            lineage_attempt_ids
+        )
         blockers = [
             f"{item.attempt_id}:{code}"
             for item in evidence

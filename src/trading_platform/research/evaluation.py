@@ -35,6 +35,12 @@ class ResearchEvaluation:
         "debt",
         "diluted_shares",
     )
+    _SOURCE_TIERS = {
+        "official": "official",
+        "structured_aggregator": "terminal",
+        "secondary": "secondary",
+        "fixture": "secondary",
+    }
 
     def evaluate(
         self,
@@ -116,7 +122,15 @@ class ResearchEvaluation:
         evidence: SnapshotEvidence,
     ) -> Mapping[str, object]:
         sources = []
+        covered_fields: set[str] = set()
+        financial_periods: list[str] = []
         for member in evidence.member_evidence:
+            try:
+                source_tier = self._SOURCE_TIERS[member.source_authority]
+            except KeyError as error:
+                raise ResearchEvaluationError(
+                    "WORKFLOW_SOURCE_AUTHORITY_INVALID"
+                ) from error
             source_id = "source_" + canonical_hash(
                 {
                     "snapshot": evidence.data_snapshot_id,
@@ -127,24 +141,37 @@ class ResearchEvaluation:
             sources.append(
                 {
                     "source_id": source_id,
-                    "tier": (
-                        "primary"
-                        if member.source_authority == "official"
-                        else "secondary"
-                    ),
+                    "tier": source_tier,
                     "publisher": member.source_identity,
                     "title": (
                         f"{member.dataset} frozen evidence "
                         f"{member.normalized_version_id}"
                     ),
-                    "url_or_api": member.real_source_url,
+                    "url_or_api": (
+                        member.real_source_url
+                        if member.source_authority == "official"
+                        else f"api:{member.source_identity}:{member.dataset}"
+                    ),
                     "retrieved_at": member.retrieved_at,
                     "available_at": member.available_at,
                     "report_date": member.published_at[:10],
                     "official": member.source_authority == "official",
-                    "extracted_fields": [],
+                    "extracted_fields": [
+                        dict(field) for field in member.extracted_fields
+                    ],
                 }
             )
+            for field in member.extracted_fields:
+                field_name = str(field.get("field_name", "")).strip()
+                period = str(field.get("period", "")).strip()
+                if field_name:
+                    covered_fields.add(field_name)
+                if period and member.dataset in {
+                    "income",
+                    "balancesheet",
+                    "cashflow",
+                }:
+                    financial_periods.append(period)
         return {
             "source_manifest_version": 2,
             "company": {
@@ -154,8 +181,9 @@ class ResearchEvaluation:
                 "reporting_currency": "CNY",
                 "trading_currency": "CNY",
                 "accounting_standard": "PRC-GAAP",
-                "latest_reporting_period": (
-                    request.evaluation_plan.horizon.as_of
+                "latest_financial_period": max(
+                    financial_periods,
+                    default=request.evaluation_plan.horizon.as_of,
                 ),
             },
             "sources": sources,
@@ -168,5 +196,6 @@ class ResearchEvaluation:
                     ),
                 }
                 for field in self._CRITICAL_FIELDS
+                if field not in covered_fields
             ],
         }

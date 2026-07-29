@@ -16,7 +16,7 @@ from trading_platform.persistence.locking import PersistenceError
 def _prior_migrations(tmp_path: Path) -> Path:
     target = tmp_path / "migrations-v13"
     target.mkdir(parents=True)
-    for source in sorted((Path.cwd() / "migrations").glob("*.sql"))[:-1]:
+    for source in sorted((Path.cwd() / "migrations").glob("*.sql"))[:13]:
         shutil.copyfile(source, target / source.name)
     return target
 
@@ -216,7 +216,7 @@ def test_0014_fresh_and_populated_history_cut_over_without_runtime_projection(
         fresh.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == 14
+        == 18
     )
     with fresh.connection:
         fresh.connection.execute(

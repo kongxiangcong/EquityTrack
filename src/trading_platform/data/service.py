@@ -436,3 +436,8 @@ class DataSyncService:
 
     def provider_attempt_evidence(self, attempt_ids: tuple[str, ...]) -> tuple[ProviderAttemptEvidence, ...]:
         return self.repository.provider_attempt_evidence(attempt_ids)
+
+    def snapshot_source_attempt_ids(
+        self, snapshot_id: str
+    ) -> tuple[str, ...]:
+        return self.repository.snapshot_source_attempt_ids(snapshot_id)

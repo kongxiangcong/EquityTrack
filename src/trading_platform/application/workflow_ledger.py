@@ -165,6 +165,7 @@ class SnapshotMemberEvidence:
     published_at: str
     available_at: str
     quality_status: str
+    extracted_fields: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
