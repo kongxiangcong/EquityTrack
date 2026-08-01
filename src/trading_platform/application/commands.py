@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Mapping
 
@@ -13,23 +13,16 @@ from trading_platform.domain.account_snapshots import (
     AccountSnapshotPosition,
 )
 from trading_platform.domain.approvals import ActivationIntent
-from trading_platform.domain.plans import (
-    CoreFloor,
-    CoreSleeve,
-    GridSleeve,
-    PlanValidationError,
-    TradePlanGraph,
-    TradePlanRule,
-    TradePlanVersion,
-    build_trade_plan_draft,
+from trading_platform.domain.manual_review import ManualReviewError
+from trading_platform.domain.plan_impacts import PlanImpactError
+from trading_platform.domain.plans import PlanValidationError
+from trading_platform.domain.risk_policies import (
+    PortfolioRiskLimits,
+    PortfolioRiskPolicyError,
 )
-from trading_platform.domain.rules import (
-    GridConstraint,
-    RuleClass,
-    RulePriority,
-    RuleScope,
-    ast_from_dict,
-    candidate_from_dict,
+from trading_platform.domain.discipline_reviews import (
+    DisciplineReviewError,
+    DisciplineReviewPeriodRequest,
 )
 from trading_platform.identity import canonical_hash
 
@@ -44,14 +37,18 @@ from .command_envelope import (
     ApplicationCommandEnvelopeV1,
     ApprovalCapability,
 )
+from .web_command_policy import WebCommandPolicy, WebCommandPolicyError
 from .trade_plan_authoring import (
     ConfirmTradePlanVersion,
-    CreateTradePlanDraft,
     IssuePlanConfirmationChallenge,
     PlanCommandActor,
     RejectTradePlanDraft,
-    ReviseTradePlanDraft,
     TradePlanTasks,
+)
+from .plan_drafting import PrepareTradePlanDraft, TradePlanDrafting
+from .risk_policies import (
+    ConfirmPortfolioRiskPolicy,
+    PortfolioRiskPolicies,
 )
 from .manual_portfolio_review import (
     ManualPortfolioReview,
@@ -68,6 +65,7 @@ from .decision_journal import (
     DeclareExecution,
 )
 from .discipline_reviews import (
+    CreateDisciplineReviewDraft,
     ConfirmDisciplineReviewVersion,
     DisciplineReviews,
 )
@@ -78,6 +76,11 @@ from .plan_impacts import (
     PlanImpacts,
     RejectPlanChangeProposal,
 )
+from trading_platform.domain.chart import (
+    AnnotationAnchor,
+    AnnotationLifecycleCommand,
+)
+from .web_tasks import ChartWorkspace
 from trading_platform.domain.decision_tasks import (
     DeferralCondition,
     UserDisposition,
@@ -113,16 +116,18 @@ _CAPABILITIES = {
     "account_snapshot.create_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "account_snapshot.update_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "account_snapshot.confirm@1": ApprovalCapability.ACCOUNT_CONFIRMATION,
-    "trade_plan.create_draft@1": ApprovalCapability.DRAFT_MUTATION,
-    "trade_plan.revise_draft@1": ApprovalCapability.DRAFT_MUTATION,
+    "portfolio_risk_policy.confirm@1": ApprovalCapability.ACCOUNT_CONFIRMATION,
+    "trade_plan.prepare_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "trade_plan.reject_draft@1": ApprovalCapability.DRAFT_MUTATION,
     "trade_plan.issue_confirmation_challenge@1": (ApprovalCapability.DRAFT_MUTATION),
     "trade_plan.confirm@1": ApprovalCapability.PLAN_CONFIRMATION,
-    "manual_portfolio_review.run@1": ApprovalCapability.DRAFT_MUTATION,
+    "chart_annotation.apply@1": ApprovalCapability.DRAFT_MUTATION,
+    "manual_portfolio_review.run@2": ApprovalCapability.DRAFT_MUTATION,
     "decision_task.defer@1": ApprovalCapability.TASK_DISPOSITION,
     "decision_task.resolve@1": ApprovalCapability.TASK_DISPOSITION,
     "execution_record.declare@1": ApprovalCapability.EXECUTION_TRUTH,
     "execution_record.correct@1": ApprovalCapability.EXECUTION_TRUTH,
+    "discipline_review.create_draft@2": ApprovalCapability.DRAFT_MUTATION,
     "discipline_review.confirm@1": ApprovalCapability.REVIEW_CONFIRMATION,
     "plan_impact_assessment.create@1": ApprovalCapability.DRAFT_MUTATION,
     "plan_change_proposal.create@1": ApprovalCapability.DRAFT_MUTATION,
@@ -135,16 +140,18 @@ _IMPLEMENTED = {
     "account_snapshot.create_draft@1",
     "account_snapshot.update_draft@1",
     "account_snapshot.confirm@1",
-    "trade_plan.create_draft@1",
-    "trade_plan.revise_draft@1",
+    "portfolio_risk_policy.confirm@1",
+    "trade_plan.prepare_draft@1",
     "trade_plan.reject_draft@1",
     "trade_plan.issue_confirmation_challenge@1",
     "trade_plan.confirm@1",
-    "manual_portfolio_review.run@1",
+    "chart_annotation.apply@1",
+    "manual_portfolio_review.run@2",
     "decision_task.defer@1",
     "decision_task.resolve@1",
     "execution_record.declare@1",
     "execution_record.correct@1",
+    "discipline_review.create_draft@2",
     "discipline_review.confirm@1",
     "plan_impact_assessment.create@1",
     "plan_change_proposal.create@1",
@@ -159,20 +166,26 @@ class ApplicationCommandDispatcher:
     def __init__(
         self,
         account_snapshots: AccountSnapshotCommands,
+        risk_policies: PortfolioRiskPolicies,
         trade_plans: TradePlanTasks,
+        plan_drafting: TradePlanDrafting,
         manual_reviews: ManualPortfolioReview,
         decision_tasks: DecisionTasks,
         decision_journal: DecisionJournal,
         discipline_reviews: DisciplineReviews,
         plan_impacts: PlanImpacts,
+        chart_workspace: ChartWorkspace,
     ) -> None:
         self._account_snapshots = account_snapshots
+        self._risk_policies = risk_policies
         self._trade_plans = trade_plans
+        self._plan_drafting = plan_drafting
         self._manual_reviews = manual_reviews
         self._decision_tasks = decision_tasks
         self._decision_journal = decision_journal
         self._discipline_reviews = discipline_reviews
         self._plan_impacts = plan_impacts
+        self._chart_workspace = chart_workspace
 
     def dispatch(
         self, envelope: ApplicationCommandEnvelopeV1
@@ -186,7 +199,9 @@ class ApplicationCommandDispatcher:
             command, result = self._execute(envelope)
         except (
             AccountSnapshotError,
+            PortfolioRiskPolicyError,
             PlanValidationError,
+            InvalidOperation,
             ValueError,
             KeyError,
             TypeError,
@@ -219,11 +234,11 @@ class ApplicationCommandDispatcher:
             and envelope.transport_actor.actor_type != "agent"
         ):
             return self._failure(envelope, "SKILL_TRANSPORT_ACTOR_REQUIRED")
-        if (
-            envelope.interaction_channel.value == "web"
-            and not envelope.command_name.startswith("account_snapshot.")
-        ):
-            return self._failure(envelope, "WEB_MUTATION_CAPABILITY_DENIED")
+        if envelope.interaction_channel.value == "web":
+            try:
+                WebCommandPolicy().authorize(envelope)
+            except WebCommandPolicyError as error:
+                return self._failure(envelope, error.code)
         if (
             capability
             in {
@@ -280,19 +295,82 @@ class ApplicationCommandDispatcher:
                 **common,
             )
             return command, self._account_snapshots.execute(command)
-        if envelope.command_name == "manual_portfolio_review.run@1":
+        if envelope.command_name == "portfolio_risk_policy.confirm@1":
+            command = ConfirmPortfolioRiskPolicy(
+                account_id=str(payload["account_id"]),
+                currency=str(payload["currency"]),
+                limits=_risk_limits(payload["limits"]),
+                **common,
+            )
+            return command, self._risk_policies.confirm(command)
+        if envelope.command_name == "trade_plan.prepare_draft@1":
+            command = _prepare_trade_plan_draft(envelope)
+            return command, self._plan_drafting.prepare(command)
+        if envelope.command_name == "chart_annotation.apply@1":
+            allowed = {
+                "operation",
+                "security_id",
+                "data_snapshot_id",
+                "annotation_id",
+                "kind",
+                "style",
+                "anchors",
+            }
+            if set(payload) - allowed:
+                raise ValueError("CHART_ANNOTATION_FIELDS_INVALID")
+            operation = str(payload["operation"])
+            expected = envelope.expected_revision
+            if (operation == "create") != (expected is None):
+                raise ValueError("CHART_ANNOTATION_REVISION_INVALID")
+            raw_anchors = payload.get("anchors", ())
+            if not isinstance(raw_anchors, (list, tuple)):
+                raise TypeError("annotation anchors array required")
+            command = AnnotationLifecycleCommand(
+                invocation_id=envelope.invocation_id,
+                operation=operation,
+                security_id=str(payload["security_id"]),
+                data_snapshot_id=str(payload["data_snapshot_id"]),
+                author_id=actor.actor_id,
+                annotation_id=(
+                    str(payload["annotation_id"])
+                    if payload.get("annotation_id") is not None
+                    else None
+                ),
+                expected_version_no=expected or 0,
+                kind=(
+                    str(payload["kind"])
+                    if payload.get("kind") is not None
+                    else None
+                ),
+                style=(
+                    str(payload["style"])
+                    if payload.get("style") is not None
+                    else None
+                ),
+                anchors=tuple(
+                    AnnotationAnchor(
+                        str(_mapping(item)["market_timestamp"]),
+                        str(_mapping(item)["exact_price_decimal"]),
+                    )
+                    for item in raw_anchors
+                ),
+            )
+            return command, self._chart_workspace.apply(command)
+        if envelope.command_name == "manual_portfolio_review.run@2":
+            if (
+                set(payload)
+                != {"account_id", "requested_at", "session_selection"}
+                or envelope.expected_revision is not None
+                or envelope.approval_challenge_id is not None
+            ):
+                raise ManualReviewError(
+                    "MANUAL_REVIEW_COMMAND_FIELDS_INVALID"
+                )
             command = StartManualPortfolioReview(
                 invocation_id=envelope.invocation_id,
                 account_id=str(payload["account_id"]),
                 requested_at=str(payload["requested_at"]),
-                selected_complete_session=str(payload["selected_complete_session"]),
-                first_window_start_exclusive=(
-                    str(payload["first_window_start_exclusive"])
-                    if payload.get("first_window_start_exclusive") is not None
-                    else None
-                ),
-                code_identity=str(payload["code_identity"]),
-                config_identity=str(payload["config_identity"]),
+                session_selection=str(payload["session_selection"]),
                 decision_actor=actor.identity,
                 interaction_channel=envelope.interaction_channel.value,
                 transport_actor=transport.identity,
@@ -386,6 +464,11 @@ class ApplicationCommandDispatcher:
                 transport_actor=transport.identity,
             )
             return command, self._decision_journal.correct(command)
+        if envelope.command_name == "discipline_review.create_draft@2":
+            command = _create_discipline_review_draft(envelope)
+            return command, self._discipline_reviews.create_draft(
+                command
+            )
         if envelope.command_name == "discipline_review.confirm@1":
             command = ConfirmDisciplineReviewVersion(
                 invocation_id=envelope.invocation_id,
@@ -439,16 +522,14 @@ class ApplicationCommandDispatcher:
             transport.identity,
         )
         if envelope.command_name == "plan_change_proposal.accept@1":
+            if set(payload) != {"proposal_id", "decided_at"}:
+                raise PlanImpactError(
+                    "PROPOSAL_DISPOSITION_COMMAND_FIELDS_INVALID"
+                )
             command = AcceptPlanChangeProposal(
                 invocation_id=envelope.invocation_id,
                 proposal_id=str(payload["proposal_id"]),
                 expected_revision=_revision(envelope),
-                draft_id=str(payload["draft_id"]),
-                expected_draft_revision=(
-                    int(payload["expected_draft_revision"])
-                    if payload.get("expected_draft_revision") is not None
-                    else None
-                ),
                 decided_at=str(payload["decided_at"]),
                 actor=plan_actor,
             )
@@ -462,38 +543,6 @@ class ApplicationCommandDispatcher:
                 actor=plan_actor,
             )
             return command, self._plan_impacts.reject(command)
-        if envelope.command_name == "trade_plan.create_draft@1":
-            raw_draft = payload["draft"]
-            if not isinstance(raw_draft, Mapping):
-                raise TypeError("draft object required")
-            graph = _plan_graph(raw_draft["proposed_graph"])
-            command = CreateTradePlanDraft(
-                invocation_id=envelope.invocation_id,
-                draft=build_trade_plan_draft(
-                    draft_id=str(raw_draft["draft_id"]),
-                    account_id=str(raw_draft["account_id"]),
-                    security_id=str(raw_draft["security_id"]),
-                    proposed_graph=graph,
-                    parameters=_mapping(raw_draft["parameters"]),
-                    created_at=str(raw_draft["created_at"]),
-                    decision_actor=actor.identity,
-                    interaction_channel=envelope.interaction_channel.value,
-                    transport_actor=transport.identity,
-                ),
-                actor=plan_actor,
-            )
-            return command, self._trade_plans.execute(command)
-        if envelope.command_name == "trade_plan.revise_draft@1":
-            command = ReviseTradePlanDraft(
-                invocation_id=envelope.invocation_id,
-                draft_id=str(payload["draft_id"]),
-                expected_revision=_revision(envelope),
-                proposed_graph=_plan_graph(payload["proposed_graph"]),
-                parameters=_mapping(payload["parameters"]),
-                updated_at=str(payload["updated_at"]),
-                actor=plan_actor,
-            )
-            return command, self._trade_plans.execute(command)
         if envelope.command_name == "trade_plan.reject_draft@1":
             command = RejectTradePlanDraft(
                 invocation_id=envelope.invocation_id,
@@ -540,6 +589,101 @@ class ApplicationCommandDispatcher:
             request_hash=canonical_hash(envelope.canonical_content),
             code=code,
         )
+
+
+def _prepare_trade_plan_draft(
+    envelope: ApplicationCommandEnvelopeV1,
+) -> PrepareTradePlanDraft:
+    payload = envelope.payload
+    if (
+        set(payload)
+        != {"account_ref", "security_ref", "plan_style", "requested_at"}
+        or envelope.expected_revision is not None
+        or envelope.approval_challenge_id is not None
+    ):
+        raise PlanValidationError("PLAN_DRAFT_COMMAND_FIELDS_INVALID")
+    actor = envelope.decision_actor
+    transport = envelope.transport_actor
+    return PrepareTradePlanDraft(
+        invocation_id=envelope.invocation_id,
+        account_ref=_plan_text(payload["account_ref"]),
+        security_ref=_plan_text(payload["security_ref"]),
+        plan_style=_plan_text(payload["plan_style"]),
+        requested_at=_plan_text(payload["requested_at"]),
+        actor=PlanCommandActor(
+            actor.identity,
+            envelope.interaction_channel.value,
+            transport.identity,
+        ),
+    )
+
+def _plan_text(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise PlanValidationError(
+            "PLAN_DRAFT_COMMAND_FIELDS_INVALID"
+        )
+    return value
+
+
+def _create_discipline_review_draft(
+    envelope: ApplicationCommandEnvelopeV1,
+) -> CreateDisciplineReviewDraft:
+    payload = envelope.payload
+    if (
+        set(payload) != {"account_id", "period_request"}
+        or envelope.expected_revision is not None
+        or envelope.approval_challenge_id is not None
+    ):
+        raise DisciplineReviewError(
+            "DISCIPLINE_REVIEW_COMMAND_FIELDS_INVALID"
+        )
+    period_request = _mapping(payload["period_request"])
+    if set(period_request) != {
+        "period_kind",
+        "requested_at",
+        "requested_start_date",
+        "requested_end_date",
+    }:
+        raise DisciplineReviewError(
+            "DISCIPLINE_REVIEW_COMMAND_FIELDS_INVALID"
+        )
+    actor = envelope.decision_actor
+    transport = envelope.transport_actor
+    return CreateDisciplineReviewDraft(
+        invocation_id=envelope.invocation_id,
+        account_id=_discipline_review_text(payload["account_id"]),
+        period_request=DisciplineReviewPeriodRequest(
+            period_kind=_discipline_review_text(
+                period_request["period_kind"]
+            ),
+            requested_at=_discipline_review_text(
+                period_request["requested_at"]
+            ),
+            requested_start_date=_optional_discipline_review_text(
+                period_request["requested_start_date"]
+            ),
+            requested_end_date=_optional_discipline_review_text(
+                period_request["requested_end_date"]
+            ),
+        ),
+        decision_actor=actor.identity,
+        interaction_channel=envelope.interaction_channel.value,
+        transport_actor=transport.identity,
+    )
+
+
+def _discipline_review_text(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise DisciplineReviewError(
+            "DISCIPLINE_REVIEW_COMMAND_FIELDS_INVALID"
+        )
+    return value
+
+
+def _optional_discipline_review_text(value: object) -> str | None:
+    if value is None:
+        return None
+    return _discipline_review_text(value)
 
 
 def _revision(envelope: ApplicationCommandEnvelopeV1) -> int:
@@ -594,110 +738,24 @@ def _mapping(value: object) -> Mapping[str, object]:
     return value
 
 
-def _plan_graph(value: object) -> TradePlanGraph:
-    payload = _mapping(value)
-    raw_version = _mapping(payload["version"])
-    version = TradePlanVersion(
-        plan_version_id=str(raw_version["plan_version_id"]),
-        plan_id=str(raw_version["plan_id"]),
-        version_no=int(raw_version["version_no"]),
-        supersedes_version_id=(
-            str(raw_version["supersedes_version_id"])
-            if raw_version.get("supersedes_version_id") is not None
-            else None
-        ),
-        strategy_version_id=str(raw_version["strategy_version_id"]),
-        investment_thesis_version_id=(
-            str(raw_version["investment_thesis_version_id"])
-            if raw_version.get("investment_thesis_version_id") is not None
-            else None
-        ),
-        account_snapshot_version_id=str(raw_version["account_snapshot_version_id"]),
-        data_snapshot_id=str(raw_version["data_snapshot_id"]),
-        horizon_start=str(raw_version["horizon_start"]),
-        horizon_end=str(raw_version["horizon_end"]),
-        review_by=str(raw_version["review_by"]),
-        risk_policy_version_id=(
-            str(raw_version["risk_policy_version_id"])
-            if raw_version.get("risk_policy_version_id") is not None
-            else None
-        ),
-        metric_catalog_version=str(raw_version["metric_catalog_version"]),
-        evaluator_policy_version=str(raw_version["evaluator_policy_version"]),
-        conflict_policy_version=str(raw_version["conflict_policy_version"]),
-        ast_version=str(raw_version["ast_version"]),
-        content=_mapping(raw_version["content"]),
-        content_hash=str(raw_version["content_hash"]),
-        graph_seal_hash=str(raw_version["graph_seal_hash"]),
-        confirmed_at=str(raw_version["confirmed_at"]),
-        user_approval_receipt_id=str(raw_version["user_approval_receipt_id"]),
+def _risk_limits(value: object) -> PortfolioRiskLimits:
+    raw = _mapping(value)
+    keys = (
+        "single_security_exposure",
+        "industry_exposure",
+        "gross_exposure",
+        "minimum_cash",
+        "single_plan_loss",
+        "aggregate_active_plan_loss",
+        "drawdown_review",
+        "drawdown_freeze",
+        "plan_daily_liquidity",
+        "position_daily_liquidity",
     )
-    sleeves = tuple(_plan_sleeve(_mapping(raw)) for raw in payload.get("sleeves", ()))
-    rules = tuple(_plan_rule(_mapping(raw)) for raw in payload.get("rules", ()))
-    graph = TradePlanGraph(
-        version=version,
-        sleeves=sleeves,
-        rules=rules,
-        evidence_references=tuple(
-            _mapping(raw) for raw in payload.get("evidence_references", ())
-        ),
-        adjusted_price_evidence=tuple(
-            _mapping(raw) for raw in payload.get("adjusted_price_evidence", ())
-        ),
-        schema_version=str(payload["schema_version"]),
-    )
-    graph.validate()
-    return graph
-
-
-def _plan_sleeve(raw: Mapping[str, object]) -> CoreSleeve | GridSleeve:
-    def decimal_value(state_key: str, value_key: str) -> Decimal | None:
-        return Decimal(str(raw[value_key])) if raw[state_key] == "known" else None
-
-    common = {
-        "sleeve_id": str(raw["sleeve_id"]),
-        "quantity_budget": decimal_value(
-            "quantity_budget_state", "quantity_budget_value"
-        ),
-        "core_floor": CoreFloor(Decimal(str(raw["core_floor_value"]))),
-        "max_notional": decimal_value("max_notional_state", "max_notional_value"),
-        "max_loss": decimal_value("max_loss_state", "max_loss_value"),
-    }
-    if raw["sleeve_kind"] == "core":
-        return CoreSleeve(**common)
-    grid = _mapping(raw["grid_constraint"])
-    return GridSleeve(
-        **common,
-        constraint=GridConstraint(
-            grid_constraint_id=str(grid["grid_constraint_id"]),
-            lower_price=Decimal(str(grid["lower_price"])),
-            upper_price=Decimal(str(grid["upper_price"])),
-            level_count=int(grid["level_count"]),
-            quantity_per_level=Decimal(str(grid["quantity_per_level"])),
-            total_quantity_budget=Decimal(str(grid["total_quantity_budget"])),
-            price_basis=str(grid["price_basis"]),
-            trigger_mode=str(grid["trigger_mode"]),
-            cooldown_trading_sessions=int(grid["cooldown_trading_sessions"]),
-            lot_size=Decimal(str(grid["lot_size"])),
-        ),
-    )
-
-
-def _plan_rule(raw: Mapping[str, object]) -> TradePlanRule:
-    return TradePlanRule(
-        rule_id=str(raw["rule_id"]),
-        rule_class=RuleClass(str(raw["rule_class"])),
-        rule_kind=str(raw["rule_kind"]),
-        priority=RulePriority(str(raw["priority"])),
-        scope=RuleScope(str(raw["scope"])),
-        sleeve_id=(str(raw["sleeve_id"]) if raw.get("sleeve_id") is not None else None),
-        effect=str(raw["effect"]),
-        applies_to=str(raw["applies_to"]),
-        candidate_intent=candidate_from_dict(raw.get("candidate_intent")),
-        input_applicability=tuple(raw.get("input_applicability", ())),
-        condition=ast_from_dict(_mapping(raw["condition"])),
-        content_hash=str(raw["content_hash"]),
-        ast_version=str(raw["ast_version"]),
+    if set(raw) != set(keys):
+        raise ValueError("RISK_POLICY_LIMIT_FIELDS_INVALID")
+    return PortfolioRiskLimits(
+        **{key: Decimal(str(raw[key])) for key in keys}
     )
 
 
@@ -714,10 +772,16 @@ def _json_value(value: object) -> object:
 
 
 def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
+    if payload.get("discipline_review_id"):
+        return (
+            str(payload["discipline_review_id"]),
+            str(payload.get("version_no", "")),
+        )
     aggregate = next(
         (
             str(payload[key])
             for key in (
+                "annotation_id",
                 "account_id",
                 "plan_id",
                 "draft_id",
@@ -735,7 +799,9 @@ def _result_identity(payload: Mapping[str, object]) -> tuple[str, str]:
         (
             str(payload[key])
             for key in (
+                "annotation_version_id",
                 "account_snapshot_version_id",
+                "portfolio_risk_policy_version_id",
                 "registration_id",
                 "plan_version_id",
                 "review_run_id",

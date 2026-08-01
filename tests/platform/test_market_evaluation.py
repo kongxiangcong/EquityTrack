@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -7,13 +8,16 @@ import pytest
 from tests.platform.owning_adapter_fixture import (
     SQLiteOwningAdapterFixture,
 )
+from tests.platform.test_plan_confirmation import (
+    _open_trade_plan_test_seams,
+)
 from tests.platform.test_trade_plan_model_b import (
     _authority_root,
     _confirm_graph,
 )
 from trading_platform.application import (
     open_market,
-    open_trade_plan,
+
 )
 from trading_platform.application.market_contracts import (
     EvaluatePlanCommand,
@@ -23,13 +27,20 @@ from trading_platform.application.command_codecs import (
     decode_plan_evaluation_command_value,
 )
 from trading_platform.domain.conflicts import ResolutionOutcome
+from trading_platform.domain.market import (
+    ComponentStatus,
+    MarketBar,
+    SnapshotStatus,
+    UniverseMember,
+    compute_components,
+)
 from trading_platform.domain.plans import (
     CoreFloor,
     CoreSleeve,
     GridSleeve,
     TradePlanMasterId,
     TradePlanRule,
-    build_plan_version,
+    build_trade_plan_draft_graph,
 )
 from trading_platform.domain.rules import (
     CandidateIntent,
@@ -114,8 +125,8 @@ def _active_grid_plan(data_root, snapshot_id: str) -> str:
     plan_id = TradePlanMasterId.derive(
         "account_local", "security_600000", "market-evaluation"
     )
-    with open_trade_plan(data_root) as tasks:
-        graph = build_plan_version(
+    with _open_trade_plan_test_seams(data_root) as (tasks, _):
+        graph = build_trade_plan_draft_graph(
             plan_version_id="trade_plan_version_market_evaluation",
             plan_id=plan_id.value,
             version_no=1,
@@ -147,8 +158,6 @@ def _active_grid_plan(data_root, snapshot_id: str) -> str:
             rules=(rule,),
             evidence_references=(),
             adjusted_price_evidence=(),
-            confirmed_at="2026-07-27T00:00:00+08:00",
-            user_approval_receipt_id="pending-user-approval",
         )
         graph = _confirm_graph(
             tasks, graph, "market_evaluation"
@@ -300,3 +309,47 @@ def test_evaluation_command_codec_rejects_retired_policy_selection() -> None:
             }
         )
     assert failure.value.code == "PLAN_EVALUATION_COMMAND_INVALID"
+
+def test_price_context_degrades_locally_when_constraint_evidence_is_absent() -> None:
+    sessions = tuple(
+        (date(2025, 11, 1) + timedelta(days=index)).isoformat()
+        for index in range(60)
+    )
+    bars = tuple(
+        MarketBar(
+            "security_600000",
+            session,
+            Decimal(index + 1),
+            Decimal("1000"),
+            f"daily:{index}",
+        )
+        for index, session in enumerate(sessions)
+    )
+    status, components = compute_components(
+        security_id="security_600000",
+        benchmark_id="benchmark_unavailable",
+        universe_members=(
+            UniverseMember(
+                "security_600000",
+                "2020-01-01",
+                None,
+                "universe:evidence",
+            ),
+        ),
+        bars=bars,
+        effective_session=sessions[-1],
+        freshness="valid",
+        quality="pass",
+        constraints={},
+    )
+    price = next(
+        item
+        for item in components
+        if item.component_id == "security.price_context"
+    )
+
+    assert status is SnapshotStatus.LIMITED
+    assert price.status is ComponentStatus.LIMITED
+    assert dict(price.values)["close"] == "60"
+    assert "suspended" not in dict(price.values)
+    assert len(price.evidence_refs) == 60

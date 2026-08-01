@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from datetime import date, datetime, timedelta
 
 from trading_platform.application.decision_journal import (
     ListDecisionJournal,
@@ -19,10 +20,12 @@ from trading_platform.domain.discipline_reviews import (
     DisciplineReviewError,
     DisciplineReviewInputs,
     DisciplineReviewPeriod,
+    DisciplineReviewPeriodRequest,
     DisciplineReviewVersion,
 )
 from trading_platform.domain.decision_tasks import DecisionTaskState
 from trading_platform.identity import canonical_hash
+from trading_platform.domain.market_time import SHANGHAI_TIMEZONE
 
 from .decision_journal import SQLiteDecisionJournalRepository
 from .decision_tasks import SQLiteDecisionTaskRepository
@@ -66,6 +69,119 @@ class SQLiteDisciplineReviewRepository:
             (discipline_review_id,),
         ).fetchone()
         return self._review(row) if row is not None else None
+
+    def resolve_period(
+        self, request: DisciplineReviewPeriodRequest
+    ) -> tuple[DisciplineReviewPeriod, tuple[str, ...]]:
+        request.validate()
+        requested = datetime.fromisoformat(request.requested_at)
+        local_date = requested.astimezone(SHANGHAI_TIMEZONE).date()
+        complete_dates: set[date] = set()
+        rows = self._connection.execute(
+            "SELECT DISTINCT s.effective_session_date,s.as_of_at,"
+            "s.last_success_at FROM data_snapshot s "
+            "JOIN data_snapshot_universe_ref u "
+            "ON u.data_snapshot_id=s.data_snapshot_id "
+            "JOIN market_universe_version v "
+            "ON v.market_universe_version_id=u.market_universe_version_id "
+            "WHERE s.market_timezone='Asia/Shanghai' "
+            "AND s.snapshot_purpose IN ('research','workflow','market') "
+            "AND u.market_scope_id='CN_A_SHARE' "
+            "AND v.market_scope_id='CN_A_SHARE' "
+            "AND s.quality_status='pass' "
+            "AND s.freshness_status='valid' "
+            "AND s.coverage_expected>0 AND s.coverage_eligible>0 "
+            "AND s.coverage_missing=0 "
+            "AND s.coverage_eligible+s.coverage_excluded="
+            "s.coverage_expected "
+            "AND s.freshness_basis='effective_complete_session' "
+            "AND EXISTS(SELECT 1 FROM market_universe_member m "
+            "WHERE m.market_universe_version_id="
+            "u.market_universe_version_id)"
+        ).fetchall()
+        for row in rows:
+            try:
+                session = date.fromisoformat(
+                    str(row["effective_session_date"])
+                )
+                as_of = datetime.fromisoformat(str(row["as_of_at"]))
+                last_success = datetime.fromisoformat(
+                    str(row["last_success_at"])
+                )
+            except ValueError as error:
+                raise DisciplineReviewError(
+                    "DISCIPLINE_REVIEW_SESSION_TIME_INVALID"
+                ) from error
+            if (
+                as_of.tzinfo is None
+                or as_of.utcoffset() is None
+                or last_success.tzinfo is None
+                or last_success.utcoffset() is None
+            ):
+                raise DisciplineReviewError(
+                    "DISCIPLINE_REVIEW_SESSION_TIME_INVALID"
+                )
+            if (
+                session <= local_date
+                and as_of <= requested
+                and last_success <= requested
+            ):
+                complete_dates.add(session)
+        if not complete_dates:
+            raise DisciplineReviewError(
+                "DISCIPLINE_REVIEW_COMPLETE_SESSION_UNAVAILABLE"
+            )
+        notes: list[str] = []
+        if request.period_kind == "weekly":
+            week_start = local_date - timedelta(
+                days=local_date.weekday()
+            )
+            selected = sorted(
+                value
+                for value in complete_dates
+                if week_start <= value <= local_date
+            )
+            if not selected:
+                latest = max(complete_dates)
+                fallback_start = latest - timedelta(
+                    days=latest.weekday()
+                )
+                selected = sorted(
+                    value
+                    for value in complete_dates
+                    if fallback_start <= value <= latest
+                )
+                notes.append("used_latest_available_complete_week")
+        else:
+            assert request.requested_start_date is not None
+            assert request.requested_end_date is not None
+            requested_start = date.fromisoformat(
+                request.requested_start_date
+            )
+            requested_end = min(
+                date.fromisoformat(request.requested_end_date),
+                local_date,
+            )
+            selected = sorted(
+                value
+                for value in complete_dates
+                if requested_start <= value <= requested_end
+            )
+            if not selected:
+                raise DisciplineReviewError(
+                    "DISCIPLINE_REVIEW_COMPLETE_SESSION_UNAVAILABLE"
+                )
+            if selected[0] != requested_start:
+                notes.append("period_start_adjusted_to_complete_session")
+            if selected[-1] != requested_end:
+                notes.append("period_end_adjusted_to_complete_session")
+        period = DisciplineReviewPeriod(
+            period_kind=request.period_kind,
+            period_start_session=selected[0].isoformat(),
+            period_end_session=selected[-1].isoformat(),
+        )
+        period.validate()
+        return period, tuple(notes)
 
     def collect(
         self,

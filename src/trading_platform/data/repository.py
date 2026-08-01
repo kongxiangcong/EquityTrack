@@ -449,9 +449,78 @@ class DataRepository:
             values = [format(Decimal(str(row[key])), "f") for key in ("open", "high", "low", "close", "volume")]
             amount = None if row.get("amount") is None else format(Decimal(str(row["amount"])), "f")
             self.connection.execute("INSERT INTO ohlcv_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (version_id, row["security_id"], row["session_date"], row.get("market_timezone", "Asia/Shanghai"), "none", *values, row["volume_unit"], amount, row.get("amount_unit"), row["currency"]))
+            if "adjustment_factor" in row:
+                evidence_identity_hash = canonical_hash(
+                    {
+                        "normalized_version_id": version_id,
+                        "security_id": row["security_id"],
+                        "session_date": row["session_date"],
+                        "adjustment_factor": str(row["adjustment_factor"]),
+                        "suspended": row["suspended"],
+                        "limit_state": row["limit_state"],
+                        "corporate_action_identity": row.get(
+                            "corporate_action_identity"
+                        ),
+                    }
+                )
+                self.connection.execute(
+                    "INSERT INTO market_path_daily_evidence_version "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        version_id,
+                        format(Decimal(str(row["adjustment_factor"])), "f"),
+                        int(row["suspended"]),
+                        row["limit_state"],
+                        row.get("corporate_action_identity"),
+                        evidence_identity_hash,
+                    ),
+                )
         elif item.dataset == "trade_cal":
             session_id = f"session_{canonical_hash({'market': row['market'], 'date': row['session_date'], 'version': row['calendar_version']})[:24]}"
-            self.connection.execute("INSERT OR IGNORE INTO market_session_version VALUES(?,?,?,?,?,?,?)", (session_id, row["market"], row["session_date"], int(bool(row["is_open"])), row["calendar_version"], item.available_at, attempt_id))
+            self.connection.execute(
+                "INSERT OR IGNORE INTO market_session_version "
+                "VALUES(?,?,?,?,?,?,?)",
+                (
+                    session_id,
+                    row["market"],
+                    row["session_date"],
+                    int(bool(row["is_open"])),
+                    row["calendar_version"],
+                    item.available_at,
+                    attempt_id,
+                ),
+            )
+            self.connection.execute(
+                "INSERT INTO market_session_normalized_evidence "
+                "VALUES(?,?)",
+                (session_id, version_id),
+            )
+        elif item.dataset in {"research_model_input", "market_path_policy"}:
+            extracted_fields_json = json.dumps(
+                row["extracted_fields"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            input_identity_hash = canonical_hash(
+                {
+                    "security_id": row["security_id"],
+                    "component_dataset": item.dataset,
+                    "component_input_id": row["component_input_id"],
+                    "extracted_fields": row["extracted_fields"],
+                }
+            )
+            self.connection.execute(
+                "INSERT INTO research_component_input_version "
+                "VALUES(?,?,?,?,?)",
+                (
+                    version_id,
+                    row["security_id"],
+                    item.dataset,
+                    extracted_fields_json,
+                    input_identity_hash,
+                ),
+            )
         elif item.dataset == "official_filing":
             document_sha256 = row.get("document_object_sha256")
             if not isinstance(document_sha256, str):
@@ -563,7 +632,8 @@ class DataRepository:
             return SyncResult(SyncStatus.MISSING, None, request.requested_date, None, FreshnessStatus.MISSING, QualityStatus.BLOCKING, (), Coverage(0, 0, 0, 0), NextStep.SYNC_TRADE_CALENDAR, 0, "no_cutoff_legal_calendar", None, self.distribution_qualification(), disposition)
         effective_session, calendar_version = sessions[0]
         universe = self.connection.execute(
-            "SELECT v.market_universe_version_id "
+            "SELECT v.market_universe_version_id,"
+            "v.market_scope_id "
             "FROM market_universe_version v "
             "JOIN market_universe_member m "
             "USING(market_universe_version_id) "
@@ -624,7 +694,7 @@ class DataRepository:
                             "MARKET_UNIVERSE_REFERENCE_MISSING",
                             "Selected market-universe version is missing.",
                         )
-                    self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], request.market))
+                    self.connection.execute("INSERT OR IGNORE INTO data_snapshot_universe_ref VALUES(?,?,?)", (snapshot_id, universe[0], universe["market_scope_id"]))
                 for ordinal, (version_id, role) in enumerate(eligible_members):
                     self.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", (snapshot_id, version_id, role, ordinal))
         status = SyncStatus.BLOCKED if quality is QualityStatus.BLOCKING else SyncStatus.COMPLETE

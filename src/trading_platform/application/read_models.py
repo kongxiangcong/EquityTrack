@@ -7,6 +7,10 @@ from typing import Mapping, Protocol, TypeVar
 
 from trading_platform.identity import canonical_hash
 
+from .plan_presentation import build_plan_decision_summary
+from .chart_presentation import build_chart_workspace_projection
+from .web_tasks import ChartWorkspace
+
 
 class ReadModelError(ValueError):
     def __init__(self, code: str) -> None:
@@ -58,9 +62,15 @@ class TradePlanDetailViewV1:
     source_ids: tuple[str, ...]
     generated_at: str
     plan_identity: Mapping[str, object]
+    decision_summary: Mapping[str, object]
     sleeve_summary: tuple[Mapping[str, object], ...]
     rules: tuple[Mapping[str, object], ...]
     latest_frozen_evaluations: tuple[Mapping[str, object], ...]
+    evidence_freshness: tuple[Mapping[str, object], ...]
+    rule_states: tuple[Mapping[str, object], ...]
+    related_tasks: tuple[Mapping[str, object], ...]
+    review_history: tuple[Mapping[str, object], ...]
+    change_diffs: tuple[Mapping[str, object], ...]
     confirmation_state: Mapping[str, object] | None
     version_history: tuple[Mapping[str, object], ...]
     diagnostics: Mapping[str, object]
@@ -81,6 +91,7 @@ class ReviewWorkspaceViewV1:
     unresolved_or_deferred_tasks: tuple[Mapping[str, object], ...]
     plan_impact_summaries: tuple[Mapping[str, object], ...]
     proposal_summaries: tuple[Mapping[str, object], ...]
+    periodic_discipline_review: Mapping[str, object] | None
     diagnostics: Mapping[str, object]
     content_hash: str
     schema_version: str = "ReviewWorkspaceView@1"
@@ -101,6 +112,21 @@ class ResearchIndexViewV1:
     def validate(self) -> None:
         _validate_view(self, "research_index")
 
+
+@dataclass(frozen=True)
+class ChartWorkspaceViewV1:
+    projection_id: str
+    source_ids: tuple[str, ...]
+    generated_at: str
+    frame: Mapping[str, object]
+    bars: tuple[Mapping[str, object], ...]
+    annotations: tuple[Mapping[str, object], ...]
+    annotation_history: tuple[Mapping[str, object], ...]
+    content_hash: str
+    schema_version: str = "ChartWorkspaceView@1"
+
+    def validate(self) -> None:
+        _validate_view(self, "chart_workspace")
 
 @dataclass(frozen=True)
 class AccountSnapshotEditorViewV1:
@@ -127,6 +153,7 @@ ReadModelView = (
     | TradePlanDetailViewV1
     | ReviewWorkspaceViewV1
     | ResearchIndexViewV1
+    | ChartWorkspaceViewV1
     | AccountSnapshotEditorViewV1
 )
 
@@ -152,6 +179,22 @@ class ReadModelProjection(Protocol):
         self, security_id: str | None
     ) -> tuple[tuple[str, ...], Mapping[str, object]]: ...
 
+    def chart_workspace(
+        self,
+        security_id: str,
+        generated_at: str,
+        snapshot_id: str | None = None,
+    ) -> ChartWorkspaceViewV1:
+        return self._build(
+            ChartWorkspaceViewV1,
+            "ChartWorkspaceView@1",
+            "chart_workspace",
+            generated_at,
+            build_chart_workspace_projection(
+                self._chart_workspace, security_id, snapshot_id
+            ),
+        )
+
     def account_editor(
         self, account_id: str
     ) -> tuple[tuple[str, ...], Mapping[str, object]]: ...
@@ -161,10 +204,13 @@ _V = TypeVar("_V", bound=ReadModelView)
 
 
 class ReadModelService:
-    """Builds the six immutable presentation contracts from authority reads."""
+    """Builds the immutable product presentation contracts from authority reads."""
 
-    def __init__(self, projection: ReadModelProjection) -> None:
+    def __init__(
+        self, projection: ReadModelProjection, chart_workspace: ChartWorkspace
+    ) -> None:
         self._projection = projection
+        self._chart_workspace = chart_workspace
 
     def portfolio(
         self, account_id: str, generated_at: str
@@ -194,12 +240,17 @@ class ReadModelService:
     def plan_detail(
         self, plan_id: str, generated_at: str
     ) -> TradePlanDetailViewV1:
+        source_ids, payload = self._projection.plan_detail(plan_id)
+        enriched = {
+            **payload,
+            "decision_summary": build_plan_decision_summary(payload),
+        }
         return self._build(
             TradePlanDetailViewV1,
             "TradePlanDetailView@1",
             "trade_plan_detail",
             generated_at,
-            self._projection.plan_detail(plan_id),
+            (source_ids, enriched),
         )
 
     def review(
@@ -225,6 +276,22 @@ class ReadModelService:
             "research_index",
             generated_at,
             self._projection.research_index(security_id),
+        )
+
+    def chart_workspace(
+        self,
+        security_id: str,
+        generated_at: str,
+        snapshot_id: str | None = None,
+    ) -> ChartWorkspaceViewV1:
+        return self._build(
+            ChartWorkspaceViewV1,
+            "ChartWorkspaceView@1",
+            "chart_workspace",
+            generated_at,
+            build_chart_workspace_projection(
+                self._chart_workspace, security_id, snapshot_id
+            ),
         )
 
     def account_editor(
@@ -327,6 +394,7 @@ def _freeze(value: object) -> object:
 
 __all__ = [
     "AccountSnapshotEditorViewV1",
+    "ChartWorkspaceViewV1",
     "HoldingWorkspaceViewV1",
     "PortfolioWorkspaceViewV1",
     "ReadModelError",

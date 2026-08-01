@@ -5,6 +5,10 @@ import sqlite3
 
 import pytest
 
+from tests.platform.test_plan_confirmation import (
+    _open_trade_plan_test_seams,
+)
+
 from trading_platform.domain.plans import (
     CoreFloor,
     CoreSleeve,
@@ -13,7 +17,7 @@ from trading_platform.domain.plans import (
     PositionSleeveKind,
     TradePlanMasterId,
     TradePlanRule,
-    build_plan_version,
+    build_trade_plan_draft_graph,
     validate_sleeve_contract,
     validate_sleeve_quantities,
 )
@@ -27,7 +31,7 @@ from trading_platform.domain.rules import (
 )
 from trading_platform.application import (
     GetTradePlanGraph,
-    open_trade_plan,
+
 )
 from trading_platform.domain.strategies import (
     CorePlusGridParameters,
@@ -227,7 +231,7 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
         "schema_version": "TradePlanContent@1",
         "purpose": "core-grid-round-trip",
     }
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, _):
         rule = TradePlanRule.build(
             rule_id="rule_core_grid_round_trip",
             rule_class=RuleClass.HARD,
@@ -246,7 +250,7 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
                 expected=Decimal("0"),
             ),
         )
-        graph = build_plan_version(
+        graph = build_trade_plan_draft_graph(
             plan_version_id="trade_plan_version_core_grid_round_trip",
             plan_id=plan_id.value,
             version_no=1,
@@ -266,8 +270,6 @@ def test_sealed_core_grid_graph_round_trips_exact_rows_and_rejects_mutation(
             rules=(rule,),
             evidence_references=(),
             adjusted_price_evidence=(),
-            confirmed_at="2026-07-27T00:00:00+08:00",
-            user_approval_receipt_id="pending-user-approval",
         )
         sealed = _confirm_graph(
             tasks, graph, "core_grid_round_trip"

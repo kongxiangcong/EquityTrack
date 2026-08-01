@@ -33,16 +33,16 @@ def test_ledger_persists_only_request_v2_and_one_bound_view_manifest(
     view = adapter.execute(
         "SELECT manifest_role,producer_id,member_count "
         "FROM artifact_manifest "
-        "WHERE manifest_role='workflow_decision_view@2'"
+        "WHERE manifest_role='workflow_decision_view@3'"
     ).fetchone()
     assert tuple(request) == (
         "ResearchWorkflowRequest@2",
         "ResearchWorkflowRequest@2",
     )
     assert tuple(view) == (
-        "workflow_decision_view@2",
+        "workflow_decision_view@3",
         result.workflow_run_id,
-        3,
+        4,
     )
     root.close()
 
@@ -67,10 +67,18 @@ def test_checkpoint_members_are_content_addressed_and_role_complete(
         payload = (root.data_root / row["relative_path"]).read_bytes()
         assert hashlib.sha256(payload).hexdigest() == row["object_sha256"]
     assert {member["member_role"] for member in manifest.members} == {
+        "research_bundle_json",
         "research_run_json",
+        "forecast",
+        "scenario_valuation",
+        "valuation_method_route",
+        "valuation_simulation_decision",
+        "market_path_decision",
+        "recent_trend_assessment",
         "decision_view_json",
         "decision_view_html",
         "decision_view_pdf",
+        "decision_view_workbook",
     }
     root.close()
 

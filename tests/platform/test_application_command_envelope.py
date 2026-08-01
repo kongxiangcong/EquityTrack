@@ -53,43 +53,6 @@ def _encoded(
     ).encode()
 
 
-def _graph_payload(graph) -> dict[str, object]:
-    version = graph.version
-    return {
-        "schema_version": graph.schema_version,
-        "version": {
-            "plan_version_id": version.plan_version_id,
-            "plan_id": version.plan_id,
-            "version_no": version.version_no,
-            "supersedes_version_id": version.supersedes_version_id,
-            "strategy_version_id": version.strategy_version_id,
-            "investment_thesis_version_id": version.investment_thesis_version_id,
-            "account_snapshot_version_id": version.account_snapshot_version_id,
-            "data_snapshot_id": version.data_snapshot_id,
-            "horizon_start": version.horizon_start,
-            "horizon_end": version.horizon_end,
-            "review_by": version.review_by,
-            "risk_policy_version_id": version.risk_policy_version_id,
-            "metric_catalog_version": version.metric_catalog_version,
-            "evaluator_policy_version": version.evaluator_policy_version,
-            "conflict_policy_version": version.conflict_policy_version,
-            "ast_version": version.ast_version,
-            "content": version.content,
-            "content_hash": version.content_hash,
-            "graph_seal_hash": version.graph_seal_hash,
-            "confirmed_at": version.confirmed_at,
-            "user_approval_receipt_id": version.user_approval_receipt_id,
-        },
-        "sleeves": [
-            {**sleeve.canonical_content, "grid_constraint": None}
-            for sleeve in graph.sleeves
-        ],
-        "rules": [],
-        "evidence_references": list(graph.evidence_references),
-        "adjusted_price_evidence": list(graph.adjusted_price_evidence),
-    }
-
-
 def test_skill_cli_and_web_codecs_share_request_hash_and_result_schema(
     tmp_path: Path,
 ) -> None:
@@ -375,88 +338,53 @@ def test_account_registration_fails_closed_on_future_security_identity(
     assert conflict.code == "SECURITY_IDENTIFIER_TEMPORAL_CONFLICT"
 
 
-def test_plan_create_challenge_and_confirmation_use_the_same_dispatcher(
+
+def test_user_confirms_exact_portfolio_risk_policy_through_dispatcher(
     tmp_path: Path,
 ) -> None:
-    data_root, snapshot_id = _authority_root(tmp_path)
-    draft = _plan_draft(snapshot_id, suffix="envelope")
-    create_payload = {
-        "draft": {
-            "draft_id": draft.draft_id,
-            "account_id": draft.account_id,
-            "security_id": draft.security_id,
-            "parameters": dict(draft.parameters),
-            "created_at": draft.created_at,
-            "proposed_graph": _graph_payload(draft.proposed_graph),
-        }
+    data_root = _ready_root(tmp_path)
+    payload = {
+        "account_id": "account_local",
+        "currency": "CNY",
+        "limits": {
+            "single_security_exposure": "0.15",
+            "industry_exposure": "0.30",
+            "gross_exposure": "0.90",
+            "minimum_cash": "0.10",
+            "single_plan_loss": "0.005",
+            "aggregate_active_plan_loss": "0.02",
+            "drawdown_review": "0.08",
+            "drawdown_freeze": "0.12",
+            "plan_daily_liquidity": "0.05",
+            "position_daily_liquidity": "0.50",
+        },
     }
-    with open_application_commands(data_root) as dispatcher:
-        created = dispatcher.dispatch(
-            ApplicationCommandEnvelopeV1.from_bytes(
-                _encoded(
-                    command_name="trade_plan.create_draft@1",
-                    payload_schema_version="CreateTradePlanDraft@1",
-                    invocation_id="envelope:plan:create",
-                    payload=create_payload,
-                )
-            )
-        )
-        assert isinstance(created, ApplicationCommandResult)
-        challenge = dispatcher.dispatch(
-            ApplicationCommandEnvelopeV1.from_bytes(
-                _encoded(
-                    command_name=("trade_plan.issue_confirmation_challenge@1"),
-                    payload_schema_version=("IssuePlanConfirmationChallenge@1"),
-                    invocation_id="envelope:plan:challenge",
-                    actor_type="user",
-                    expected_revision=1,
-                    payload={
-                        "draft_id": draft.draft_id,
-                        "activation_intent": "confirm_and_activate",
-                        "issued_at": "2026-07-27T01:05:00+08:00",
-                        "expires_at": "2026-07-27T02:05:00+08:00",
-                    },
-                )
-            )
-        )
-        assert isinstance(challenge, ApplicationCommandResult)
-        raw_challenge = challenge.result
-        confirm = json.loads(
-            _encoded(
-                command_name="trade_plan.confirm@1",
-                payload_schema_version="ConfirmTradePlanDraft@1",
-                invocation_id="envelope:plan:confirm",
-                actor_type="user",
-                expected_revision=1,
-                payload={
-                    "expected_draft_hash": raw_challenge["expected_draft_hash"],
-                    "expected_diff_hash": raw_challenge["canonical_diff"][
-                        "content_hash"
-                    ],
-                    "activation_intent": "confirm_and_activate",
-                    "approved_at": "2026-07-27T01:10:00+08:00",
-                },
-            )
-        )
-        confirm["approval"] = {"challenge_id": raw_challenge["challenge_id"]}
-        confirmed = dispatcher.dispatch(
-            ApplicationCommandEnvelopeV1.from_bytes(json.dumps(confirm).encode())
-        )
-    assert isinstance(confirmed, ApplicationCommandResult)
-    assert confirmed.result_type == "PlanConfirmationResult"
-    assert confirmed.result["active_plan"]["version"]["plan_version_id"] == (
-        draft.proposed_graph.version.plan_version_id
+    encoded = _encoded(
+        command_name="portfolio_risk_policy.confirm@1",
+        payload_schema_version="ConfirmPortfolioRiskPolicy@1",
+        invocation_id="envelope:risk-policy:confirm",
+        actor_type="user",
+        payload=payload,
     )
-    connection = sqlite3.connect(data_root / "platform.sqlite3")
-    stored_hash = connection.execute(
-        "SELECT request_hash FROM application_command_receipt " "WHERE invocation_id=?",
-        (confirmed.invocation_id,),
-    ).fetchone()[0]
-    connection.close()
-    assert stored_hash == confirmed.request_hash
+    with open_application_commands(data_root) as dispatcher:
+        confirmed = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(encoded)
+        )
+        replayed = dispatcher.dispatch(
+            ApplicationCommandEnvelopeV1.from_bytes(encoded)
+        )
+
+    assert isinstance(confirmed, ApplicationCommandResult)
+    assert confirmed == replayed
+    assert confirmed.result_type == "PortfolioRiskPolicyVersion"
+    assert confirmed.result["account_id"] == "account_local"
+    assert confirmed.result["version_no"] == 1
+    assert confirmed.revision_or_version_id.startswith(
+        "portfolio_risk_policy_version_"
+    )
 
 
-def test_system_and_first_release_web_plan_mutations_fail_closed(
+def test_system_and_unlisted_web_mutations_fail_closed(
     tmp_path: Path,
 ) -> None:
     data_root = _ready_root(tmp_path)
@@ -498,7 +426,7 @@ def test_system_and_first_release_web_plan_mutations_fail_closed(
     assert isinstance(system_denied, ApplicationCommandFailure)
     assert system_denied.code == "SYSTEM_DECISION_CAPABILITY_DENIED"
     assert isinstance(web_denied, ApplicationCommandFailure)
-    assert web_denied.code == "WEB_MUTATION_CAPABILITY_DENIED"
+    assert web_denied.code == "WEB_COMMAND_CAPABILITY_DENIED"
 
 
 def test_all_mutations_cross_named_tasks_and_envelope() -> None:
@@ -507,16 +435,18 @@ def test_all_mutations_cross_named_tasks_and_envelope() -> None:
         "account_snapshot.create_draft@1",
         "account_snapshot.update_draft@1",
         "account_snapshot.confirm@1",
-        "trade_plan.create_draft@1",
-        "trade_plan.revise_draft@1",
+        "portfolio_risk_policy.confirm@1",
+        "trade_plan.prepare_draft@1",
         "trade_plan.reject_draft@1",
         "trade_plan.issue_confirmation_challenge@1",
         "trade_plan.confirm@1",
-        "manual_portfolio_review.run@1",
+        "chart_annotation.apply@1",
+        "manual_portfolio_review.run@2",
         "decision_task.defer@1",
         "decision_task.resolve@1",
         "execution_record.declare@1",
         "execution_record.correct@1",
+        "discipline_review.create_draft@2",
         "discipline_review.confirm@1",
         "plan_impact_assessment.create@1",
         "plan_change_proposal.create@1",

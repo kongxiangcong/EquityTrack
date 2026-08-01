@@ -40,6 +40,7 @@ from trading_platform.application import (
 )
 from tests.platform.test_decision_tasks import _task_review
 from tests.platform.test_execution_records import _declare
+from trading_platform.workflows.research import WorkflowError
 
 
 class InjectedCrash(RuntimeError):
@@ -160,11 +161,12 @@ def research_request(invocation: str) -> ResearchWorkflowRequest:
 
 
 def recovery_root(
-    path: Path, injector=None
+    path: Path, injector=None, workbook_projector=None
 ) -> PlatformTaskFixture:
     root = PlatformTaskFixture(
         path,
         workflow_fault_injector=injector,
+        workbook_projector=workbook_projector,
     )
     if (
         SQLiteOwningAdapterFixture(root.data_root)
@@ -196,8 +198,54 @@ def _expire_lease(root: PlatformTaskFixture, workflow_run_id: str) -> None:
     )
 
 
-def test_resume_after_atomic_evaluation_checkpoint_does_not_recompute_or_duplicate(
+class MissingPresentationDependency:
+    def project(self, _view):
+        raise ModuleNotFoundError("renderer dependency unavailable")
+
+
+def test_resume_terminal_failed_workflow_retries_failed_node(
     tmp_path: Path,
+) -> None:
+    root = recovery_root(
+        tmp_path,
+        workbook_projector=MissingPresentationDependency(),
+    )
+    with pytest.raises(WorkflowError, match="RESEARCH_PRESENTATION_FAILED"):
+        root.research.handle(
+            StartResearchWorkflow(research_request("recovery:failed"))
+        )
+    adapter = SQLiteOwningAdapterFixture(root.data_root)
+    workflow_run_id = adapter.execute(
+        "SELECT workflow_run_id FROM workflow_run"
+    ).fetchone()[0]
+    assert adapter.execute(
+        "SELECT status FROM workflow_run WHERE workflow_run_id=?",
+        (workflow_run_id,),
+    ).fetchone()[0] == "failed"
+    adapter.close()
+    root.close()
+
+    rebuilt = recovery_root(tmp_path)
+    result = rebuilt.research.handle(
+        ResumeWorkflowCommand(workflow_run_id, "failed-recovery-owner")
+    )
+    adapter = SQLiteOwningAdapterFixture(rebuilt.data_root)
+    assert result.workflow_run_id == workflow_run_id
+    assert result.final_manifest_id is not None
+    assert adapter.execute(
+        "SELECT status FROM workflow_run WHERE workflow_run_id=?",
+        (workflow_run_id,),
+    ).fetchone()[0] == "succeeded_with_limits"
+    assert adapter.execute(
+        "SELECT count(*) FROM workflow_transition "
+        "WHERE workflow_run_id=? AND reason_code='WORKFLOW_RESUMED'",
+        (workflow_run_id,),
+    ).fetchone()[0] == 1
+    adapter.close()
+    rebuilt.close()
+
+
+def test_resume_after_atomic_evaluation_checkpoint_does_not_recompute_or_duplicate(    tmp_path: Path,
 ) -> None:
     root = recovery_root(
         tmp_path,
@@ -220,7 +268,7 @@ def test_resume_after_atomic_evaluation_checkpoint_does_not_recompute_or_duplica
     assert (
         adapter.execute(
             "SELECT count(*) FROM artifact_manifest "
-            "WHERE manifest_role='workflow_decision_view@2'"
+            "WHERE manifest_role='workflow_decision_view@3'"
         ).fetchone()[0]
         == 1
     )
@@ -243,7 +291,7 @@ def test_resume_after_atomic_evaluation_checkpoint_does_not_recompute_or_duplica
     assert (
         adapter.execute(
             "SELECT count(*) FROM artifact_manifest "
-            "WHERE manifest_role='workflow_decision_view@2'"
+            "WHERE manifest_role='workflow_decision_view@3'"
         ).fetchone()[0]
         == 1
     )
@@ -277,7 +325,7 @@ def test_replay_after_terminal_commit_returns_identical_result(
         SQLiteOwningAdapterFixture(rebuilt.data_root)
         .execute(
             "SELECT count(*) FROM artifact_manifest "
-            "WHERE manifest_role='workflow_decision_view@2'"
+            "WHERE manifest_role='workflow_decision_view@3'"
         )
         .fetchone()[0]
         == 1

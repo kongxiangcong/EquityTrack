@@ -6,9 +6,9 @@ from decimal import Decimal, InvalidOperation
 import json
 import re
 from typing import Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from trading_platform.identity import canonical_hash
+from trading_platform.domain.market_time import supported_market_timezone
 
 
 ValueState = Literal["known", "unknown", "not_applicable"]
@@ -251,8 +251,8 @@ class AccountSnapshotService:
             except ValueError:
                 errors.append("AS_OF_INVALID")
         try:
-            ZoneInfo(draft.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
+            supported_market_timezone(draft.timezone)
+        except ValueError:
             errors.append("TIMEZONE_INVALID")
         if draft.session_semantics not in self._SESSION_SEMANTICS:
             errors.append("SESSION_SEMANTICS_INVALID")

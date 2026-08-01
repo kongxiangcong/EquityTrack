@@ -23,6 +23,7 @@ from trading_platform.domain.data import (
     FetchStatus,
     OfficialFilingQuery,
     RawEnvelope,
+    ResearchComponentInputQuery,
     SecurityMasterQuery,
     SourceAuthority,
     TradingCalendarQuery,
@@ -129,13 +130,26 @@ def _query_identity(query: TypedDatasetQuery) -> dict[str, str]:
         }
     if isinstance(query, ForecastActualQuery):
         return {"security_id": query.security_id, "as_of_date": query.as_of_date}
+    if isinstance(query, ResearchComponentInputQuery):
+        return {
+            "security_id": query.security_id,
+            "as_of_date": query.as_of_date,
+            "component_dataset": query.component_dataset,
+        }
     raise TypeError("TYPED_DATASET_QUERY_INVALID")
 
 
 def _cursor_value(query: TypedDatasetQuery) -> str | None:
     return (
         query.as_of_date
-        if isinstance(query, (SecurityMasterQuery, ForecastActualQuery))
+        if isinstance(
+            query,
+            (
+                SecurityMasterQuery,
+                ForecastActualQuery,
+                ResearchComponentInputQuery,
+            ),
+        )
         else query.end_date
     )
 
@@ -218,7 +232,7 @@ class TushareCompatibleProvider:
     def fetch(self, query: TypedDatasetQuery) -> FetchBatch:
         now = datetime.now(timezone.utc)
         params = _query_identity(query)
-        if isinstance(query, ForecastActualQuery):
+        if isinstance(query, (ForecastActualQuery, ResearchComponentInputQuery)):
             return FetchBatch((RawEnvelope(self._source_identity, self._source_authority, self._endpoint, params, {}, "not_applicable", self._terms_profile, now, FetchStatus.FAILED, None, None, error_code="TUSHARE_QUERY_UNSUPPORTED"),))
         if not query.network_authorized:
             return FetchBatch((RawEnvelope(self._source_identity, self._source_authority, self._endpoint, params, {}, "unknown", self._terms_profile, now, FetchStatus.FAILED, None, None, error_code="NETWORK_NOT_AUTHORIZED"),))

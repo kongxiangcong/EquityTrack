@@ -121,20 +121,24 @@ def resolve_conflicts(
                 None,
                 (item,),
             )
-    actionable = tuple(
-        item
-        for item in triggered
-        if len(item.evaluation.matched_grid_levels) == 1
-    )
-    if len(actionable) == 1 and len(triggered) == 1:
-        intent = actionable[0].evaluation.candidate_intent
+    if len(triggered) == 1:
+        candidate = triggered[0]
+        intent = candidate.evaluation.candidate_intent
         assert intent is not None
-        return _resolution(
-            ResolutionOutcome.DECISION_TASK,
-            "UNIQUE_GRID_LEVEL_ACTIONABLE",
-            intent.intent_id,
-            actionable,
-        )
+        if not intent.grid_level_ids:
+            return _resolution(
+                ResolutionOutcome.DECISION_TASK,
+                "UNIQUE_CANDIDATE_ACTIONABLE",
+                intent.intent_id,
+                (candidate,),
+            )
+        if len(candidate.evaluation.matched_grid_levels) == 1:
+            return _resolution(
+                ResolutionOutcome.DECISION_TASK,
+                "UNIQUE_GRID_LEVEL_ACTIONABLE",
+                intent.intent_id,
+                (candidate,),
+            )
     if triggered:
         return _resolution(
             ResolutionOutcome.MANUAL_REVIEW_REQUIRED,

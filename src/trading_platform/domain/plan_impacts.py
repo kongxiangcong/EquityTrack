@@ -7,7 +7,11 @@ from typing import Mapping
 
 from trading_platform.identity import canonical_hash
 
-from .plans import TradePlanGraph, build_plan_version
+from .plans import (
+    TradePlanDraftGraph,
+    TradePlanGraph,
+    build_trade_plan_draft_graph,
+)
 
 
 class PlanImpactError(ValueError):
@@ -270,7 +274,9 @@ class PlanChangeProposal:
         proposal.validate()
         return proposal
 
-    def proposed_graph(self, base_graph: TradePlanGraph) -> TradePlanGraph:
+    def proposed_graph(
+        self, base_graph: TradePlanGraph
+    ) -> TradePlanDraftGraph:
         self.validate()
         base_graph.validate()
         if (
@@ -296,7 +302,7 @@ class PlanChangeProposal:
                 "proposed_diff_hash": self.proposed_diff_hash,
             }
         )
-        return build_plan_version(
+        return build_trade_plan_draft_graph(
             plan_version_id=f"trade_plan_version_{version_seed[:24]}",
             plan_id=version.plan_id,
             version_no=version.version_no + 1,
@@ -318,8 +324,6 @@ class PlanChangeProposal:
             rules=base_graph.rules,
             evidence_references=base_graph.evidence_references,
             adjusted_price_evidence=base_graph.adjusted_price_evidence,
-            confirmed_at="1970-01-01T00:00:00+00:00",
-            user_approval_receipt_id="pending-user-approval",
         )
 
     def parameters(self) -> Mapping[str, object]:

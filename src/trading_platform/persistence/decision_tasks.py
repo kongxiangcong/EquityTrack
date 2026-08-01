@@ -56,7 +56,7 @@ class SQLiteDecisionTaskRepository:
             ).fetchone()
             if existing is not None:
                 stored = self._base_task(existing)
-                if stored != task:
+                if not stored.represents_same_persistent_condition(task):
                     raise DecisionTaskError(
                         "DECISION_TASK_IDENTITY_CONFLICT"
                     )

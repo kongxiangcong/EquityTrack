@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Mapping
@@ -277,7 +277,7 @@ class TradePlanDraft:
     status: str
     parameters: Mapping[str, object]
     content: Mapping[str, object]
-    proposed_graph: "TradePlanGraph"
+    proposed_graph: "TradePlanDraftGraph"
     content_hash: str
     created_at: str
     updated_at: str
@@ -288,6 +288,8 @@ class TradePlanDraft:
 
     def validate(self) -> None:
         self.proposed_graph.validate()
+        if not isinstance(self.proposed_graph, TradePlanDraftGraph):
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_INVALID")
         version = self.proposed_graph.version
         if (
             self.schema_version != "TradePlanDraft@1"
@@ -337,7 +339,7 @@ def build_trade_plan_draft(
     draft_id: str,
     account_id: str,
     security_id: str,
-    proposed_graph: "TradePlanGraph",
+    proposed_graph: "TradePlanDraftGraph",
     parameters: Mapping[str, object],
     created_at: str,
     decision_actor: str,
@@ -415,6 +417,53 @@ class PlanGraphSeal:
 
 
 @dataclass(frozen=True)
+class ProposedTradePlanVersion:
+    plan_version_id: str
+    plan_id: str
+    version_no: int
+    supersedes_version_id: str | None
+    strategy_version_id: str
+    investment_thesis_version_id: str | None
+    account_snapshot_version_id: str
+    data_snapshot_id: str
+    horizon_start: str
+    horizon_end: str
+    review_by: str
+    risk_policy_version_id: str | None
+    metric_catalog_version: str
+    evaluator_policy_version: str
+    conflict_policy_version: str
+    ast_version: str
+    content: Mapping[str, object]
+    content_hash: str
+    graph_seal_hash: str
+    schema_version: str = "ProposedTradePlanVersion@1"
+
+    def validate(self) -> None:
+        try:
+            start = date.fromisoformat(self.horizon_start)
+            review = date.fromisoformat(self.review_by)
+            end = date.fromisoformat(self.horizon_end)
+        except ValueError as error:
+            raise PlanValidationError("PLAN_HORIZON_INVALID") from error
+        if (
+            self.schema_version != "ProposedTradePlanVersion@1"
+            or not self.plan_version_id
+            or not self.plan_id
+            or self.version_no < 1
+            or not self.strategy_version_id
+            or not self.account_snapshot_version_id
+            or not self.data_snapshot_id
+            or not start <= review <= end
+            or self.conflict_policy_version != "trade-plan-conflict@1"
+            or self.ast_version != "plan-rule-ast@2"
+            or self.content_hash != canonical_hash(self.content)
+            or not self.graph_seal_hash
+        ):
+            raise PlanValidationError("PROPOSED_PLAN_VERSION_INVALID")
+
+
+@dataclass(frozen=True)
 class TradePlanVersion:
     plan_version_id: str
     plan_id: str
@@ -445,8 +494,9 @@ class TradePlanVersion:
             start = date.fromisoformat(self.horizon_start)
             review = date.fromisoformat(self.review_by)
             end = date.fromisoformat(self.horizon_end)
+            approved = datetime.fromisoformat(self.confirmed_at)
         except ValueError as error:
-            raise PlanValidationError("PLAN_HORIZON_INVALID") from error
+            raise PlanValidationError("PLAN_VERSION_INVALID") from error
         if (
             self.schema_version != "TradePlanVersion@1"
             or not self.plan_version_id
@@ -460,8 +510,10 @@ class TradePlanVersion:
             or self.ast_version != "plan-rule-ast@2"
             or self.content_hash != canonical_hash(self.content)
             or not self.graph_seal_hash
-            or not self.confirmed_at
-            or not self.user_approval_receipt_id
+            or approved.tzinfo is None
+            or not self.user_approval_receipt_id.startswith(
+                "user_approval_receipt_"
+            )
             or self.legacy_read_only
         ):
             raise PlanValidationError("PLAN_VERSION_INVALID")
@@ -565,6 +617,75 @@ class TradePlanRule:
 
 
 @dataclass(frozen=True)
+class TradePlanDraftGraph:
+    version: ProposedTradePlanVersion
+    sleeves: tuple[PositionSleeve, ...]
+    rules: tuple[TradePlanRule, ...]
+    evidence_references: tuple[Mapping[str, object], ...]
+    adjusted_price_evidence: tuple[Mapping[str, object], ...] = ()
+    schema_version: str = "TradePlanDraftGraph@1"
+
+    def validate(self) -> None:
+        if not isinstance(self.version, ProposedTradePlanVersion):
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_INVALID")
+        self.version.validate()
+        if self.schema_version != "TradePlanDraftGraph@1":
+            raise PlanValidationError("PLAN_DRAFT_GRAPH_INVALID")
+        _validate_plan_graph_contract(
+            self.version,
+            self.sleeves,
+            self.rules,
+            self.evidence_references,
+            self.adjusted_price_evidence,
+        )
+
+    def confirm(
+        self,
+        *,
+        confirmed_at: str,
+        user_approval_receipt_id: str,
+    ) -> "TradePlanGraph":
+        self.validate()
+        proposed = self.version
+        version = TradePlanVersion(
+            plan_version_id=proposed.plan_version_id,
+            plan_id=proposed.plan_id,
+            version_no=proposed.version_no,
+            supersedes_version_id=proposed.supersedes_version_id,
+            strategy_version_id=proposed.strategy_version_id,
+            investment_thesis_version_id=(
+                proposed.investment_thesis_version_id
+            ),
+            account_snapshot_version_id=(
+                proposed.account_snapshot_version_id
+            ),
+            data_snapshot_id=proposed.data_snapshot_id,
+            horizon_start=proposed.horizon_start,
+            horizon_end=proposed.horizon_end,
+            review_by=proposed.review_by,
+            risk_policy_version_id=proposed.risk_policy_version_id,
+            metric_catalog_version=proposed.metric_catalog_version,
+            evaluator_policy_version=proposed.evaluator_policy_version,
+            conflict_policy_version=proposed.conflict_policy_version,
+            ast_version=proposed.ast_version,
+            content=proposed.content,
+            content_hash=proposed.content_hash,
+            graph_seal_hash=proposed.graph_seal_hash,
+            confirmed_at=confirmed_at,
+            user_approval_receipt_id=user_approval_receipt_id,
+        )
+        graph = TradePlanGraph(
+            version=version,
+            sleeves=self.sleeves,
+            rules=self.rules,
+            evidence_references=self.evidence_references,
+            adjusted_price_evidence=self.adjusted_price_evidence,
+        )
+        graph.validate()
+        return graph
+
+
+@dataclass(frozen=True)
 class TradePlanGraph:
     version: TradePlanVersion
     sleeves: tuple[PositionSleeve, ...]
@@ -574,42 +695,56 @@ class TradePlanGraph:
     schema_version: str = "TradePlanGraph@1"
 
     def validate(self) -> None:
+        if not isinstance(self.version, TradePlanVersion):
+            raise PlanValidationError("PLAN_GRAPH_INVALID")
         self.version.validate()
         if self.schema_version != "TradePlanGraph@1":
             raise PlanValidationError("PLAN_GRAPH_INVALID")
-        validate_sleeve_contract(
-            self.version.strategy_version_id, self.sleeves
-        )
-        validate_sleeve_quantities(self.sleeves, total_quantity=None)
-        for rule in self.rules:
-            rule.validate()
-            if (
-                rule.scope is not RuleScope.MASTER
-                and rule.sleeve_id
-                not in {sleeve.sleeve_id for sleeve in self.sleeves}
-            ):
-                raise PlanValidationError(
-                    "TRADE_PLAN_RULE_SCOPE_INVALID"
-                )
-        sleeve_hashes = _sleeve_hashes(self.sleeves)
-        rule_hashes = _rule_hashes(self.rules)
-        evidence_hashes = _child_hashes(
+        _validate_plan_graph_contract(
+            self.version,
+            self.sleeves,
+            self.rules,
             self.evidence_references,
-            "ref_id",
-            sequence_sensitive=True,
-        ) + _child_hashes(
             self.adjusted_price_evidence,
-            "content_hash",
-            sequence_sensitive=True,
         )
-        expected = PlanGraphSeal.build(
-            version_content_hash=self.version.content_hash,
-            sleeve_hashes=sleeve_hashes,
-            rule_hashes=rule_hashes,
-            evidence_hashes=evidence_hashes,
-        )
-        if self.version.graph_seal_hash != expected.graph_seal_hash:
-            raise PlanValidationError("PLAN_GRAPH_SEAL_MISMATCH")
+
+
+def _validate_plan_graph_contract(
+    version: ProposedTradePlanVersion | TradePlanVersion,
+    sleeves: tuple[PositionSleeve, ...],
+    rules: tuple[TradePlanRule, ...],
+    evidence_references: tuple[Mapping[str, object], ...],
+    adjusted_price_evidence: tuple[Mapping[str, object], ...],
+) -> None:
+    validate_sleeve_contract(version.strategy_version_id, sleeves)
+    validate_sleeve_quantities(sleeves, total_quantity=None)
+    sleeve_ids = {sleeve.sleeve_id for sleeve in sleeves}
+    for rule in rules:
+        rule.validate()
+        if (
+            rule.scope is not RuleScope.MASTER
+            and rule.sleeve_id not in sleeve_ids
+        ):
+            raise PlanValidationError("TRADE_PLAN_RULE_SCOPE_INVALID")
+    sleeve_hashes = _sleeve_hashes(sleeves)
+    rule_hashes = _rule_hashes(rules)
+    evidence_hashes = _child_hashes(
+        evidence_references,
+        "ref_id",
+        sequence_sensitive=True,
+    ) + _child_hashes(
+        adjusted_price_evidence,
+        "content_hash",
+        sequence_sensitive=True,
+    )
+    expected = PlanGraphSeal.build(
+        version_content_hash=version.content_hash,
+        sleeve_hashes=sleeve_hashes,
+        rule_hashes=rule_hashes,
+        evidence_hashes=evidence_hashes,
+    )
+    if version.graph_seal_hash != expected.graph_seal_hash:
+        raise PlanValidationError("PLAN_GRAPH_SEAL_MISMATCH")
 
 
 @dataclass(frozen=True)
@@ -665,7 +800,7 @@ class ActiveTradePlan:
     version: TradePlanVersion | None
 
 
-def build_plan_version(
+def build_trade_plan_draft_graph(
     *,
     plan_version_id: str,
     plan_id: str,
@@ -686,9 +821,7 @@ def build_plan_version(
     rules: tuple[TradePlanRule, ...],
     evidence_references: tuple[Mapping[str, object], ...],
     adjusted_price_evidence: tuple[Mapping[str, object], ...],
-    confirmed_at: str,
-    user_approval_receipt_id: str,
-) -> TradePlanGraph:
+) -> TradePlanDraftGraph:
     content_hash = canonical_hash(content)
     seal = PlanGraphSeal.build(
         version_content_hash=content_hash,
@@ -703,7 +836,7 @@ def build_plan_version(
             sequence_sensitive=True,
         ),
     )
-    version = TradePlanVersion(
+    version = ProposedTradePlanVersion(
         plan_version_id=plan_version_id,
         plan_id=plan_id,
         version_no=version_no,
@@ -723,10 +856,8 @@ def build_plan_version(
         content=content,
         content_hash=content_hash,
         graph_seal_hash=seal.graph_seal_hash,
-        confirmed_at=confirmed_at,
-        user_approval_receipt_id=user_approval_receipt_id,
     )
-    graph = TradePlanGraph(
+    graph = TradePlanDraftGraph(
         version=version,
         sleeves=sleeves,
         rules=rules,
@@ -792,7 +923,7 @@ def _rule_hashes(
 
 
 def _draft_graph_identity(
-    graph: TradePlanGraph,
+    graph: TradePlanDraftGraph,
 ) -> Mapping[str, object]:
     version = graph.version
     return {
@@ -844,6 +975,7 @@ __all__ = [
     "GridSleeve",
     "PlanActivation",
     "PlanActivated",
+    "ProposedTradePlanVersion",
     "PlanDraftRejected",
     "PlanGraphSeal",
     "PlanVersionConfirmed",
@@ -851,12 +983,13 @@ __all__ = [
     "PositionSleeve",
     "PositionSleeveKind",
     "TradePlanDraft",
+    "TradePlanDraftGraph",
     "TradePlanGraph",
     "TradePlanMaster",
     "TradePlanMasterId",
     "TradePlanRule",
     "TradePlanVersion",
-    "build_plan_version",
+    "build_trade_plan_draft_graph",
     "build_trade_plan_draft",
     "validate_sleeve_contract",
     "validate_sleeve_quantities",

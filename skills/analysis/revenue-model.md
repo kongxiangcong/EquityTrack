@@ -67,8 +67,8 @@ Total Revenue ($B)        xxx      xxx      xxx      xxx      x.x%
 For EACH major segment (≥10% of revenue), analyze:
 
 ### Volume Drivers
-- **Market growth**: What is the industry growth rate? (TAM/SAM per research-document-template.md §IV)
-- **Market share trajectory**: Gaining, stable, or losing? (per research-document-template.md §IV Competitive Landscape)
+- **Market growth**: What is the industry growth rate? (TAM/SAM per `../output/report-layout.md` Business and industry section)
+- **Market share trajectory**: Gaining, stable, or losing? (per `../output/report-layout.md` Business and industry section)
 - **Product cycle**: New product launches, replacement cycles, cannibalization
 - **Geographic expansion**: New market entry, penetration increase
 - **Channel expansion**: New distribution partners, DTC growth
@@ -76,7 +76,7 @@ For EACH major segment (≥10% of revenue), analyze:
 ### Price Drivers
 - **ASP / ARPU trends**: Historical direction and sustainability
 - **Mix shift**: Higher-end products growing faster (positive mix) or commoditization (negative mix)
-- **Pricing power**: Ability to raise prices (per research-document-template.md §IV pricing power / Five Forces)
+- **Pricing power**: Ability to raise prices (per `../output/report-layout.md` Business and industry section)
 - **Currency impact**: FX translation effects on reported ASP
 - **Promotional intensity**: Discounting trends, promotional calendar
 
@@ -159,10 +159,10 @@ Analyze how the revenue mix is changing and what it means for overall margins:
 
 ## Integration with Other Analysis Files
 
-- **TAM / Market opportunity** (`research-document-template.md §IV` — TAM/SAM/SOM + Market Opportunity Narrative): Market size provides the ceiling for segment revenue projections
-- **Competitive landscape** (`research-document-template.md §IV` — Competitive Landscape + Entry Barriers): Market share trajectory informs volume assumptions
+- **TAM / Market opportunity** (`../output/report-layout.md` — Business and industry): Market size provides the ceiling for segment revenue projections
+- **Competitive landscape** (`../output/report-layout.md` — Business and industry): Market share trajectory informs volume assumptions
 - **Projection assumptions** (`projection-assumptions.md`): Revenue buildup feeds directly into projection documentation
-- **Scenario deep dive** (`scenario-deep-dive.md`): Bull/Base/Bear revenue numbers must come from this decomposition
+- **Scenario deep dive** (`scenario-deep-dive.md`): stress/base/improvement revenue numbers must come from this decomposition
 
 ---
 

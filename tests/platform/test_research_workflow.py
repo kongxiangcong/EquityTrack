@@ -111,10 +111,18 @@ def test_request_v2_produces_one_canonical_view_manifest_and_no_trade_state(
     ).fetchone()
     assert result.disposition is ReferenceDisposition.CREATED
     assert tuple(member["member_role"] for member in manifest.members) == (
+        "research_bundle_json",
         "research_run_json",
+        "forecast",
+        "scenario_valuation",
+        "valuation_method_route",
+        "valuation_simulation_decision",
+        "market_path_decision",
+        "recent_trend_assessment",
         "decision_view_json",
         "decision_view_html",
         "decision_view_pdf",
+        "decision_view_workbook",
     )
     assert view["data_snapshot_id"] == "snapshot_filing"
     assert view["valuation_artifact_record_id"] is None

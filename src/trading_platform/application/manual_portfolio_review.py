@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from trading_platform.domain.manual_review import (
@@ -11,6 +13,7 @@ from trading_platform.domain.manual_review import (
     ManualPortfolioReviewRun,
     ManualReviewContext,
     ManualReviewError,
+    ProvenCompleteSession,
     build_review_manifest,
     build_review_items,
     build_review_run,
@@ -23,7 +26,7 @@ from trading_platform.domain.decision_tasks import (
 )
 from trading_platform.domain.plan_impacts import FrozenPlanImpactEvidence
 from trading_platform.domain.workflow import NodeDefinition, WorkflowDefinition
-from trading_platform.identity import canonical_hash
+from trading_platform.identity import canonical_hash, build_code_identity
 
 from .account_state import AccountStateQueries, GetEstimatedAccountState
 from .workflow_ledger import (
@@ -35,25 +38,33 @@ from .workflow_ledger import (
 )
 
 
+_SESSION_SELECTION = "latest_proven_complete_session"
+_MANUAL_REVIEW_CONFIG = {
+    "timezone": "Asia/Shanghai",
+    "session_selection": _SESSION_SELECTION,
+    "universe": "nonzero_holdings_union_default_watchlist",
+    "universe_role_order": ("holding", "watchlist"),
+}
+
 _WORKFLOW = WorkflowDefinition(
     "manual_portfolio_review",
-    "1",
+    "2",
     (
         NodeDefinition(
-            "review_holdings",
-            "1",
-            "StartManualPortfolioReview@1",
+            "review_universe",
+            "2",
+            "StartManualPortfolioReview@2",
             "ManualPortfolioReviewManifest@1",
             (
                 "confirmed_account_snapshot",
-                "selected_complete_session",
+                "latest_proven_complete_session",
                 "active_plan_uniqueness",
             ),
             True,
             "input_fingerprint",
             "resume_failed_items",
             (
-                "SELECTED_COMPLETE_SESSION_NOT_PROVEN",
+                "LATEST_PROVEN_COMPLETE_SESSION_UNAVAILABLE",
                 "MANUAL_REVIEW_GRAPH_CORRUPT",
                 "MANUAL_REVIEW_MANIFEST_INVALID",
             ),
@@ -67,14 +78,11 @@ class StartManualPortfolioReview:
     invocation_id: str
     account_id: str
     requested_at: str
-    selected_complete_session: str
-    first_window_start_exclusive: str | None
-    code_identity: str
-    config_identity: str
+    session_selection: str
     decision_actor: str
     interaction_channel: str
     transport_actor: str
-    schema_version: str = "StartManualPortfolioReview@1"
+    schema_version: str = "StartManualPortfolioReview@2"
 
 
 @dataclass(frozen=True)
@@ -82,11 +90,10 @@ class ResumeManualPortfolioReview:
     invocation_id: str
     failed_review_run_id: str
     requested_at: str
-    code_identity: str
-    config_identity: str
     decision_actor: str
     interaction_channel: str
     transport_actor: str
+    schema_version: str = "ResumeManualPortfolioReview@2"
 
 
 @dataclass(frozen=True)
@@ -104,6 +111,10 @@ class FreezePlanImpactInput:
 class ManualPortfolioReviewRepository(Protocol):
     fault_injector: object
 
+    def latest_proven_complete_session(
+        self, requested_at: str
+    ) -> ProvenCompleteSession: ...
+
     def latest_success(
         self, account_id: str
     ) -> ManualPortfolioReviewRun | None: ...
@@ -115,7 +126,7 @@ class ManualPortfolioReviewRepository(Protocol):
     def receipt_hash(self, invocation_id: str) -> str | None: ...
 
     def context(
-        self, estimated, selected_complete_session: str
+        self, estimated, session: ProvenCompleteSession
     ) -> ManualReviewContext: ...
 
     def begin(
@@ -155,7 +166,7 @@ class ManualPortfolioReviewRepository(Protocol):
 
 
 class ManualPortfolioReview:
-    """Runs one explicit-session portfolio review behind a named task."""
+    """Freezes and reviews the latest proven account universe."""
 
     def __init__(
         self,
@@ -166,17 +177,30 @@ class ManualPortfolioReview:
         self._repository = repository
         self._account_states = account_states
         self._ledger = ledger
+        repository_root = Path(__file__).resolve().parents[3]
+        code = build_code_identity(repository_root, _MANUAL_REVIEW_CONFIG)
+        self._code_identity = f"code:{canonical_hash(code)}"
+        self._config_identity = (
+            f"config:{canonical_hash(_MANUAL_REVIEW_CONFIG)}"
+        )
 
     def start(
         self, command: StartManualPortfolioReview
     ) -> ManualPortfolioReviewRun:
+        try:
+            requested = datetime.fromisoformat(command.requested_at)
+        except ValueError as error:
+            raise ManualReviewError(
+                "MANUAL_REVIEW_COMMAND_INVALID"
+            ) from error
         if (
-            command.schema_version != "StartManualPortfolioReview@1"
+            command.schema_version != "StartManualPortfolioReview@2"
             or not command.invocation_id
             or not command.account_id
-            or not command.code_identity
-            or not command.config_identity
-            or command.interaction_channel not in {"skill", "cli"}
+            or requested.tzinfo is None
+            or requested.utcoffset() is None
+            or command.session_selection != _SESSION_SELECTION
+            or command.interaction_channel not in {"skill", "cli", "web"}
             or not command.decision_actor.startswith(("user:", "agent:"))
             or not command.transport_actor.startswith(
                 ("user:", "agent:", "adapter:")
@@ -200,6 +224,9 @@ class ManualPortfolioReview:
                     "MANUAL_REVIEW_INVOCATION_CONFLICT"
                 )
             return replay
+        session = self._repository.latest_proven_complete_session(
+            command.requested_at
+        )
         request_payload = json.dumps(
             asdict(command),
             ensure_ascii=False,
@@ -212,7 +239,9 @@ class ManualPortfolioReview:
                 invocation_id=command.invocation_id,
                 request_fingerprint=request_hash,
                 requested_date=command.requested_at[:10],
-                effective_session_date=command.selected_complete_session,
+                effective_session_date=(
+                    session.selected_complete_session
+                ),
                 definition=_WORKFLOW,
                 owner_token=f"manual-review:{request_hash[:24]}",
                 request_payload=request_payload,
@@ -223,17 +252,11 @@ class ManualPortfolioReview:
             estimated = self._account_states.get(
                 GetEstimatedAccountState(command.account_id)
             )
-            context = self._repository.context(
-                estimated, command.selected_complete_session
-            )
+            context = self._repository.context(estimated, session)
             run = build_review_run(
                 workflow_run_id=started.workflow_run_id,
                 account_id=command.account_id,
                 requested_at=command.requested_at,
-                selected_complete_session=command.selected_complete_session,
-                first_window_start_exclusive=(
-                    command.first_window_start_exclusive
-                ),
                 prior_successful=self._repository.latest_success(
                     command.account_id
                 ),
@@ -260,8 +283,8 @@ class ManualPortfolioReview:
                 run=run,
                 context=context,
                 items=items,
-                code_identity=command.code_identity,
-                config_identity=command.config_identity,
+                code_identity=self._code_identity,
+                config_identity=self._config_identity,
                 created_at=completed_at,
             )
             content_hash = canonical_hash(manifest_identity)
@@ -345,6 +368,8 @@ class ManualPortfolioReview:
     def resume(
         self, command: ResumeManualPortfolioReview
     ) -> ManualPortfolioReviewRun:
+        if command.schema_version != "ResumeManualPortfolioReview@2":
+            raise ManualReviewError("MANUAL_REVIEW_COMMAND_INVALID")
         failed = self._repository.get(command.failed_review_run_id)
         if failed.status != "failed":
             raise ManualReviewError("MANUAL_REVIEW_NOT_FAILED")
@@ -353,10 +378,7 @@ class ManualPortfolioReview:
                 invocation_id=command.invocation_id,
                 account_id=failed.account_id,
                 requested_at=command.requested_at,
-                selected_complete_session=failed.selected_complete_session,
-                first_window_start_exclusive=failed.window_start_exclusive,
-                code_identity=command.code_identity,
-                config_identity=command.config_identity,
+                session_selection=_SESSION_SELECTION,
                 decision_actor=command.decision_actor,
                 interaction_channel=command.interaction_channel,
                 transport_actor=command.transport_actor,

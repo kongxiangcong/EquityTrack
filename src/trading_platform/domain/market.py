@@ -450,18 +450,30 @@ def _price_context(
     expected: int,
     constraint: SecurityMarketConstraint | None,
 ) -> MarketComponentView:
+    if len(series) < 60 or series[-1].session_date != effective_session:
+        return _blocked("security.price_context", 1, ReasonCode.INPUT_MISSING)
+    closes = [item.close for item in series]
+    change = closes[-1] / closes[-2] - 1
     if constraint is None or constraint.session_date != effective_session:
         return MarketComponentView(
             "security.price_context",
-            ComponentStatus.BLOCKED,
-            None,
-            (),
+            ComponentStatus.LIMITED,
+            "price_available_constraint_unavailable",
+            (
+                ("close", str(closes[-1])),
+                ("previous_close", str(closes[-2])),
+                ("daily_change", str(change)),
+                ("sma20", str(sum(closes[-20:]) / 20)),
+                ("sma60", str(sum(closes[-60:]) / 60)),
+            ),
             ReasonCode.MARKET_CONSTRAINT_MISSING,
             1,
             0,
             0,
             1,
-            (),
+            tuple(
+                item.normalized_version_id for item in series[-60:]
+            ),
         )
     if constraint.corporate_action_conflict:
         return MarketComponentView(
@@ -493,10 +505,6 @@ def _price_context(
             0,
             constraint.evidence_refs,
         )
-    if len(series) < 60 or series[-1].session_date != effective_session:
-        return _blocked("security.price_context", 1, ReasonCode.INPUT_MISSING)
-    closes = [item.close for item in series]
-    change = closes[-1] / closes[-2] - 1
     limit_state = (
         "up"
         if closes[-1] == constraint.limit_up

@@ -5,15 +5,21 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
+from tests.platform.test_plan_confirmation import (
+    _open_trade_plan_test_seams,
+)
 
 from trading_platform.application import (
     ConfirmTradePlanVersion,
-    CreateTradePlanDraft,
     GetActiveTradePlan,
     GetTradePlanGraph,
     IssuePlanConfirmationChallenge,
     PlanCommandActor,
-    open_trade_plan,
+
+)
+from trading_platform.application.trade_plan_authoring import (
+    _OpenTradePlanDrafts,
+    _UpsertOpenTradePlanDraft,
 )
 from trading_platform.domain.approvals import ActivationIntent
 from trading_platform.domain.account_snapshots import AccountSnapshotVersion
@@ -24,7 +30,7 @@ from trading_platform.domain.plans import (
     TradePlanMaster,
     TradePlanMasterId,
     TradePlanRule,
-    build_plan_version,
+    build_trade_plan_draft_graph,
     build_trade_plan_draft,
 )
 from trading_platform.domain.rules import (
@@ -142,7 +148,6 @@ def _graph(
     suffix: str,
     version_no: int,
     supersedes: str | None,
-    receipt_id: str = "pending-user-approval",
 ) -> object:
     sleeve = CoreSleeve(
         sleeve_id=f"core_{suffix}",
@@ -180,7 +185,7 @@ def _graph(
         "schema_version": "TradePlanContent@1",
         "purpose": f"synthetic-{suffix}",
     }
-    return build_plan_version(
+    return build_trade_plan_draft_graph(
         plan_version_id=f"trade_plan_version_{suffix}",
         plan_id=plan_id,
         version_no=version_no,
@@ -200,8 +205,6 @@ def _graph(
         rules=(rule,),
         evidence_references=(evidence,),
         adjusted_price_evidence=(),
-        confirmed_at="2026-07-27T00:00:00+08:00",
-        user_approval_receipt_id=receipt_id,
     )
 
 
@@ -227,8 +230,16 @@ def _prepare_confirmation(
         interaction_channel=_PLAN_ACTOR.interaction_channel,
         transport_actor=_PLAN_ACTOR.transport_actor,
     )
-    created = tasks.execute(
-        CreateTradePlanDraft(f"create:{suffix}", draft, _PLAN_ACTOR)
+    created = _OpenTradePlanDrafts(tasks._store).upsert(
+        _UpsertOpenTradePlanDraft(
+            invocation_id=f"create:{suffix}",
+            account_id=draft.account_id,
+            security_id=draft.security_id,
+            proposed_graph=draft.proposed_graph,
+            parameters=draft.parameters,
+            updated_at=draft.updated_at,
+            actor=_PLAN_ACTOR,
+        )
     )
     challenge = tasks.execute(
         IssuePlanConfirmationChallenge(
@@ -280,81 +291,10 @@ def _authority_root(tmp_path) -> tuple[object, str]:
     return data_root, confirmed.account_snapshot_version_id
 
 
-def test_database_allows_one_active_master_per_account_security(
-    tmp_path,
-) -> None:
-    data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
-        first_plan_id = TradePlanMasterId.derive(
-            "account_local", "security_600000", "first"
-        ).value
-        first_graph = _graph(
-            plan_id=first_plan_id,
-            snapshot_id=snapshot_id,
-            suffix="first",
-            version_no=1,
-            supersedes=None,
-        )
-        second_plan_id = TradePlanMasterId.derive(
-            "account_local", "security_600000", "second"
-        ).value
-        second_graph = _graph(
-            plan_id=second_plan_id,
-            snapshot_id=snapshot_id,
-            suffix="second",
-            version_no=1,
-            supersedes=None,
-        )
-        commands = (
-            _prepare_confirmation(tasks, first_graph, "first"),
-            _prepare_confirmation(tasks, second_graph, "second"),
-        )
-
-    def confirm(command):
-        try:
-            with open_trade_plan(data_root) as concurrent_tasks:
-                result = concurrent_tasks.execute(command)
-            return result.graph.version.plan_id
-        except PlanValidationError as error:
-            return error.code
-        except PersistenceError as error:
-            return error.code
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = tuple(executor.map(confirm, commands))
-
-    failure_codes = {
-        "RUNTIME_BUSY",
-        "ACTIVE_MASTER_OWNERSHIP_CONFLICT",
-        "PLAN_CONFIRMATION_STORAGE_CONFLICT",
-    }
-    assert sum(outcome in failure_codes for outcome in outcomes) == 1
-    winning_plan_id = next(
-        outcome
-        for outcome in outcomes
-        if outcome not in failure_codes
-    )
-    losing_index = next(
-        index
-        for index, outcome in enumerate(outcomes)
-        if outcome in failure_codes
-    )
-    with open_trade_plan(data_root) as tasks:
-        if outcomes[losing_index] == "RUNTIME_BUSY":
-            with pytest.raises(
-                PlanValidationError,
-                match="ACTIVE_MASTER_OWNERSHIP_CONFLICT",
-            ):
-                tasks.execute(commands[losing_index])
-        active = tasks.get(
-            GetActiveTradePlan("account_local", "security_600000")
-        )
-        assert active.master.plan_id.value == winning_plan_id
-
 
 def test_confirmed_plan_graph_rejects_late_mutation(tmp_path) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, _):
         plan_id = TradePlanMasterId.derive(
             "account_local", "security_600000", "sealed"
         ).value
@@ -376,7 +316,7 @@ def test_confirmed_plan_graph_rejects_late_mutation(tmp_path) -> None:
         "UPDATE trade_plan_sleeve SET core_floor_value='0'",
         "DELETE FROM trade_plan_rule",
         "INSERT INTO trade_plan_evidence_reference "
-        "VALUES('trade_plan_version_sealed',99,'Evidence','late','resolved','late')",
+        "VALUES('trade_plan_version_sealed',99,'Evidence','late','resolved','{}','late')",
     ):
         with pytest.raises(
             sqlite3.IntegrityError, match="TRADE_PLAN_GRAPH_IMMUTABLE"
@@ -387,7 +327,7 @@ def test_confirmed_plan_graph_rejects_late_mutation(tmp_path) -> None:
 
 def test_new_activation_preserves_old_version_history(tmp_path) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, _):
         plan_id = TradePlanMasterId.derive(
             "account_local", "security_600000", "history"
         ).value

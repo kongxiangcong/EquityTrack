@@ -31,6 +31,7 @@ from trading_platform.domain.decision_tasks import (
 from trading_platform.domain.discipline_reviews import (
     DisciplineReviewError,
     DisciplineReviewPeriod,
+    DisciplineReviewPeriodRequest,
 )
 
 
@@ -42,13 +43,16 @@ def _draft_command(
     return CreateDisciplineReviewDraft(
         invocation_id=invocation_id,
         account_id="account_local",
-        period=DisciplineReviewPeriod(
+        period_request=DisciplineReviewPeriodRequest(
             period_kind=period_kind,
-            period_start_session="2026-07-27",
-            period_end_session="2026-07-27",
-            timezone="Asia/Shanghai",
+            requested_at="2026-07-27T19:00:00+08:00",
+            requested_start_date=(
+                "2026-07-27" if period_kind == "custom" else None
+            ),
+            requested_end_date=(
+                "2026-07-27" if period_kind == "custom" else None
+            ),
         ),
-        created_at="2026-07-27T19:00:00+08:00",
         decision_actor="agent:codex",
         interaction_channel="skill",
         transport_actor="agent:codex",
@@ -210,7 +214,7 @@ def test_user_declared_execution_is_preserved_as_unverified_evidence(
     }
 
 
-def test_incomplete_period_boundary_fails_before_draft_write(
+def test_custom_period_resolves_available_boundaries_and_records_gap(
     tmp_path: Path,
 ) -> None:
     data_root, _, _ = _task_review(
@@ -222,24 +226,21 @@ def test_incomplete_period_boundary_fails_before_draft_write(
     command = CreateDisciplineReviewDraft(
         **{
             **command.__dict__,
-            "period": DisciplineReviewPeriod(
+            "period_request": DisciplineReviewPeriodRequest(
                 "custom",
+                "2026-07-28T19:00:00+08:00",
                 "2026-07-27",
                 "2026-07-28",
-                "Asia/Shanghai",
             ),
         }
     )
-    with open_discipline_reviews(data_root) as reviews, pytest.raises(
-        DisciplineReviewError,
-        match="DISCIPLINE_REVIEW_SESSION_NOT_COMPLETE",
-    ):
-        reviews.create_draft(command)
-    connection = SQLiteOwningAdapterFixture(data_root)
-    assert connection.execute(
-        "SELECT count(*) FROM discipline_review_version"
-    ).fetchone()[0] == 0
-    connection.close()
+    with open_discipline_reviews(data_root) as reviews:
+        review = reviews.create_draft(command)
+    assert review.period.period_start_session == "2026-07-27"
+    assert review.period.period_end_session == "2026-07-27"
+    assert "period_end_adjusted_to_complete_session" in (
+        review.evidence_gap_summary
+    )
 
 
 def test_open_task_carries_into_later_complete_session(
@@ -254,13 +255,12 @@ def test_open_task_carries_into_later_complete_session(
     command = CreateDisciplineReviewDraft(
         invocation_id="discipline:carry-draft",
         account_id="account_local",
-        period=DisciplineReviewPeriod(
+        period_request=DisciplineReviewPeriodRequest(
             "custom",
+            "2026-07-31T19:00:00+08:00",
             "2026-07-31",
             "2026-07-31",
-            "Asia/Shanghai",
         ),
-        created_at="2026-07-31T19:00:00+08:00",
         decision_actor="agent:codex",
         interaction_channel="skill",
         transport_actor="agent:codex",
@@ -322,6 +322,180 @@ def test_confirmation_and_later_review_append_immutable_versions(
             (draft.discipline_review_id, confirmed.version_no),
         )
     connection.close()
+
+
+def test_shared_envelope_creates_review_draft_with_exact_payload_and_identity(
+    tmp_path: Path,
+) -> None:
+    data_root, _, _ = _task_review(
+        tmp_path,
+        suffix="discipline-create-envelope",
+        invocation_id="discipline:create-envelope-review",
+        run_review=False,
+    )
+    valid_payload = {
+        "account_id": "account_local",
+        "period_request": {
+            "period_kind": "weekly",
+            "requested_at": "2026-07-27T19:00:00+08:00",
+            "requested_start_date": None,
+            "requested_end_date": None,
+        },
+    }
+
+    def envelope(
+        *,
+        invocation_id: str,
+        actor_type: str = "agent",
+        payload: dict[str, object] | None = None,
+    ) -> ApplicationCommandEnvelopeV1:
+        return ApplicationCommandEnvelopeV1.from_bytes(
+            json.dumps(
+                {
+                    "schema_version": "ApplicationCommandEnvelope@1",
+                    "command_name": "discipline_review.create_draft@2",
+                    "invocation_id": invocation_id,
+                    "payload_schema_version": "CreateDisciplineReviewDraft@2",
+                    "expected_revision": None,
+                    "decision_actor": {
+                        "actor_type": actor_type,
+                        "actor_id": (
+                            "local-user"
+                            if actor_type == "user"
+                            else "codex"
+                        ),
+                    },
+                    "interaction_channel": "skill",
+                    "transport_actor": {
+                        "actor_type": "agent",
+                        "actor_id": "codex",
+                    },
+                    "approval": None,
+                    "payload": payload or valid_payload,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+
+    def confirmation_envelope(
+        *,
+        review_id: str,
+        version_no: int,
+        actor_type: str,
+        invocation_id: str,
+    ) -> ApplicationCommandEnvelopeV1:
+        return ApplicationCommandEnvelopeV1.from_bytes(
+            json.dumps(
+                {
+                    "schema_version": "ApplicationCommandEnvelope@1",
+                    "command_name": "discipline_review.confirm@1",
+                    "invocation_id": invocation_id,
+                    "payload_schema_version": "ConfirmDisciplineReview@1",
+                    "expected_revision": version_no,
+                    "decision_actor": {
+                        "actor_type": actor_type,
+                        "actor_id": (
+                            "local-user"
+                            if actor_type == "user"
+                            else "codex"
+                        ),
+                    },
+                    "interaction_channel": "skill",
+                    "transport_actor": {
+                        "actor_type": "agent",
+                        "actor_id": "codex",
+                    },
+                    "approval": None,
+                    "payload": {
+                        "discipline_review_id": review_id,
+                        "confirmed_at": "2026-07-27T20:00:00+08:00",
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+
+    with open_application_commands(data_root) as dispatcher:
+        created = dispatcher.dispatch(
+            envelope(invocation_id="discipline:create-envelope")
+        )
+        replay = dispatcher.dispatch(
+            envelope(invocation_id="discipline:create-envelope")
+        )
+        system_denied = dispatcher.dispatch(
+            envelope(
+                invocation_id="discipline:create-envelope:system",
+                actor_type="system",
+            )
+        )
+        extra_top_level = dispatcher.dispatch(
+            envelope(
+                invocation_id="discipline:create-envelope:extra-top",
+                payload={**valid_payload, "caller_classification": "clean"},
+            )
+        )
+        period_request = dict(valid_payload["period_request"])
+        extra_period_field = dispatcher.dispatch(
+            envelope(
+                invocation_id="discipline:create-envelope:extra-period",
+                payload={
+                    **valid_payload,
+                    "period_request": {
+                        **period_request,
+                        "fixed_friday": True,
+                    },
+                },
+            )
+        )
+        assert isinstance(created, ApplicationCommandResult)
+        review_id = str(created.result["discipline_review_id"])
+        version_no = int(created.result["version_no"])
+        agent_confirmation_denied = dispatcher.dispatch(
+            confirmation_envelope(
+                review_id=review_id,
+                version_no=version_no,
+                actor_type="agent",
+                invocation_id="discipline:create-envelope:confirm-agent",
+            )
+        )
+        confirmed = dispatcher.dispatch(
+            confirmation_envelope(
+                review_id=review_id,
+                version_no=version_no,
+                actor_type="user",
+                invocation_id="discipline:create-envelope:confirm-user",
+            )
+        )
+        confirmation_replay = dispatcher.dispatch(
+            confirmation_envelope(
+                review_id=review_id,
+                version_no=version_no,
+                actor_type="user",
+                invocation_id="discipline:create-envelope:confirm-user",
+            )
+        )
+
+    assert isinstance(created, ApplicationCommandResult)
+    assert replay == created
+    assert created.result_type == "DisciplineReviewVersion"
+    assert created.result["status"] == "draft"
+    assert created.aggregate_id == created.result["discipline_review_id"]
+    assert created.revision_or_version_id == "1"
+    assert isinstance(system_denied, ApplicationCommandFailure)
+    assert system_denied.code == "SYSTEM_DECISION_CAPABILITY_DENIED"
+    for invalid in (extra_top_level, extra_period_field):
+        assert isinstance(invalid, ApplicationCommandFailure)
+        assert invalid.code == "DISCIPLINE_REVIEW_COMMAND_FIELDS_INVALID"
+    assert isinstance(agent_confirmation_denied, ApplicationCommandFailure)
+    assert agent_confirmation_denied.code == (
+        "USER_DECISION_CAPABILITY_REQUIRED"
+    )
+    assert isinstance(confirmed, ApplicationCommandResult)
+    assert confirmation_replay == confirmed
+    assert confirmed.aggregate_id == review_id
+    assert confirmed.revision_or_version_id == "2"
 
 
 def test_shared_envelope_confirms_review_with_same_receipt_hash(

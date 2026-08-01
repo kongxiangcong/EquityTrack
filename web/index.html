@@ -22,10 +22,10 @@
   </header>
 
   <nav class="primary-nav" aria-label="一级导航">
-    <button type="button" data-page="overview" aria-current="page">总览</button>
+    <button type="button" data-page="overview" aria-current="page">今日</button>
     <button type="button" data-page="portfolio">组合</button>
-    <button type="button" data-page="review">复核</button>
-    <button type="button" data-page="research">研究</button>
+    <button type="button" data-page="research">研究与计划</button>
+    <button type="button" data-page="review">周期复盘</button>
   </nav>
 
   <div id="load-status" class="status-banner" role="status" aria-live="polite">
@@ -36,8 +36,10 @@
     <section id="page-overview" class="page" aria-labelledby="overview-title">
       <div class="page-heading">
         <p class="eyebrow">OVERVIEW</p>
-        <h2 id="overview-title">总览</h2>
-        <p>只显示会影响当前判断与处理顺序的信息。</p>
+        <h2 id="overview-title">今日待办</h2>
+        <p>优先展示今天需要处理的任务、重要变化与计划状态。</p>
+        <button id="run-today-review" type="button" class="primary">复核今日全部持仓与观察股</button>
+        <p id="today-action-status" role="status" aria-live="polite"></p>
       </div>
       <div class="summary-grid">
         <article>
@@ -66,7 +68,7 @@
     <section id="page-portfolio" class="page" aria-labelledby="portfolio-title" hidden>
       <div class="page-heading">
         <p class="eyebrow">PORTFOLIO</p>
-        <h2 id="portfolio-title">组合</h2>
+        <h2 id="portfolio-title">组合全貌</h2>
         <p>区分 confirmed 与 estimated；unknown 绝不按零解释。</p>
       </div>
       <div id="holding-content" class="content-stack"></div>
@@ -74,17 +76,19 @@
 
     <section id="page-review" class="page" aria-labelledby="review-title" hidden>
       <div class="page-heading">
-        <p class="eyebrow">MANUAL REVIEW</p>
-        <h2 id="review-title">复核</h2>
-        <p>展示所选完整交易日、冻结结果与需要通过 Skill 处理的事项。</p>
+        <p class="eyebrow">PERIODIC DISCIPLINE REVIEW</p>
+        <h2 id="review-title">周期纪律复盘</h2>
+        <p>回看执行、例外、未记录与证据缺口；草稿仍需用户明确确认。</p>
+        <button id="create-cycle-review" type="button">生成本周期复盘草稿</button>
+        <p id="cycle-action-status" role="status" aria-live="polite"></p>
       </div>
       <div id="review-content" class="content-stack"></div>
     </section>
 
     <section id="page-research" class="page" aria-labelledby="research-title" hidden>
       <div class="page-heading">
-        <p class="eyebrow">PERSISTED RESEARCH</p>
-        <h2 id="research-title">研究</h2>
+        <p class="eyebrow">RESEARCH &amp; PLANS</p>
+        <h2 id="research-title">研究与计划</h2>
         <p>仅展示已持久化研究、变化、不确定性及其能力影响。</p>
       </div>
       <div id="research-content" class="content-stack"></div>

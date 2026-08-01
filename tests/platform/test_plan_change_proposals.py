@@ -7,7 +7,10 @@ import pytest
 from tests.platform.owning_adapter_fixture import (
     SQLiteOwningAdapterFixture,
 )
-from tests.platform.test_plan_confirmation import USER
+from tests.platform.test_plan_confirmation import (
+    USER,
+    _open_trade_plan_test_seams,
+)
 from tests.platform.test_plan_impact_assessments import (
     _assessment_command,
     _impact_authority,
@@ -25,7 +28,7 @@ from trading_platform.application import (
     RejectPlanChangeProposal,
     open_plan_impacts,
     open_application_commands,
-    open_trade_plan,
+    open_read_models,
 )
 from trading_platform.application.command_envelope import (
     DecisionActor,
@@ -42,8 +45,6 @@ def test_agent_cannot_accept_plan_change_proposal() -> None:
             invocation_id="proposal:accept:agent-denied",
             proposal_id="proposal",
             expected_revision=1,
-            draft_id="draft",
-            expected_draft_revision=None,
             decided_at="2026-07-27T16:00:00+08:00",
             actor=PlanCommandActor(
                 "agent:codex", "skill", "agent:codex"
@@ -83,7 +84,7 @@ def test_accept_or_reject_proposal_has_only_draft_side_effects(
     data_root, assessment, accepted_source = _proposal_authority(
         tmp_path, "accept"
     )
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, _):
         before = plans.get(
             GetActiveTradePlan("account_local", "security_600000")
         )
@@ -91,8 +92,6 @@ def test_accept_or_reject_proposal_has_only_draft_side_effects(
         invocation_id="impact:accept",
         proposal_id=accepted_source.proposal_id,
         expected_revision=accepted_source.revision,
-        draft_id="trade_plan_draft_from_proposal",
-        expected_draft_revision=None,
         decided_at="2026-07-27T16:45:00+08:00",
         actor=USER,
     )
@@ -117,8 +116,6 @@ def test_accept_or_reject_proposal_has_only_draft_side_effects(
                 invocation_id="impact:accept:revise",
                 proposal_id=revised_source.proposal_id,
                 expected_revision=revised_source.revision,
-                draft_id=accepted.accepted_draft_id,
-                expected_draft_revision=1,
                 decided_at="2026-07-27T16:46:00+08:00",
                 actor=USER,
             )
@@ -147,13 +144,11 @@ def test_accept_or_reject_proposal_has_only_draft_side_effects(
         )
     assert replay == accepted
     assert accepted.status == "accepted"
-    assert accepted.accepted_draft_id == (
-        "trade_plan_draft_from_proposal"
-    )
+    assert accepted.accepted_draft_id
     assert revised.accepted_draft_id == accepted.accepted_draft_id
     assert rejected.status == "rejected"
     assert rejected.accepted_draft_id is None
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, _):
         after = plans.get(
             GetActiveTradePlan("account_local", "security_600000")
         )
@@ -170,6 +165,47 @@ def test_accept_or_reject_proposal_has_only_draft_side_effects(
             )
         )
     assert challenge.canonical_diff.changed_components == ("version",)
+    with open_read_models(data_root) as reads:
+        detail = reads.plan_detail(
+            before.version.plan_id, "2026-07-27T16:51:00+08:00"
+        )
+    proposal_diff = next(
+        item["readable_diff"]
+        for item in detail.change_diffs
+        if item["change_kind"] == "revision_proposal"
+        and item["status"] == "accepted"
+        and any(
+            change.get("after") == "proposal-revise"
+            for change in item["readable_diff"]["modified"]
+        )
+    )
+    public_change = next(
+        item
+        for item in detail.change_diffs
+        if item["change_kind"] == "revision_proposal"
+        and item["status"] == "accepted"
+        and any(
+            change.get("after") == "proposal-revise"
+            for change in item["readable_diff"]["modified"]
+        )
+    )
+    assert set(public_change) == {
+        "change_kind",
+        "status",
+        "revision",
+        "changed_at",
+        "readable_diff",
+    }
+    assert proposal_diff["added"] == ()
+    assert proposal_diff["removed"] == ()
+    assert proposal_diff["modified"] == (
+        {
+            "path": "purpose",
+            "before": "confirmation",
+            "after": "proposal-revise",
+        },
+    )
+    assert detail.confirmation_state["readable_diff"] == proposal_diff
     connection = SQLiteOwningAdapterFixture(data_root)
     assert connection.execute(
         "SELECT count(*) FROM plan_activation"
@@ -212,13 +248,11 @@ def test_stale_source_plan_fails_before_creating_draft(
                 invocation_id="impact:accept:stale-first",
                 proposal_id=first.proposal_id,
                 expected_revision=first.revision,
-                draft_id="trade_plan_draft_stale_first",
-                expected_draft_revision=None,
                 decided_at="2026-07-27T16:42:00+08:00",
                 actor=USER,
             )
         )
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, _):
         challenge = plans.execute(
             IssuePlanConfirmationChallenge(
                 invocation_id="impact:challenge:stale-first",
@@ -255,8 +289,6 @@ def test_stale_source_plan_fails_before_creating_draft(
                     invocation_id="impact:accept:stale",
                     proposal_id=stale.proposal_id,
                     expected_revision=stale.revision,
-                    draft_id="trade_plan_draft_stale",
-                    expected_draft_revision=None,
                     decided_at="2026-07-27T16:45:00+08:00",
                     actor=USER,
                 )
@@ -264,7 +296,8 @@ def test_stale_source_plan_fails_before_creating_draft(
     connection = SQLiteOwningAdapterFixture(data_root)
     assert connection.execute(
         "SELECT count(*) FROM trade_plan_draft "
-        "WHERE draft_id='trade_plan_draft_stale'"
+        "WHERE decision_actor=? AND updated_at=?",
+        (USER.decision_actor, "2026-07-27T16:45:00+08:00"),
     ).fetchone()[0] == 0
     connection.close()
 
@@ -291,8 +324,6 @@ def test_shared_envelope_requires_user_and_persists_proposal_receipt(
             approval_challenge_id=None,
             payload={
                 "proposal_id": proposal.proposal_id,
-                "draft_id": "trade_plan_draft_envelope_proposal",
-                "expected_draft_revision": None,
                 "decided_at": "2026-07-27T16:45:00+08:00",
             },
         )
@@ -332,8 +363,6 @@ def test_failed_disposition_rolls_back_revision_and_replay_recovers(
         invocation_id="impact:accept:rollback",
         proposal_id=proposal.proposal_id,
         expected_revision=proposal.revision,
-        draft_id="trade_plan_draft_proposal_rollback",
-        expected_draft_revision=None,
         decided_at="2026-07-27T16:45:00+08:00",
         actor=USER,
     )
@@ -360,15 +389,15 @@ def test_failed_disposition_rolls_back_revision_and_replay_recovers(
         "SELECT count(*) FROM application_command_receipt "
         "WHERE invocation_id='impact:accept:rollback'"
     ).fetchone()[0] == 0
-    assert connection.execute(
-        "SELECT status FROM trade_plan_draft "
-        "WHERE draft_id='trade_plan_draft_proposal_rollback'"
-    ).fetchone()[0] == "open"
+    persisted_draft = connection.execute(
+        "SELECT draft_id,status FROM trade_plan_draft "
+        "WHERE decision_actor=? AND updated_at=?",
+        (USER.decision_actor, command.decided_at),
+    ).fetchone()
+    assert persisted_draft[1] == "open"
     connection.execute("DROP TRIGGER inject_proposal_disposition_failure")
     connection.close()
     with open_plan_impacts(data_root) as impacts:
         recovered = impacts.accept(command)
     assert recovered.status == "accepted"
-    assert recovered.accepted_draft_id == (
-        "trade_plan_draft_proposal_rollback"
-    )
+    assert recovered.accepted_draft_id == persisted_draft[0]

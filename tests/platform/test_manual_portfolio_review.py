@@ -7,50 +7,85 @@ from pathlib import Path
 
 import pytest
 
-from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
-from tests.platform.test_plan_confirmation import (
-    _authority_root,
-    _confirm,
-    _create_and_challenge,
-    _draft as _plan_draft,
+from tests.platform.canonical_plan_journey_fixture import (
+    arrange_canonical_plan_journey,
 )
+from tests.platform.owning_adapter_fixture import SQLiteOwningAdapterFixture
+from tests.platform.test_plan_confirmation import _authority_root
 from tests.platform.test_account_snapshots import _draft as _account_draft
 from tests.platform.test_estimated_account_state import _confirmed
 from trading_platform.application import (
-    ApplicationCommandEnvelopeV1,
-    ApplicationCommandResult,
     GetManualPortfolioReview,
     ResumeManualPortfolioReview,
     StartManualPortfolioReview,
     open_manual_portfolio_review,
-    open_application_commands,
-    open_trade_plan,
+    open_watchlist,
 )
+from trading_platform.application.contracts import SecurityIdentity
 from trading_platform.domain.manual_review import ManualReviewError
-from trading_platform.domain.approvals import ActivationIntent
 from trading_platform.domain.plans import PlanValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _complete_session(data_root: Path, session: str) -> None:
+def _complete_session(
+    data_root: Path,
+    session: str,
+    *,
+    source_snapshot_id: str = "data_snapshot_plan_fixture",
+    security_id: str = "security_600000",
+) -> None:
     connection = SQLiteOwningAdapterFixture(data_root)
     source = connection.execute(
-        "SELECT * FROM data_snapshot "
-        "WHERE data_snapshot_id='data_snapshot_plan_fixture'"
+        "SELECT * FROM data_snapshot WHERE data_snapshot_id=?",
+        (source_snapshot_id,),
     ).fetchone()
+    assert source is not None
     values = list(source)
     values[0] = f"data_snapshot_review_{session.replace('-', '')}"
     values[3] = session
     values[4] = session
     values[5] = f"{session}T15:00:00+08:00"
+    values[14] = 1
+    values[15] = 1
+    values[16] = 0
+    values[17] = 0
     values[19] = "effective_complete_session"
     values[20] = f"{session}T15:00:00+08:00"
+    universe_id = (
+        f"market_universe_review_{session.replace('-', '')}"
+    )
+    connection.execute(
+        "INSERT INTO market_universe_version VALUES(?,?,?,?,?)",
+        (
+            universe_id,
+            "CN_A_SHARE",
+            f"{session}T15:00:00+08:00",
+            "source_policy_plan_fixture@1",
+            f"manual-review-membership-{session}",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO market_universe_member VALUES(?,?,?,?,?,?,?)",
+        (
+            universe_id,
+            security_id,
+            "1999-11-10",
+            None,
+            None,
+            None,
+            "manual-review-fixture",
+        ),
+    )
     connection.execute(
         "INSERT INTO data_snapshot VALUES("
         + ",".join("?" for _ in values)
         + ")",
         values,
+    )
+    connection.execute(
+        "INSERT INTO data_snapshot_universe_ref VALUES(?,?,?)",
+        (values[0], universe_id, "CN_A_SHARE"),
     )
     connection.close()
 
@@ -59,22 +94,24 @@ def _start(
     data_root: Path,
     *,
     invocation_id: str,
-    selected_session: str,
-    first_window_start_exclusive: str | None = "2026-07-24",
+    account_id: str = "account_local",
+    selected_session: str | None = None,
+    requested_at: str | None = None,
     fault_injector=None,
 ):
+    if requested_at is None:
+        if selected_session is None:
+            raise AssertionError("test request time is required")
+        requested_at = f"{selected_session}T16:00:00+08:00"
     with open_manual_portfolio_review(
         data_root, fault_injector=fault_injector
     ) as review:
         return review.start(
             StartManualPortfolioReview(
                 invocation_id=invocation_id,
-                account_id="account_local",
-                requested_at=f"{selected_session}T16:00:00+08:00",
-                selected_complete_session=selected_session,
-                first_window_start_exclusive=first_window_start_exclusive,
-                code_identity="code:test",
-                config_identity="config:test",
+                account_id=account_id,
+                requested_at=requested_at,
+                session_selection="latest_proven_complete_session",
                 decision_actor="agent:codex",
                 interaction_channel="skill",
                 transport_actor="agent:codex",
@@ -120,19 +157,23 @@ def test_window_uses_last_successful_cutoff_to_selected_complete_session(
 def test_active_plan_without_compatible_evaluation_is_monitor_only(
     tmp_path: Path,
 ) -> None:
-    data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as plans:
-        _, challenge = _create_and_challenge(
-            plans,
-            _plan_draft(snapshot_id, suffix="manual-monitor"),
-            "manual-monitor",
-            ActivationIntent.CONFIRM_AND_ACTIVATE,
-        )
-        _confirm(plans, challenge, "manual-monitor")
-    _complete_session(data_root, "2026-07-27")
+    with arrange_canonical_plan_journey(
+        tmp_path, activate=True
+    ) as journey:
+        data_root = journey.data_root
+        account_id = journey.account_id
+        source_snapshot_id = journey.data_snapshot_id
+        security_id = journey.security_id
+    _complete_session(
+        data_root,
+        "2026-07-27",
+        source_snapshot_id=source_snapshot_id,
+        security_id=security_id,
+    )
     review = _start(
         data_root,
         invocation_id="manual-review:monitor",
+        account_id=account_id,
         selected_session="2026-07-27",
     )
     connection = SQLiteOwningAdapterFixture(data_root)
@@ -152,16 +193,20 @@ def test_active_plan_without_compatible_evaluation_is_monitor_only(
 def test_no_action_evaluation_produces_no_change_without_task(
     tmp_path: Path,
 ) -> None:
-    data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as plans:
-        draft, challenge = _create_and_challenge(
-            plans,
-            _plan_draft(snapshot_id, suffix="manual-no-change"),
-            "manual-no-change",
-            ActivationIntent.CONFIRM_AND_ACTIVATE,
-        )
-        _confirm(plans, challenge, "manual-no-change")
-    _complete_session(data_root, "2026-07-27")
+    with arrange_canonical_plan_journey(
+        tmp_path, activate=True
+    ) as journey:
+        data_root = journey.data_root
+        account_id = journey.account_id
+        source_snapshot_id = journey.data_snapshot_id
+        security_id = journey.security_id
+        plan_version_id = journey.plan_version_id
+    _complete_session(
+        data_root,
+        "2026-07-27",
+        source_snapshot_id=source_snapshot_id,
+        security_id=security_id,
+    )
     connection = SQLiteOwningAdapterFixture(data_root)
     with connection.transaction():
         connection.execute(
@@ -178,7 +223,7 @@ def test_no_action_evaluation_produces_no_change_without_task(
             "INSERT INTO market_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "market_snapshot_manual_review",
-                "security_600000",
+                security_id,
                 "CN_A_SHARE",
                 "2026-07-27",
                 "2026-07-27",
@@ -199,7 +244,7 @@ def test_no_action_evaluation_produces_no_change_without_task(
             + ")",
             (
                 "plan_evaluation_manual_review",
-                draft.proposed_graph.version.plan_version_id,
+                plan_version_id,
                 "market_snapshot_manual_review",
                 "plan-evaluator@2",
                 "trade-plan-conflict@1",
@@ -219,6 +264,7 @@ def test_no_action_evaluation_produces_no_change_without_task(
     review = _start(
         data_root,
         invocation_id="manual-review:no-change",
+        account_id=account_id,
         selected_session="2026-07-27",
     )
     connection = SQLiteOwningAdapterFixture(data_root)
@@ -237,22 +283,26 @@ def test_no_action_evaluation_produces_no_change_without_task(
 def test_corrupt_active_plan_graph_fails_whole_review_closed(
     tmp_path: Path,
 ) -> None:
-    data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as plans:
-        draft, challenge = _create_and_challenge(
-            plans,
-            _plan_draft(snapshot_id, suffix="manual-corrupt"),
-            "manual-corrupt",
-            ActivationIntent.CONFIRM_AND_ACTIVATE,
-        )
-        _confirm(plans, challenge, "manual-corrupt")
-    _complete_session(data_root, "2026-07-27")
+    with arrange_canonical_plan_journey(
+        tmp_path, activate=True
+    ) as journey:
+        data_root = journey.data_root
+        account_id = journey.account_id
+        source_snapshot_id = journey.data_snapshot_id
+        security_id = journey.security_id
+        plan_version_id = journey.plan_version_id
+    _complete_session(
+        data_root,
+        "2026-07-27",
+        source_snapshot_id=source_snapshot_id,
+        security_id=security_id,
+    )
     connection = SQLiteOwningAdapterFixture(data_root)
     connection.execute("DROP TRIGGER trade_plan_version_sealed_update")
     connection.execute(
         "UPDATE trade_plan_version SET graph_seal_hash='tampered' "
         "WHERE plan_version_id=?",
-        (draft.proposed_graph.version.plan_version_id,),
+        (plan_version_id,),
     )
     connection.close()
     with pytest.raises(
@@ -261,6 +311,7 @@ def test_corrupt_active_plan_graph_fails_whole_review_closed(
         _start(
             data_root,
             invocation_id="manual-review:corrupt",
+            account_id=account_id,
             selected_session="2026-07-27",
         )
     connection = SQLiteOwningAdapterFixture(data_root)
@@ -274,91 +325,83 @@ def test_corrupt_active_plan_graph_fails_whole_review_closed(
     connection.close()
 
 
-def test_shared_envelope_dispatches_manual_review_and_persists_same_hash(
+def test_single_security_snapshot_is_not_market_session_proof(
     tmp_path: Path,
 ) -> None:
     data_root, _ = _authority_root(tmp_path)
-    _complete_session(data_root, "2026-07-27")
-    envelope = ApplicationCommandEnvelopeV1.from_bytes(
-        (
-            "{"
-            '"schema_version":"ApplicationCommandEnvelope@1",'
-            '"command_name":"manual_portfolio_review.run@1",'
-            '"invocation_id":"manual-review:envelope",'
-            '"payload_schema_version":"RunManualPortfolioReview@1",'
-            '"expected_revision":null,'
-            '"decision_actor":{"actor_type":"agent","actor_id":"codex"},'
-            '"interaction_channel":"skill",'
-            '"transport_actor":{"actor_type":"agent","actor_id":"codex"},'
-            '"approval":null,'
-            '"payload":{'
-            '"account_id":"account_local",'
-            '"requested_at":"2026-07-27T16:00:00+08:00",'
-            '"selected_complete_session":"2026-07-27",'
-            '"first_window_start_exclusive":"2026-07-24",'
-            '"code_identity":"code:test",'
-            '"config_identity":"config:test"'
-            "}}"
-        ).encode()
+    connection = SQLiteOwningAdapterFixture(data_root)
+    source = connection.execute(
+        "SELECT * FROM data_snapshot "
+        "WHERE data_snapshot_id='data_snapshot_plan_fixture'"
+    ).fetchone()
+    values = list(source)
+    values[0] = "data_snapshot_single_security_only"
+    values[3] = "2026-07-27"
+    values[4] = "2026-07-27"
+    values[5] = "2026-07-27T15:00:00+08:00"
+    values[14] = 1
+    values[15] = 1
+    values[16] = 0
+    values[17] = 0
+    values[19] = "effective_complete_session"
+    values[20] = "2026-07-27T15:00:00+08:00"
+    connection.execute(
+        "INSERT INTO data_snapshot VALUES("
+        + ",".join("?" for _ in values)
+        + ")",
+        values,
     )
-    with open_application_commands(data_root) as dispatcher:
-        result = dispatcher.dispatch(envelope)
-    assert isinstance(result, ApplicationCommandResult)
+    connection.close()
+
+    with pytest.raises(
+        ManualReviewError,
+        match="LATEST_PROVEN_COMPLETE_SESSION_UNAVAILABLE",
+    ):
+        _start(
+            data_root,
+            invocation_id="manual-review:single-security-not-proof",
+            requested_at="2026-07-27T16:00:00+08:00",
+        )
     connection = SQLiteOwningAdapterFixture(data_root)
     assert connection.execute(
-        "SELECT request_hash FROM application_command_receipt "
-        "WHERE invocation_id=?",
-        (result.invocation_id,),
-    ).fetchone()[0] == result.request_hash
+        "SELECT count(*) FROM manual_portfolio_review_run"
+    ).fetchone()[0] == 0
     connection.close()
 
 
-def test_incomplete_session_fails_before_review_truth_is_written(
+def test_no_proven_session_at_requested_time_writes_no_review_truth(
     tmp_path: Path,
 ) -> None:
     data_root, _ = _authority_root(tmp_path)
     with pytest.raises(
-        ManualReviewError, match="SELECTED_COMPLETE_SESSION_NOT_PROVEN"
+        ManualReviewError,
+        match="LATEST_PROVEN_COMPLETE_SESSION_UNAVAILABLE",
     ):
         _start(
             data_root,
             invocation_id="manual-review:incomplete",
-            selected_session="2026-07-28",
+            requested_at="2026-07-23T16:00:00+08:00",
         )
     connection = SQLiteOwningAdapterFixture(data_root)
     assert connection.execute(
         "SELECT count(*) FROM manual_portfolio_review_run"
     ).fetchone()[0] == 0
-    assert connection.execute(
-        "SELECT status FROM workflow_run "
-        "WHERE invocation_id='manual-review:incomplete'"
-    ).fetchone()[0] == "failed"
     connection.close()
 
 
-def test_first_review_requires_explicit_confirmed_snapshot_cutoff(
+def test_first_review_derives_confirmed_snapshot_cutoff(
     tmp_path: Path,
 ) -> None:
     data_root, _ = _authority_root(tmp_path)
     _complete_session(data_root, "2026-07-27")
-    with pytest.raises(
-        ManualReviewError, match="FIRST_REVIEW_CUTOFF_REQUIRED"
-    ):
-        _start(
-            data_root,
-            invocation_id="manual-review:no-first-cutoff",
-            selected_session="2026-07-27",
-            first_window_start_exclusive=None,
-        )
-    connection = SQLiteOwningAdapterFixture(data_root)
-    assert connection.execute(
-        "SELECT count(*) FROM manual_portfolio_review_run"
-    ).fetchone()[0] == 0
-    assert connection.execute(
-        "SELECT status FROM workflow_run "
-        "WHERE invocation_id='manual-review:no-first-cutoff'"
-    ).fetchone()[0] == "failed"
-    connection.close()
+    review = _start(
+        data_root,
+        invocation_id="manual-review:derived-cutoff",
+        selected_session="2026-07-27",
+    )
+    assert review.window_start_exclusive == "2026-07-24"
+    assert review.selected_complete_session == "2026-07-27"
+    assert review.session_selection == "latest_proven_complete_session"
 
 
 def test_failed_run_does_not_advance_cutoff_and_can_be_resumed(
@@ -410,8 +453,6 @@ def test_failed_run_does_not_advance_cutoff_and_can_be_resumed(
                 invocation_id="manual-review:resumed",
                 failed_review_run_id=failed_id,
                 requested_at="2026-07-27T16:30:00+08:00",
-                code_identity="code:test",
-                config_identity="config:test",
                 decision_actor="agent:codex",
                 interaction_channel="skill",
                 transport_actor="agent:codex",
@@ -489,7 +530,7 @@ def test_same_invocation_with_different_review_input_is_rejected(
         )
 
 
-def test_zero_quantity_is_not_a_holding(
+def test_zero_quantity_on_watchlist_remains_watchlist_only(
     tmp_path: Path,
 ) -> None:
     data_root, prior_snapshot_id = _authority_root(tmp_path)
@@ -508,6 +549,17 @@ def test_zero_quantity_is_not_a_holding(
         create_invocation="manual-review:zero:create",
         confirm_invocation="manual-review:zero:confirm",
     )
+    with open_watchlist(data_root) as watchlist:
+        watchlist.add(
+            "manual-review:zero:watchlist",
+            SecurityIdentity(
+                "security_600000",
+                "SSE",
+                "600000",
+                "CNY",
+                "1999-11-10",
+            ),
+        )
     _complete_session(data_root, "2026-07-27")
     result = _start(
         data_root,
@@ -515,12 +567,116 @@ def test_zero_quantity_is_not_a_holding(
         selected_session="2026-07-27",
     )
     connection = SQLiteOwningAdapterFixture(data_root)
-    assert connection.execute(
-        "SELECT count(*) FROM manual_portfolio_review_item "
-        "WHERE review_run_id=?",
+    row = connection.execute(
+        "SELECT security_id,universe_roles_json "
+        "FROM manual_portfolio_review_item WHERE review_run_id=?",
         (result.review_run_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()
+    assert tuple(row) == ("security_600000", '["watchlist"]')
     connection.close()
+
+
+def test_review_universe_freezes_holding_only_role(tmp_path: Path) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    _complete_session(data_root, "2026-07-27")
+    review = _start(
+        data_root,
+        invocation_id="manual-review:holding-only",
+        selected_session="2026-07-27",
+    )
+    connection = SQLiteOwningAdapterFixture(data_root)
+    row = connection.execute(
+        "SELECT security_id,universe_member_identity,universe_roles_json "
+        "FROM manual_portfolio_review_item WHERE review_run_id=?",
+        (review.review_run_id,),
+    ).fetchone()
+    assert row["security_id"] == "security_600000"
+    assert row["universe_member_identity"]
+    assert row["universe_roles_json"] == '["holding"]'
+    connection.close()
+
+
+def test_review_universe_includes_default_watchlist_only_security(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    with open_watchlist(data_root) as watchlist:
+        watchlist.add(
+            "manual-review:watchlist-only:add",
+            SecurityIdentity(
+                "security_watchlist_only",
+                "SZSE",
+                "000001",
+                "CNY",
+                "1991-04-03",
+            ),
+        )
+    _complete_session(data_root, "2026-07-27")
+    review = _start(
+        data_root,
+        invocation_id="manual-review:watchlist-only",
+        selected_session="2026-07-27",
+    )
+    connection = SQLiteOwningAdapterFixture(data_root)
+    rows = connection.execute(
+        "SELECT security_id,universe_roles_json "
+        "FROM manual_portfolio_review_item WHERE review_run_id=? "
+        "ORDER BY security_id",
+        (review.review_run_id,),
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("security_600000", '["holding"]'),
+        ("security_watchlist_only", '["watchlist"]'),
+    ]
+    connection.close()
+
+
+def test_review_universe_deduplicates_holding_watchlist_overlap(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    with open_watchlist(data_root) as watchlist:
+        watchlist.add(
+            "manual-review:overlap:add",
+            SecurityIdentity(
+                "security_600000",
+                "SSE",
+                "600000",
+                "CNY",
+                "1999-11-10",
+            ),
+        )
+    _complete_session(data_root, "2026-07-27")
+    review = _start(
+        data_root,
+        invocation_id="manual-review:overlap",
+        selected_session="2026-07-27",
+    )
+    connection = SQLiteOwningAdapterFixture(data_root)
+    rows = connection.execute(
+        "SELECT security_id,universe_roles_json "
+        "FROM manual_portfolio_review_item WHERE review_run_id=?",
+        (review.review_run_id,),
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("security_600000", '["holding","watchlist"]')
+    ]
+    connection.close()
+
+
+def test_weekend_request_selects_latest_proven_complete_session(
+    tmp_path: Path,
+) -> None:
+    data_root, _ = _authority_root(tmp_path)
+    _complete_session(data_root, "2026-07-31")
+    _complete_session(data_root, "2026-08-03")
+    review = _start(
+        data_root,
+        invocation_id="manual-review:weekend",
+        requested_at="2026-08-02T12:00:00+08:00",
+    )
+    assert review.selected_complete_session == "2026-07-31"
+    assert review.window_end_inclusive == "2026-07-31"
 
 
 def test_public_daily_portfolio_route_is_deleted() -> None:

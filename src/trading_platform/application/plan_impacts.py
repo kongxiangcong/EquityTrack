@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
+from trading_platform.domain.plan_content_diff import (
+    PlanContentRevisionError,
+    merge_plan_content,
+)
 from trading_platform.domain.plan_impacts import (
     PlanChangeProposal,
     PlanImpactAssessment,
     PlanImpactError,
     PlanImpactFinding,
     ProposalDisposition,
-)
-from trading_platform.domain.plans import (
-    TradePlanDraft,
-    build_trade_plan_draft,
 )
 from trading_platform.identity import canonical_hash
 
@@ -21,11 +21,11 @@ from .manual_portfolio_review import (
     ManualPortfolioReview,
 )
 from .trade_plan_authoring import (
-    CreateTradePlanDraft,
     GetTradePlanGraph,
     PlanCommandActor,
-    ReviseTradePlanDraft,
     TradePlanTasks,
+    _OpenTradePlanDrafts,
+    _UpsertOpenTradePlanDraft,
 )
 
 
@@ -104,8 +104,6 @@ class AcceptPlanChangeProposal:
     invocation_id: str
     proposal_id: str
     expected_revision: int
-    draft_id: str
-    expected_draft_revision: int | None
     decided_at: str
     actor: PlanCommandActor
 
@@ -116,7 +114,6 @@ class AcceptPlanChangeProposal:
             or not self.invocation_id
             or not self.proposal_id
             or self.expected_revision < 1
-            or not self.draft_id
         ):
             raise PlanImpactError("PROPOSAL_DISPOSITION_DENIED")
 
@@ -187,10 +184,12 @@ class PlanImpacts:
         repository: PlanImpactRepository,
         manual_reviews: ManualPortfolioReview,
         plan_tasks: TradePlanTasks,
+        drafts: _OpenTradePlanDrafts,
     ) -> None:
         self._repository = repository
         self._manual_reviews = manual_reviews
         self._plan_tasks = plan_tasks
+        self._drafts = drafts
 
     def create_assessment(
         self, command: CreatePlanImpactAssessment
@@ -232,10 +231,16 @@ class PlanImpacts:
         base = self._plan_tasks.get(
             GetTradePlanGraph(assessment.evidence.plan_version_id)
         )
+        try:
+            proposed_content = merge_plan_content(
+                base.version.content, command.proposed_content
+            )
+        except PlanContentRevisionError as error:
+            raise PlanImpactError(error.code) from error
         proposal = PlanChangeProposal.open(
             assessment=assessment,
             base_graph=base,
-            proposed_content=command.proposed_content,
+            proposed_content=proposed_content,
             parameters=command.parameters,
             created_by=command.created_by,
             created_at=command.created_at,
@@ -268,38 +273,17 @@ class PlanImpacts:
         account_id, security_id = self._repository.plan_owner(
             replay.base_plan_version_id
         )
-        if command.expected_draft_revision is None:
-            draft = build_trade_plan_draft(
-                draft_id=command.draft_id,
+        produced = self._drafts.upsert(
+            _UpsertOpenTradePlanDraft(
+                invocation_id=f"{command.invocation_id}:draft",
                 account_id=account_id,
                 security_id=security_id,
                 proposed_graph=graph,
                 parameters=replay.parameters(),
-                created_at=command.decided_at,
-                decision_actor=command.actor.decision_actor,
-                interaction_channel=command.actor.interaction_channel,
-                transport_actor=command.actor.transport_actor,
+                updated_at=command.decided_at,
+                actor=command.actor,
             )
-            produced = self._plan_tasks.execute(
-                CreateTradePlanDraft(
-                    invocation_id=f"{command.invocation_id}:draft",
-                    draft=draft,
-                    actor=command.actor,
-                )
-            )
-        else:
-            produced = self._plan_tasks.execute(
-                ReviseTradePlanDraft(
-                    invocation_id=f"{command.invocation_id}:draft",
-                    draft_id=command.draft_id,
-                    expected_revision=command.expected_draft_revision,
-                    proposed_graph=graph,
-                    parameters=replay.parameters(),
-                    updated_at=command.decided_at,
-                    actor=command.actor,
-                )
-            )
-        assert isinstance(produced, TradePlanDraft)
+        )
         accepted = replay.dispose(
             ProposalDisposition.ACCEPTED,
             decided_at=command.decided_at,

@@ -19,6 +19,43 @@ VALID_SOURCE_TIERS = {
     "missing",
 }
 
+ESTIMATE_METADATA_KEYS = (
+    "basis_sources",
+    "policy",
+    "range_policy",
+    "basis_period",
+    "lower_bound",
+    "upper_bound",
+    "calibration_window",
+    "rationale",
+    "invalidation_condition",
+    "formal_gate_coverage",
+)
+
+
+def _estimate_metadata(
+    value: Mapping[str, Any],
+    *,
+    policy: str = "",
+) -> Mapping[str, Any]:
+    metadata = {
+        key: value[key]
+        for key in ESTIMATE_METADATA_KEYS
+        if key in value
+    }
+    if policy and "policy" not in metadata:
+        metadata["policy"] = policy
+    basis_sources = metadata.get("basis_sources")
+    if isinstance(basis_sources, (list, tuple)):
+        metadata["basis_sources"] = [
+            str(source_id) for source_id in basis_sources if source_id
+        ]
+    calibration_window = metadata.get("calibration_window")
+    if isinstance(calibration_window, Mapping):
+        metadata["calibration_window"] = dict(calibration_window)
+    return metadata
+
+
 REPORTING_CURRENCY_FIELDS = {
     "revenue",
     "ebit",
@@ -646,6 +683,10 @@ def build_evidence(
                     official=official and not is_estimate_source,
                     estimated=is_estimate_source,
                     derived_from=tuple(str(value) for value in field.get("derived_from", []) if value),
+                    estimate_metadata=_estimate_metadata(
+                        field,
+                        policy=str(source.get("policy", "")).strip(),
+                    ) if is_estimate_source else {},
                     basis_sources=field_basis_sources,
                 )
             )
@@ -783,6 +824,10 @@ def build_evidence(
                         confidence=str(estimate.get("confidence", "low")),
                         official=False,
                         estimated=True,
+                        estimate_metadata=_estimate_metadata(
+                            estimate,
+                            policy=str(estimates.get("policy", "")).strip(),
+                        ),
                         basis_sources=basis_sources,
                     )
                 )

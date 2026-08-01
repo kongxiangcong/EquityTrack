@@ -24,7 +24,7 @@ def test_a_share_outlook_is_bound_to_official_frozen_snapshot_evidence(
     assert view["security_id"] == "security_yihua"
     assert view["data_snapshot_id"] == "snapshot_filing"
     assert view["as_of"] == "2026-07-11"
-    assert view["data_quality_grade"] in {"warning", "insufficient"}
+    assert view["data_quality_grade"] in {"A", "B", "C", "D"}
     assert view["what_would_change_the_view"]
     root.close()
 
@@ -42,7 +42,9 @@ def test_nonofficial_semantic_financial_inputs_complete_with_valuation_limits(
     )
 
     assert source["status"] == "completed_with_limits"
-    assert view["valuation_view"]["status"] == "not_ready"
+    assert view["valuation_view"]["status"] == "unavailable"
+    assert view["valuation_simulation"]["status"] == "not_run"
+    assert view["market_price_paths"]["status"] == "not_run"
     assert view["valuation_artifact_record_id"] is None
     assert view["forecast_artifact_record_id"] is None
     assert view["simulation_artifact_record_id"] is None

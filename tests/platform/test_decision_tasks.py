@@ -17,6 +17,7 @@ from tests.platform.test_plan_confirmation import (
     _confirm,
     _create_and_challenge,
     _draft as _plan_draft,
+    _open_trade_plan_test_seams,
 )
 from trading_platform.application import (
     ApplicationCommandEnvelopeV1,
@@ -29,7 +30,6 @@ from trading_platform.application import (
     SupersedeDecisionTask,
     open_application_commands,
     open_decision_tasks,
-    open_trade_plan,
 )
 from trading_platform.domain.approvals import ActivationIntent
 from trading_platform.domain.decision_tasks import (
@@ -51,9 +51,10 @@ def _task_review(
     intent_type: str = "decrease",
 ):
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, drafts):
         draft, challenge = _create_and_challenge(
             plans,
+            drafts,
             _plan_draft(snapshot_id, suffix=suffix),
             suffix,
             ActivationIntent.CONFIRM_AND_ACTIVATE,
@@ -141,9 +142,10 @@ def _actor_fields() -> dict[str, str]:
 
 def test_no_change_creates_no_task(tmp_path: Path) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, drafts):
         draft, challenge = _create_and_challenge(
             plans,
+            drafts,
             _plan_draft(snapshot_id, suffix="task-no-change"),
             "task-no-change",
             ActivationIntent.CONFIRM_AND_ACTIVATE,

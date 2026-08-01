@@ -20,17 +20,17 @@ from tests.platform.test_plan_confirmation import (
     _confirm,
     _create_and_challenge,
     _draft,
+    _open_trade_plan_test_seams,
 )
 from trading_platform.application import (
     CreatePlanImpactAssessment,
     open_plan_impacts,
-    open_trade_plan,
 )
 from trading_platform.domain.approvals import ActivationIntent
 from trading_platform.domain.plan_impacts import PlanImpactError
 from trading_platform.domain.plans import (
     TradePlanRule,
-    build_plan_version,
+    build_trade_plan_draft_graph,
     build_trade_plan_draft,
 )
 from trading_platform.domain.rules import (
@@ -84,7 +84,7 @@ def _impact_authority(tmp_path: Path):
         ),
     )
     version = base.version
-    graph = build_plan_version(
+    graph = build_trade_plan_draft_graph(
         plan_version_id=version.plan_version_id,
         plan_id=version.plan_id,
         version_no=version.version_no,
@@ -106,8 +106,6 @@ def _impact_authority(tmp_path: Path):
         rules=(review_rule,),
         evidence_references=base.evidence_references,
         adjusted_price_evidence=base.adjusted_price_evidence,
-        confirmed_at=version.confirmed_at,
-        user_approval_receipt_id=version.user_approval_receipt_id,
     )
     draft = build_trade_plan_draft(
         draft_id=original.draft_id,
@@ -120,9 +118,10 @@ def _impact_authority(tmp_path: Path):
         interaction_channel=USER.interaction_channel,
         transport_actor=USER.transport_actor,
     )
-    with open_trade_plan(data_root) as plans:
+    with _open_trade_plan_test_seams(data_root) as (plans, drafts):
         _, challenge = _create_and_challenge(
             plans,
+            drafts,
             draft,
             "impact-authority",
             ActivationIntent.CONFIRM_AND_ACTIVATE,

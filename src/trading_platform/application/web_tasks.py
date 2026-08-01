@@ -21,8 +21,8 @@ class WorkspaceUpdateCommand:
 class ChartWorkspace(Protocol):
     def get_series(self, security_id: str, snapshot_id: str) -> ChartSeries: ...
 
+    def get_latest_series(self, security_id: str) -> ChartSeries: ...
 
-class ChartAnnotations(Protocol):
     def apply(self, command: AnnotationLifecycleCommand) -> AnnotationVersion: ...
 
     def list_history(self, security_id: str) -> tuple[AnnotationVersion, ...]: ...
@@ -33,7 +33,6 @@ class UpdateAuthorizations(Protocol):
 
 
 __all__ = [
-    "ChartAnnotations",
     "ChartWorkspace",
     "UpdateAuthorizations",
     "WorkspaceUpdateCommand",

@@ -79,7 +79,7 @@ def test_navigation_home_allowlist_progressive_disclosure_and_accessibility(
         r'<button type="button" data-page="[^"]+"[^>]*>([^<]+)</button>',
         html,
     )
-    assert navigation == ["总览", "组合", "复核", "研究"]
+    assert navigation == ["今日", "组合", "研究与计划", "周期复盘"]
     metadata = {
         "schema_version",
         "projection_id",

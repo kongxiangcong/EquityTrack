@@ -15,6 +15,7 @@ from trading_platform.application.workflow_ledger import (
     WorkspaceWorkflowQuery,
 )
 from trading_platform.domain.account_state import AccountStateError
+from trading_platform.domain.plan_content_diff import compare_plan_content
 from trading_platform.research_view import (
     ResearchDecisionView,
     ResearchViewError,
@@ -41,7 +42,21 @@ class SQLiteReadModelProjection:
         tasks = self._tasks(account_id=account_id)
         plans = self._active_plan_summaries(account_id)
         review = self._latest_review(account_id)
+        watchlist = self._all(
+            "SELECT i.watchlist_item_id,i.security_id,w.name "
+            "FROM watchlist_item i JOIN watchlist w "
+            "ON w.watchlist_id=i.watchlist_id ORDER BY i.security_id",
+            (),
+        )
+        account_summary = dict(self._account_summary(state))
+        account_summary["positions"] = tuple(
+            asdict(position) for position in state.positions
+        )
+        account_summary["watchlist"] = watchlist
         source_ids = self._state_source_ids(state)
+        source_ids += tuple(
+            str(item["watchlist_item_id"]) for item in watchlist
+        )
         source_ids += tuple(
             str(item["decision_task_id"]) for item in tasks
         )
@@ -55,7 +70,7 @@ class SQLiteReadModelProjection:
                 f"{review['discipline_review_id']}:v{review['version_no']}",
             )
         return source_ids, {
-            "account_state_summary": self._account_summary(state),
+            "account_state_summary": account_summary,
             "unresolved_decision_tasks": tasks,
             "material_changes_since_last_review": (
                 self._material_changes(account_id)
@@ -195,8 +210,10 @@ class SQLiteReadModelProjection:
         versions = self._all(
             "SELECT v.plan_version_id,v.version_no,"
             "v.supersedes_version_id,v.strategy_version_id,"
-            "v.investment_thesis_version_id,v.confirmed_at,"
-            "v.content_json,a.ended_at,a.activated_at "
+            "v.investment_thesis_version_id,v.account_snapshot_version_id,"
+            "v.data_snapshot_id,v.risk_policy_version_id,v.horizon_start,"
+            "v.horizon_end,v.review_by,"
+            "v.confirmed_at,v.content_json,a.ended_at,a.activated_at "
             "FROM trade_plan_version v LEFT JOIN plan_activation a "
             "ON a.plan_version_id=v.plan_version_id "
             "WHERE v.plan_id=? ORDER BY v.version_no",
@@ -207,6 +224,13 @@ class SQLiteReadModelProjection:
             str(latest["plan_version_id"])
             if latest is not None
             else None
+        )
+        open_draft_row = self._one(
+            "SELECT draft_id,revision,status,updated_at,"
+            "proposed_graph_seal_hash,content_json,proposed_graph_json "
+            "FROM trade_plan_draft "
+            "WHERE plan_id=? AND status='open'",
+            (plan_id,),
         )
         sleeves = (
             self._all(
@@ -225,7 +249,8 @@ class SQLiteReadModelProjection:
         rules = (
             self._all(
                 "SELECT rule_id,rule_class,rule_kind,priority,scope,"
-                "sleeve_id,effect,applies_to,input_applicability_json "
+                "sleeve_id,effect,applies_to,candidate_intent_json,"
+                "input_applicability_json,condition_json "
                 "FROM trade_plan_rule WHERE plan_version_id=? "
                 "ORDER BY rule_order",
                 (version_id,),
@@ -237,7 +262,7 @@ class SQLiteReadModelProjection:
             self._all(
                 "SELECT e.plan_evaluation_id,e.status,"
                 "e.resolution_outcome,e.resolution_reason_code,"
-                "e.completeness,e.created_at "
+                "e.resolution_json,e.completeness,e.created_at "
                 "FROM plan_evaluation e WHERE e.plan_version_id=? "
                 "ORDER BY e.created_at DESC LIMIT 1",
                 (version_id,),
@@ -247,10 +272,92 @@ class SQLiteReadModelProjection:
         )
         challenge = self._one(
             "SELECT challenge_id,draft_id,expected_revision,"
-            "canonical_diff_json,status,issued_at,expires_at "
+            "expected_content_hash,canonical_diff_json,canonical_diff_hash,"
+            "status,activation_intent,issued_at,expires_at "
             "FROM plan_confirmation_challenge WHERE plan_id=? "
             "ORDER BY issued_at DESC LIMIT 1",
             (plan_id,),
+        )
+        evidence = (
+            self._all(
+                "SELECT ref_type,ref_id,resolution_status,reference_json "
+                "FROM trade_plan_evidence_reference "
+                "WHERE plan_version_id=? ORDER BY ref_order",
+                (version_id,),
+            )
+            if version_id
+            else ()
+        )
+        tasks = self._tasks(
+            account_id=str(master["account_id"]),
+            security_id=str(master["security_id"]),
+        )
+        reviews = (
+            self._all(
+                "SELECT i.review_run_id,i.review_item_id,i.outcome,"
+                "r.selected_complete_session,r.completed_at "
+                "FROM manual_portfolio_review_item i "
+                "JOIN manual_portfolio_review_run r "
+                "ON r.review_run_id=i.review_run_id "
+                "WHERE i.plan_version_id=? ORDER BY r.created_at DESC",
+                (version_id,),
+            )
+            if version_id
+            else ()
+        )
+        proposals = (
+            self._all(
+                "SELECT proposal_id,revision,status,assessment_id,"
+                "proposed_canonical_patch_json,proposed_diff_hash,updated_at "
+                "FROM plan_change_proposal WHERE base_plan_version_id=? "
+                "ORDER BY proposal_id,revision",
+                (version_id,),
+            )
+            if version_id
+            else ()
+        )
+        freshness = self._plan_evidence_freshness(latest, evidence)
+        rule_states = self._rule_states(rules, evaluations)
+        current_content = (
+            json.loads(latest["content_json"])
+            if latest is not None
+            else {}
+        )
+        open_draft = _open_plan_draft_projection(open_draft_row)
+        draft_content = (
+            json.loads(open_draft_row["content_json"])
+            if open_draft_row is not None
+            else None
+        )
+        readable_draft_diff = (
+            compare_plan_content(current_content, draft_content).as_dict()
+            if draft_content is not None
+            else None
+        )
+        change_diffs = tuple(
+            {
+                "change_kind": "final_confirmation",
+                "status": challenge["status"],
+                "revision": challenge["expected_revision"],
+                "changed_at": challenge["issued_at"],
+                "readable_diff": readable_draft_diff,
+            }
+            for challenge in (challenge,)
+            if challenge is not None
+        ) + tuple(
+            {
+                "change_kind": "revision_proposal",
+                "status": proposal["status"],
+                "revision": proposal["revision"],
+                "changed_at": proposal["updated_at"],
+                "readable_diff": compare_plan_content(
+                    current_content,
+                    json.loads(
+                        proposal["proposed_canonical_patch_json"]
+                    )["content"],
+                ).as_dict(),
+            }
+            for proposal in proposals
         )
         source_ids = (plan_id,) + tuple(
             str(item["plan_version_id"]) for item in versions
@@ -258,8 +365,20 @@ class SQLiteReadModelProjection:
         source_ids += tuple(
             str(item["plan_evaluation_id"]) for item in evaluations
         )
+        source_ids += tuple(
+            str(item["decision_task_id"]) for item in tasks
+        )
+        source_ids += tuple(
+            str(item["review_item_id"]) for item in reviews
+        )
+        source_ids += tuple(
+            f"{item['proposal_id']}:r{item['revision']}"
+            for item in proposals
+        )
         if challenge is not None:
             source_ids += (str(challenge["challenge_id"]),)
+        if open_draft is not None:
+            source_ids += (str(open_draft["draft_id"]),)
         return source_ids, {
             "plan_identity": {
                 "plan_id": plan_id,
@@ -268,32 +387,75 @@ class SQLiteReadModelProjection:
                 "lifecycle_status": master["lifecycle_status"],
                 "strategy_version_id": master["strategy_version_id"],
                 "latest_plan_version_id": version_id,
+                "open_draft_id": (
+                    open_draft["draft_id"]
+                    if open_draft is not None
+                    else None
+                ),
             },
             "sleeve_summary": sleeves,
             "rules": tuple(
                 {
-                    **item,
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key
+                        not in {
+                            "candidate_intent_json",
+                            "input_applicability_json",
+                            "condition_json",
+                        }
+                    },
+                    "candidate_intent": (
+                        json.loads(item["candidate_intent_json"])
+                        if item["candidate_intent_json"] is not None
+                        else None
+                    ),
                     "input_applicability": json.loads(
                         item["input_applicability_json"]
                     ),
+                    "condition": json.loads(item["condition_json"]),
                 }
                 for item in rules
             ),
-            "latest_frozen_evaluations": evaluations,
+            "latest_frozen_evaluations": tuple(
+                {
+                    **item,
+                    "resolution": json.loads(item["resolution_json"]),
+                }
+                for item in evaluations
+            ),
+            "evidence_freshness": freshness,
+            "rule_states": rule_states,
+            "related_tasks": tasks,
+            "review_history": reviews,
+            "change_diffs": change_diffs,
             "confirmation_state": (
                 {
                     **challenge,
                     "canonical_diff": json.loads(
                         challenge["canonical_diff_json"]
                     ),
+                    "readable_diff": readable_draft_diff,
+                    "open_draft": open_draft,
                 }
                 if challenge is not None
-                else None
+                else (
+                    {"open_draft": open_draft}
+                    if open_draft is not None
+                    else None
+                )
             ),
             "version_history": tuple(
                 {
-                    **item,
-                    "content": json.loads(item["content_json"]),
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key != "content_json"
+                    },
+                    "content": _plan_content_projection(
+                        item["content_json"]
+                    ),
                 }
                 for item in versions
             ),
@@ -306,6 +468,7 @@ class SQLiteReadModelProjection:
     def review(
         self, account_id: str, review_run_id: str | None
     ) -> tuple[tuple[str, ...], Mapping[str, object]]:
+        periodic = self._discipline_review(account_id)
         run = (
             self._one(
                 "SELECT * FROM manual_portfolio_review_run "
@@ -320,7 +483,11 @@ class SQLiteReadModelProjection:
             )
         )
         if run is None:
-            return (), {
+            return (
+                (str(periodic["discipline_review_id"]),)
+                if periodic is not None
+                else ()
+            ), {
                 "review_run": None,
                 "holding_outcomes": (),
                 "unresolved_or_deferred_tasks": self._tasks(
@@ -328,6 +495,7 @@ class SQLiteReadModelProjection:
                 ),
                 "plan_impact_summaries": (),
                 "proposal_summaries": (),
+                "periodic_discipline_review": periodic,
                 "diagnostics": {
                     "disclosure": "details_only",
                     "checkpoint_count": 0,
@@ -377,6 +545,8 @@ class SQLiteReadModelProjection:
             f"{item['proposal_id']}:r{item['revision']}"
             for item in proposals
         )
+        if periodic is not None:
+            source_ids += (str(periodic["discipline_review_id"]),)
         return source_ids, {
             "review_run": {
                 "review_run_id": run_id,
@@ -415,6 +585,7 @@ class SQLiteReadModelProjection:
                 for item in assessments
             ),
             "proposal_summaries": proposals,
+            "periodic_discipline_review": periodic,
             "diagnostics": {
                 "disclosure": "details_only",
                 "checkpoints": checkpoints,
@@ -450,7 +621,7 @@ class SQLiteReadModelProjection:
             ]
             if not succeeded:
                 continue
-            workflow_id = str(succeeded[-1]["workflow_run_id"])
+            workflow_id = str(succeeded[0]["workflow_run_id"])
             persisted = self._workflow_ledger.load(
                 DecisionViewPayloadQuery(workflow_id)
             )
@@ -471,6 +642,14 @@ class SQLiteReadModelProjection:
                     "research_decision_view_id": view.view_id,
                     "research_run_id": view.research_run_id,
                     "status": view.status,
+                    "as_of": view.as_of,
+                    "data_quality_grade": view.data_quality_grade,
+                    "deliverables": {
+                        "html_report": "ready",
+                        "pdf_report": "ready",
+                        "chart": "available_from_frozen_market_data",
+                        "workbook": persisted.workbook_status,
+                    },
                     "dimensions": {
                         "company": view.story.get("company"),
                         "forecast": view.story.get("forecast"),
@@ -664,6 +843,170 @@ class SQLiteReadModelProjection:
             "confirmation_receipt_status": receipt,
         }
 
+    def _plan_evidence_freshness(
+        self,
+        version: Mapping[str, object] | None,
+        evidence: tuple[Mapping[str, object], ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        if version is None:
+            return ()
+        snapshot = self._one(
+            "SELECT effective_session_date,last_success_at "
+            "FROM data_snapshot WHERE data_snapshot_id=?",
+            (version["data_snapshot_id"],),
+        )
+        account = self._one(
+            "SELECT as_of_at,as_of_precision,confirmed_at "
+            "FROM account_snapshot_version "
+            "WHERE account_snapshot_version_id=?",
+            (version["account_snapshot_version_id"],),
+        )
+        risk = (
+            self._one(
+                "SELECT confirmed_at FROM portfolio_risk_policy_version "
+                "WHERE portfolio_risk_policy_version_id=?",
+                (version["risk_policy_version_id"],),
+            )
+            if version.get("risk_policy_version_id") is not None
+            else None
+        )
+        anchors: list[Mapping[str, object]] = [
+            {
+                "evidence_kind": "market_data_snapshot",
+                "evidence_id": version["data_snapshot_id"],
+                "freshness_state": "frozen",
+                "as_of": (
+                    snapshot["effective_session_date"]
+                    if snapshot is not None
+                    else None
+                ),
+                "last_success_at": (
+                    snapshot["last_success_at"]
+                    if snapshot is not None
+                    else None
+                ),
+            },
+            {
+                "evidence_kind": "account_snapshot",
+                "evidence_id": version["account_snapshot_version_id"],
+                "freshness_state": "frozen",
+                "as_of": account["as_of_at"] if account is not None else None,
+                "as_of_precision": (
+                    account["as_of_precision"]
+                    if account is not None
+                    else None
+                ),
+            },
+        ]
+        if version.get("risk_policy_version_id") is not None:
+            anchors.append(
+                {
+                    "evidence_kind": "risk_policy",
+                    "evidence_id": version["risk_policy_version_id"],
+                    "freshness_state": "frozen",
+                    "as_of": risk["confirmed_at"] if risk is not None else None,
+                }
+            )
+        anchors.extend(
+            {
+                "evidence_kind": item["ref_type"],
+                "evidence_id": item["ref_id"],
+                "freshness_state": item["resolution_status"],
+                "reference": json.loads(item["reference_json"]),
+            }
+            for item in evidence
+        )
+        return tuple(anchors)
+
+    @staticmethod
+    def _rule_states(
+        rules: tuple[Mapping[str, object], ...],
+        evaluations: tuple[Mapping[str, object], ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        evaluation = evaluations[0] if evaluations else None
+        resolution = (
+            json.loads(evaluation["resolution_json"])
+            if evaluation is not None
+            else {}
+        )
+        winner = resolution.get("winner")
+        winner_id = (
+            str(winner.get("rule_id"))
+            if isinstance(winner, Mapping) and winner.get("rule_id")
+            else None
+        )
+        contributing_rule_ids = {
+            str(value)
+            for value in resolution.get("contributing_rule_ids", ())
+        }
+        outcome = (
+            str(evaluation["resolution_outcome"])
+            if evaluation is not None
+            else "not_evaluated"
+        )
+        return tuple(
+            {
+                "rule_id": rule["rule_id"],
+                "rule_class": rule["rule_class"],
+                "rule_kind": rule["rule_kind"],
+                "state": (
+                    "triggered"
+                    if (
+                        winner_id == rule["rule_id"]
+                        or rule["rule_id"] in contributing_rule_ids
+                    )
+                    else (
+                        "not_triggered"
+                        if outcome == "no_action"
+                        else (
+                            "not_selected"
+                            if evaluation is not None
+                            else "not_evaluated"
+                        )
+                    )
+                ),
+                "evaluation_id": (
+                    evaluation["plan_evaluation_id"]
+                    if evaluation is not None
+                    else None
+                ),
+                "reason_code": (
+                    evaluation["resolution_reason_code"]
+                    if evaluation is not None
+                    else "PLAN_NOT_EVALUATED"
+                ),
+            }
+            for rule in rules
+        )
+
+    def _discipline_review(
+        self, account_id: str
+    ) -> Mapping[str, object] | None:
+        row = self._one(
+            "SELECT * FROM discipline_review_version "
+            "WHERE account_id=? "
+            "ORDER BY period_end_session DESC,version_no DESC LIMIT 1",
+            (account_id,),
+        )
+        if row is None:
+            return None
+        return {
+            "discipline_review_id": row["discipline_review_id"],
+            "version_no": row["version_no"],
+            "status": row["status"],
+            "period_kind": row["period_kind"],
+            "period_start_session": row["period_start_session"],
+            "period_end_session": row["period_end_session"],
+            "exceptions": json.loads(row["exceptions_json"]),
+            "overridden_items": json.loads(row["overridden_items_json"]),
+            "unrecorded_items": json.loads(row["unrecorded_items_json"]),
+            "unverified_items": json.loads(row["unverified_items_json"]),
+            "evidence_gap_summary": json.loads(
+                row["evidence_gap_summary_json"]
+            ),
+            "created_at": row["created_at"],
+            "confirmed_at": row["confirmed_at"],
+        }
     def _estimated(self, account_id: str):
         try:
             return self._account_states.get(
@@ -736,7 +1079,10 @@ class SQLiteReadModelProjection:
             f"WHERE {' AND '.join(where)} "
             "AND coalesce(x.to_status,t.initial_status) "
             "IN ('open','deferred') "
-            "ORDER BY t.priority,t.created_at,t.decision_task_id",
+            "ORDER BY CASE t.priority "
+            "WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+            "WHEN 'normal' THEN 2 ELSE 3 END,"
+            "t.created_at,t.decision_task_id",
             tuple(values),
         )
         return rows
@@ -746,11 +1092,15 @@ class SQLiteReadModelProjection:
     ) -> tuple[Mapping[str, object], ...]:
         return self._all(
             "SELECT m.security_id,m.plan_id,m.lifecycle_status,"
-            "a.plan_version_id,v.version_no,v.strategy_version_id "
-            "FROM trade_plan_master m JOIN plan_activation a "
+            "m.strategy_version_id,a.plan_version_id,v.version_no,"
+            "d.draft_id AS open_draft_id,d.revision AS draft_revision,"
+            "d.updated_at AS draft_updated_at "
+            "FROM trade_plan_master m LEFT JOIN plan_activation a "
             "ON a.plan_id=m.plan_id AND a.ended_at IS NULL "
-            "JOIN trade_plan_version v "
+            "LEFT JOIN trade_plan_version v "
             "ON v.plan_version_id=a.plan_version_id "
+            "LEFT JOIN trade_plan_draft d "
+            "ON d.plan_id=m.plan_id AND d.status='open' "
             "WHERE m.account_id=? ORDER BY m.security_id",
             (account_id,),
         )
@@ -840,5 +1190,71 @@ class SQLiteReadModelProjection:
             dict(row) for row in self._connection.execute(sql, values)
         )
 
+def _open_plan_draft_projection(
+    row: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if row is None:
+        return None
+    graph = json.loads(str(row["proposed_graph_json"]))
+    version = graph.get("version") if isinstance(graph, Mapping) else None
+    if not isinstance(version, Mapping):
+        return None
+    sleeves = graph.get("sleeves", ())
+    rules = graph.get("rules", ())
+    references = graph.get("evidence_references", ())
+    return {
+        "draft_id": row["draft_id"],
+        "revision": row["revision"],
+        "status": row["status"],
+        "updated_at": row["updated_at"],
+        "horizon": {
+            "start": version.get("horizon_start"),
+            "end": version.get("horizon_end"),
+            "review_by": version.get("review_by"),
+        },
+        "content": _plan_content_projection(str(row["content_json"])),
+        "sleeves": tuple(
+            item for item in sleeves if isinstance(item, Mapping)
+        ),
+        "rules": tuple(item for item in rules if isinstance(item, Mapping)),
+        "evidence": tuple(
+            {
+                "evidence_kind": item.get("ref_type"),
+                "freshness_state": item.get("resolution_status"),
+                "as_of": version.get("horizon_start"),
+            }
+            for item in references
+            if isinstance(item, Mapping)
+        ),
+    }
+
+
+_PLAN_CONTENT_FIELDS = (
+    "schema_version",
+    "authoring_schema_version",
+    "authoring_input_hash",
+    "authoring_intent_hash",
+    "research_workflow_run_id",
+    "research_view_id",
+    "recent_trend_assessment_id",
+    "account_snapshot_version_id",
+    "portfolio_risk_policy_version_id",
+    "strategy_version_id",
+    "strategy_key",
+    "strategy_parameters",
+    "observed_trend",
+    "risk_increase_evidence",
+    "risk_policy_limits",
+    "risk_budget_state",
+)
+
+
+def _plan_content_projection(encoded: str) -> Mapping[str, object]:
+    content = json.loads(encoded)
+    return {
+        key: content[key]
+        for key in _PLAN_CONTENT_FIELDS
+        if key in content
+    }
 
 __all__ = ["SQLiteReadModelProjection"]

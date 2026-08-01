@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from tests.platform.test_decision_tasks import _task_review
+from tests.platform.canonical_plan_journey_fixture import (
+    arrange_canonical_plan_journey,
+)
 from tests.platform.test_execution_records import _declare
 from tests.platform.test_plan_change_proposals import (
     _proposal_authority,
@@ -24,27 +27,21 @@ GENERATED_AT = "2026-07-27T18:30:00+08:00"
 def test_web_and_skill_serialize_identical_application_dtos(
     tmp_path: Path,
 ) -> None:
-    data_root, assessment, _ = _proposal_authority(
-        tmp_path, "read-model"
-    )
+    data_root, assessment, _ = _proposal_authority(tmp_path, "read-model")
     plan_id = None
     with open_read_models(data_root) as reads:
         portfolio = reads.portfolio("account_local", GENERATED_AT)
         plan_id = portfolio.holding_active_plan_summaries[0]["plan_id"]
         views = (
             portfolio,
-            reads.holding(
-                "account_local", "security_600000", GENERATED_AT
-            ),
+            reads.holding("account_local", "security_600000", GENERATED_AT),
             reads.plan_detail(str(plan_id), GENERATED_AT),
             reads.review(
                 "account_local",
                 GENERATED_AT,
                 assessment.evidence.review_run_id,
             ),
-            reads.research_index(
-                GENERATED_AT, "security_600000"
-            ),
+            reads.research_index(GENERATED_AT, "security_600000"),
             reads.account_editor("account_local", GENERATED_AT),
         )
     assert len({view.schema_version for view in views}) == 6
@@ -117,19 +114,58 @@ def test_unknown_unable_and_unverified_states_are_not_coerced(
         )
     with open_read_models(data_root) as reads:
         portfolio = reads.portfolio("account_local", GENERATED_AT)
-        holding = reads.holding(
-            "account_local", "security_600000", GENERATED_AT
-        )
+        holding = reads.holding("account_local", "security_600000", GENERATED_AT)
     estimated = portfolio.account_state_summary["estimated_state"]
     assert estimated["cash_state"] == "unknown"
     assert estimated["cash_value"] is None
     assert estimated["unverified_count"] == 1
-    assert holding.position_summary["available_quantity_state"] == (
-        "unknown"
-    )
-    assert "available_quantity:unknown" in (
-        holding.ability_changing_warnings
-    )
+    assert holding.position_summary["available_quantity_state"] == ("unknown")
+    assert "available_quantity:unknown" in (holding.ability_changing_warnings)
     assert f"unverified:{execution.execution_record_id}" in (
         holding.ability_changing_warnings
     )
+
+
+def test_plan_detail_defaults_to_user_language_decision_summary(
+    tmp_path: Path,
+) -> None:
+    with arrange_canonical_plan_journey(tmp_path, activate=True) as journey:
+        detail = journey.platform.read_models.plan_detail(
+            journey.plan_id, journey.review_requested_at
+        )
+
+    summary = detail.decision_summary
+    assert set(summary) == {
+        "lifecycle_label",
+        "user_control_boundary",
+        "horizon",
+        "quantities",
+        "trigger_conditions",
+        "risk_constraints",
+        "evidence_status",
+        "evaluation",
+    }
+    assert summary["lifecycle_label"] == "已确认并启用"
+    assert summary["horizon"] == {
+        "start": "2026-07-11",
+        "end": "2028-12-31",
+        "review_by": "2026-10-31",
+    }
+    assert summary["quantities"] == {
+        "core_floor": {"state": "known", "value": "1000", "unit": "股"},
+        "candidate_adjustment": {
+            "state": "unknown",
+            "value": None,
+            "unit": "股",
+        },
+    }
+    assert summary["trigger_conditions"]
+    assert summary["risk_constraints"]
+    assert summary["evidence_status"]["items"]
+    assert summary["evaluation"]["next_step"]
+    encoded = encode_read_model(detail).decode("utf-8")
+    rendered = json.dumps(json.loads(encoded)["decision_summary"], ensure_ascii=False)
+    assert "plan_rule_" not in rendered
+    assert "strategy_version_" not in rendered
+    assert "Open discipline draft" not in encoded
+    assert "financial_boundary" not in encoded

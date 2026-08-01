@@ -17,6 +17,8 @@ import json
 import re
 import sys
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
+from math import isfinite
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
@@ -261,6 +263,16 @@ class SourceManifestValidator:
         self.field_records: List[FieldRecord] = []
         self.source_ids: Set[str] = set()
         self.official_source_ids: Set[str] = set()
+        sources = self.manifest.get("sources")
+        self.declared_source_ids = (
+            {
+                str(source.get("source_id", "")).strip()
+                for source in sources
+                if isinstance(source, Mapping) and str(source.get("source_id", "")).strip()
+            }
+            if isinstance(sources, list)
+            else set()
+        )
         self.hash_checks = 0
         raw_version = self.manifest.get("source_manifest_version")
         self.manifest_version = int(raw_version) if str(raw_version).isdigit() else None
@@ -383,6 +395,9 @@ class SourceManifestValidator:
                     f"{source_path}.available_at",
                 )
 
+            if self.manifest_version == 2:
+                self.check_point_in_time(source, source_path)
+
             tier = normalized_text(source.get("tier"))
             if tier and tier not in VALID_TIERS:
                 self.add_issue(
@@ -402,6 +417,18 @@ class SourceManifestValidator:
                     f"{source_path}.official_or_secondary",
                     {"allowed": sorted(VALID_OFFICIAL_FLAGS)},
                 )
+            if (
+                tier in VALID_TIERS
+                and official_flag in VALID_OFFICIAL_FLAGS
+                and ((tier == "official") != (official_flag == "official"))
+            ):
+                self.add_issue(
+                    "error",
+                    "SOURCE_CLASSIFICATION_CONFLICT",
+                    "Source tier conflicts with official_or_secondary classification.",
+                    f"{source_path}.official_or_secondary",
+                )
+
 
             official = is_official_source(source, self.company_market())
             if official and source_id:
@@ -416,8 +443,61 @@ class SourceManifestValidator:
                     )
 
             self.check_raw_file(source, source_path)
-            self.collect_extracted_fields(source, index, source_id, official)
+            self.collect_extracted_fields(source, index, source_id, official, tier)
             self.check_cross_checks_shape(source, source_path)
+
+    def check_point_in_time(
+        self,
+        source: Mapping[str, Any],
+        source_path: str,
+    ) -> None:
+        retrieved_at = str(source.get("retrieved_at", "")).strip()
+        available_field = next(
+            (
+                field_name
+                for field_name in ("available_at", "published_at", "report_date")
+                if not is_blank(source.get(field_name))
+            ),
+            None,
+        )
+        available_at = (
+            str(source.get(available_field, "")).strip()
+            if available_field is not None
+            else ""
+        )
+        retrieved_date = parse_iso_date(retrieved_at)
+        available_date = parse_iso_date(available_at)
+
+        if retrieved_at and retrieved_date is None:
+            self.add_issue(
+                "error",
+                "SOURCE_RETRIEVED_AT_INVALID",
+                "Source retrieved_at must be an ISO date or timestamp.",
+                f"{source_path}.retrieved_at",
+            )
+        if available_at and available_date is None:
+            self.add_issue(
+                "error",
+                "SOURCE_AVAILABLE_AT_INVALID",
+                "Source availability metadata must be an ISO date or timestamp.",
+                f"{source_path}.{available_field}",
+            )
+        if (
+            retrieved_date is not None
+            and available_date is not None
+            and available_date > retrieved_date
+        ):
+            self.add_issue(
+                "error",
+                "SOURCE_PIT_ORDER_INVALID",
+                "Source availability cannot be later than retrieval.",
+                f"{source_path}.{available_field}",
+                {
+                    "available_at": available_at,
+                    "retrieved_at": retrieved_at,
+                },
+            )
+
 
     def check_raw_file(self, source: Mapping[str, Any], source_path: str) -> None:
         if normalized_text(source.get("tier")) == "missing":
@@ -425,7 +505,27 @@ class SourceManifestValidator:
 
         raw_file_path = source.get("raw_file_path")
         raw_file_sha256 = source.get("raw_file_sha256")
-        if is_blank(raw_file_path) or is_blank(raw_file_sha256):
+        path_missing = is_blank(raw_file_path)
+        hash_missing = is_blank(raw_file_sha256)
+        if path_missing and hash_missing:
+            return
+        if path_missing != hash_missing:
+            self.add_issue(
+                "error",
+                "RAW_FILE_HASH_METADATA_INCOMPLETE",
+                "raw_file_path and raw_file_sha256 must be supplied together.",
+                source_path,
+            )
+            return
+
+        expected_hash = normalize_sha256(str(raw_file_sha256))
+        if re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None:
+            self.add_issue(
+                "error",
+                "RAW_FILE_SHA256_INVALID",
+                "raw_file_sha256 must be a 64-character SHA-256 digest.",
+                f"{source_path}.raw_file_sha256",
+            )
             return
 
         resolved_path = resolve_raw_path(self.base_dir, str(raw_file_path))
@@ -441,7 +541,6 @@ class SourceManifestValidator:
 
         actual_hash = sha256_file(resolved_path)
         self.hash_checks += 1
-        expected_hash = normalize_sha256(str(raw_file_sha256))
         if actual_hash != expected_hash:
             self.add_issue(
                 "error",
@@ -457,6 +556,7 @@ class SourceManifestValidator:
         source_index: int,
         source_id: str,
         official: bool,
+        tier: str,
     ) -> None:
         fields = source.get("extracted_fields")
         source_path = f"$.sources[{source_index}]"
@@ -508,6 +608,41 @@ class SourceManifestValidator:
                     f"{field_path}.field_name",
                 )
                 continue
+            if "value" in extracted and not has_numeric_payload(extracted.get("value")):
+                self.add_issue(
+                    "error",
+                    "FIELD_VALUE_NOT_NUMERIC",
+                    f"Extracted field must contain a finite numeric value: {canonical}.",
+                    f"{field_path}.value",
+                )
+
+            if tier == "estimate":
+                raw_basis_sources = extracted.get("basis_sources")
+                basis_sources = (
+                    [str(value).strip() for value in raw_basis_sources if str(value).strip()]
+                    if isinstance(raw_basis_sources, list)
+                    else []
+                )
+                unknown_basis_sources = sorted(
+                    {
+                        value
+                        for value in basis_sources
+                        if value not in self.declared_source_ids or value == source_id
+                    }
+                )
+                if not basis_sources or unknown_basis_sources:
+                    self.add_issue(
+                        "error",
+                        "ESTIMATE_SOURCE_BASIS_INVALID",
+                        "Estimate fields require declared, non-self basis_sources.",
+                        f"{field_path}.basis_sources",
+                        {
+                            "source_id": source_id,
+                            "unknown_basis_sources": unknown_basis_sources,
+                        },
+                    )
+                    continue
+
 
             self.field_records.append(
                 FieldRecord(
@@ -637,7 +772,7 @@ class SourceManifestValidator:
                 continue
             if field_name not in official_covered:
                 self.add_issue(
-                    "error",
+                    "warning" if self.manifest_version == 2 else "error",
                     "OFFICIAL_SOURCE_MISSING",
                     f"Critical financial field lacks official-source coverage: {field_name}.",
                     "$.sources",
@@ -791,13 +926,18 @@ class SourceManifestValidator:
         missing_fields = self.missing_critical_fields()
         official_covered = {record.canonical_name for record in self.field_records if record.official}
         uncovered_fields = self.required_fields - covered_fields
+        authority_limited_fields = (
+            self.required_fields
+            & set(OFFICIAL_FINANCIAL_FIELDS)
+            & (covered_fields - official_covered)
+        )
 
         if errors:
-            if error_codes <= DATA_SUFFICIENCY_CODES:
+            if self.manifest_version != 2 and error_codes <= DATA_SUFFICIENCY_CODES:
                 manifest_status = "insufficient"
             else:
                 manifest_status = "invalid"
-        elif self.manifest_version == 2 and uncovered_fields:
+        elif self.manifest_version == 2 and (uncovered_fields or authority_limited_fields):
             manifest_status = "valid_with_limits"
         else:
             manifest_status = "sufficient"
@@ -914,6 +1054,42 @@ def is_blank(value: Any) -> bool:
     if isinstance(value, (list, dict)):
         return len(value) == 0
     return False
+
+def numeric_value(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if isfinite(number) else None
+    if isinstance(value, str):
+        try:
+            number = float(value.replace(",", "").replace("%", "").strip())
+        except ValueError:
+            return None
+        return number if isfinite(number) else None
+    return None
+
+
+def has_numeric_payload(value: Any) -> bool:
+    if numeric_value(value) is not None:
+        return True
+    return isinstance(value, Mapping) and any(
+        numeric_value(component) is not None for component in value.values()
+    )
+
+
+def parse_iso_date(value: str) -> Optional[date]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            return None
+
 
 
 def required_value_missing(

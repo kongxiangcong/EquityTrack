@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import subprocess
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -52,7 +53,9 @@ OWNING_SQLITE_TESTS = {
     "test_execution_records.py",
     "test_market_evaluation.py",
     "test_manual_portfolio_review.py",
+    "test_manual_portfolio_review_dispatcher_v2.py",
     "test_plan_confirmation.py",
+    "test_trade_plan_internal_queries.py",
     "test_plan_change_proposals.py",
     "test_plan_impact_assessments.py",
     "test_operations_backup_restore.py",
@@ -76,6 +79,38 @@ def test_health_is_a_named_task_without_a_root_or_facade(tmp_path: Path) -> None
         assert health.capabilities[Capability.PERSISTENCE] is CapabilityStatus.AVAILABLE
         assert not hasattr(health_task, "facade")
         assert not hasattr(health_task, "services")
+
+
+def test_user_task_open_safely_migrates_before_read(tmp_path: Path) -> None:
+    from trading_platform.persistence import PlatformStore
+
+    older_migrations = tmp_path / "older-migrations"
+    older_migrations.mkdir()
+    current = sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    assert len(current) >= 2
+    for migration in current[:-1]:
+        shutil.copy2(migration, older_migrations / migration.name)
+
+    data_root = tmp_path / "personal-data"
+    store = PlatformStore(data_root, older_migrations)
+    try:
+        store.migrate()
+    finally:
+        store.close()
+
+    with open_platform_health(data_root, ROOT / "migrations") as health_task:
+        assert health_task.inspect(HealthQuery()).status.value == (
+            "available_with_limits"
+        )
+
+    backups = tuple(tmp_path.glob("personal-data-pre-migrate-v*.zip"))
+    assert len(backups) == 1
+    migrated = PlatformStore(data_root, ROOT / "migrations")
+    try:
+        files, applied = migrated.migrations.validate()
+        assert len(files) == len(applied)
+    finally:
+        migrated.close()
 
 
 def test_account_snapshot_is_exposed_only_as_named_application_tasks(
@@ -123,7 +158,14 @@ def test_production_web_index_references_tracked_build_assets() -> None:
     references = re.findall(r'(?:src|href)="(/assets/[^"]+)"', index.read_text(encoding="utf-8"))
     tracked = set(
         subprocess.run(
-            ["git", "ls-files", "web/dist/assets"],
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "web/dist/assets",
+            ],
             cwd=ROOT,
             check=True,
             capture_output=True,

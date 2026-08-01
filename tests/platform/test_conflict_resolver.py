@@ -136,6 +136,12 @@ def _input(
             "UNIQUE_GRID_LEVEL_ACTIONABLE",
         ),
         (
+            (_input("trend", "decrease", levels=()),),
+            True,
+            False,
+            ResolutionOutcome.DECISION_TASK,
+            "UNIQUE_CANDIDATE_ACTIONABLE",
+        ),        (
             (),
             True,
             False,

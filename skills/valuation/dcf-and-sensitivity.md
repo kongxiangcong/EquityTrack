@@ -66,7 +66,7 @@ DCF, historical valuation band, and sensitivity analysis are mechanically insepa
 - The **historical band** places current market pricing against the stock's own history — a sanity check on the DCF conclusion.
 - The **sensitivity matrix** is not a standalone method; it is the error-bar around the DCF point estimate.
 
-Keeping them in one file removes redundant scaffolding (WACC definitions repeated, terminal-growth ranges re-stated) and makes the triangulation narrative easier to write in §XIII of `research-document-template.md` (Cross-Method Valuation Synthesis).
+Keeping them in one file removes redundant scaffolding (WACC definitions repeated, terminal-growth ranges re-stated) and makes the triangulation narrative easier to write in the three-scenario valuation section of `../output/report-layout.md`.
 
 ---
 
@@ -311,7 +311,7 @@ For each metric, calculate:
 | 60-80% | Above average | 高于均值 / Above Mean |
 | 80-100% | Historically expensive | 估值偏高 / Overvalued |
 
-**Important caveat.** Historical cheapness does NOT automatically mean "buy." A stock can be cheap for fundamental reasons (structural decline, earnings deterioration). Always cross-reference with DCF (Part 1) and comparable analysis (`comparable.md`). The synthesis across all three methods lives in §XIII of `research-document-template.md`.
+**Important caveat.** Historical cheapness does NOT automatically mean "buy." A stock can be cheap for fundamental reasons (structural decline, earnings deterioration). Always cross-reference with DCF (Part 1) and comparable analysis (`comparable.md`). Project the selected-method synthesis through the three-scenario valuation section of `../output/report-layout.md`.
 
 ### Band Output Format
 
@@ -487,7 +487,7 @@ Use `.row-highlight` class for the base case row, and `<b>` for the base case ce
 - [ ] **Sensitivity**: Primary matrix (WACC × terminal growth) — mandatory only for allowed/caution DCF
 - [ ] **Sensitivity**: Base case cell clearly highlighted, ranges symmetric, corner values plausible
 - [ ] **Sensitivity**: Interpretation narrative included, scenarios linked where applicable
-- [ ] **Cross-method synthesis** (selected methods only): Written up in §XIII of `research-document-template.md`
+- [ ] **Cross-method synthesis** (selected methods only): Projected through the three-scenario valuation section of `../output/report-layout.md`
 
 ---
 

@@ -4,15 +4,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
 
-from equity_research import ResearchEngine, ResearchRequest, ResearchRun
+from equity_research import ResearchEngine, ResearchRequest
 
-from trading_platform.application.workflow_ledger import SnapshotEvidence
+from trading_platform.application.workflow_ledger import (
+    SnapshotEvidence,
+    SnapshotMemberEvidence,
+)
+from trading_platform.domain.research_bundle import ResearchEvaluationBundle
 from trading_platform.domain.research_evaluation import (
     DegradationPolicy,
     ResearchWorkflowRequest,
 )
 from trading_platform.domain.research_inputs import ResearchInputs
 from trading_platform.identity import canonical_hash
+from trading_platform.research.bundle import ResearchBundleAssembler
+from trading_platform.research.estimation import FrozenSnapshotEstimator
 
 
 class ResearchEvaluationError(ValueError):
@@ -26,8 +32,9 @@ class ResearchEvaluation:
     """Owns deterministic research policy behind the workflow lifecycle."""
 
     engine: ResearchEngine
+    estimator: FrozenSnapshotEstimator = FrozenSnapshotEstimator()
 
-    POLICY_IDENTITY = "ResearchEvaluationPolicy@1"
+    POLICY_IDENTITY = "ResearchEvaluationPolicy@2"
     _CRITICAL_FIELDS = (
         "revenue",
         "net_income",
@@ -41,14 +48,22 @@ class ResearchEvaluation:
         "secondary": "secondary",
         "fixture": "secondary",
     }
+    _COMPONENT_INPUT_DATASETS = frozenset(
+        {"research_model_input", "market_path_policy"}
+    )
 
     def evaluate(
         self,
         request: ResearchWorkflowRequest,
         evidence: SnapshotEvidence,
-    ) -> ResearchRun:
+    ) -> ResearchEvaluationBundle:
         self._validate_frozen_evidence(request, evidence)
-        manifest = self._manifest(request, evidence)
+        manifest_members = tuple(evidence.member_evidence)
+        manifest = self._manifest(request, evidence, manifest_members)
+        estimates = self.estimator.build(
+            manifest,
+            as_of_date=request.evaluation_plan.horizon.as_of,
+        )
         run = self.engine.run(
             ResearchRequest(
                 manifest=manifest,
@@ -56,9 +71,10 @@ class ResearchEvaluation:
                 research_inputs=ResearchInputs(
                     workflow_research_member_ids=tuple(
                         member.normalized_version_id
-                        for member in evidence.member_evidence
+                        for member in manifest_members
                     )
                 ),
+                estimates=estimates,
             )
         )
         if (
@@ -67,7 +83,15 @@ class ResearchEvaluation:
             and run.status != "completed"
         ):
             raise ResearchEvaluationError("RESEARCH_EVALUATION_DATA_INSUFFICIENT")
-        return run
+        return ResearchBundleAssembler(
+            research_policy_identity=self.POLICY_IDENTITY,
+            estimation_policy_identity=self.estimator.IDENTITY,
+        ).assemble(
+            request=request,
+            evidence=evidence,
+            research_run=run,
+            estimates=estimates,
+        )
 
     def fingerprint(
         self,
@@ -78,6 +102,7 @@ class ResearchEvaluation:
             {
                 "policy": self.POLICY_IDENTITY,
                 "security_id": request.security_id,
+                "estimation_policy": self.estimator.IDENTITY,
                 "snapshot_id": evidence.data_snapshot_id,
                 "snapshot_members": [
                     member.normalized_version_id
@@ -120,11 +145,12 @@ class ResearchEvaluation:
         self,
         request: ResearchWorkflowRequest,
         evidence: SnapshotEvidence,
+        members: tuple[SnapshotMemberEvidence, ...],
     ) -> Mapping[str, object]:
         sources = []
         covered_fields: set[str] = set()
         financial_periods: list[str] = []
-        for member in evidence.member_evidence:
+        for member in members:
             try:
                 source_tier = self._SOURCE_TIERS[member.source_authority]
             except KeyError as error:
@@ -138,6 +164,11 @@ class ResearchEvaluation:
                     "source": member.source_identity,
                 }
             )[:24]
+            extracted_fields = (
+                ()
+                if member.dataset in self._COMPONENT_INPUT_DATASETS
+                else member.extracted_fields
+            )
             sources.append(
                 {
                     "source_id": source_id,
@@ -157,11 +188,11 @@ class ResearchEvaluation:
                     "report_date": member.published_at[:10],
                     "official": member.source_authority == "official",
                     "extracted_fields": [
-                        dict(field) for field in member.extracted_fields
+                        dict(field) for field in extracted_fields
                     ],
                 }
             )
-            for field in member.extracted_fields:
+            for field in extracted_fields:
                 field_name = str(field.get("field_name", "")).strip()
                 period = str(field.get("period", "")).strip()
                 if field_name:

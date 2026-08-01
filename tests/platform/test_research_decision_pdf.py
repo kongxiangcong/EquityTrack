@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from PIL import Image
+from pypdf import PdfReader
 
 from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import (
@@ -113,7 +114,22 @@ def test_pdf_is_deterministic_projection_of_persisted_view_and_renders(
         errors="replace",
         env=pdf_environment,
     )
-    assert "Pages:           2" in info.stdout
+    pages_line = next(
+        line
+        for line in info.stdout.splitlines()
+        if line.startswith("Pages:")
+    )
+    assert int(pages_line.partition(":")[2].strip()) >= 2
+    pdf_text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(str(report)).pages
+    )
+    forecast_status = view["audit"]["evaluation_bundle"]["components"][
+        "forecast"
+    ]["status"]
+    assert "Research pipeline" in pdf_text
+    assert "forecast" in pdf_text
+    assert str(forecast_status) in pdf_text
     prefix = tmp_path / "research-decision-page"
     pdftoppm, render_environment = _poppler("pdftoppm")
     subprocess.run(
@@ -134,3 +150,21 @@ def test_pdf_is_deterministic_projection_of_persisted_view_and_renders(
         assert image.width >= 1000
         assert image.height >= 1400
     root.close()
+
+def test_pdf_bounds_long_unbroken_audit_tokens() -> None:
+    view = {
+        "schema_version": "ResearchDecisionView@2",
+        "view_id": "view-long-token",
+        "subject_id": "security_yihua",
+        "as_of": "2026-07-30",
+        "status": "completed_with_limits",
+        "boundary": "Research only.",
+        "audit": {
+            "evidence": "x" * 200_000,
+            "evaluation_bundle": {"components": {}},
+        },
+    }
+
+    rendered = ResearchDecisionPdf().render(view)
+
+    assert rendered.startswith(b"%PDF-")

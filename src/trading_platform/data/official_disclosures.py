@@ -11,8 +11,8 @@ from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
+from trading_platform.domain.market_time import SHANGHAI_TIMEZONE
 from trading_platform.domain.data import (
     FetchBatch,
     FetchStatus,
@@ -91,7 +91,7 @@ def _published_at(value: object) -> str:
         raise _OfficialTransportFailure(
             "OFFICIAL_FILING_PUBLISHED_AT_INVALID"
         ) from None
-    return parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai")).isoformat()
+    return parsed.replace(tzinfo=SHANGHAI_TIMEZONE).isoformat()
 
 
 def _correction_status(value: object) -> str:
@@ -161,8 +161,12 @@ class SzseOfficialDisclosureProvider:
     def __init__(
         self,
         transport: Callable[[Request], TransportResponse] | None = None,
+        retrieval_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._transport = transport or self._default_transport
+        self._retrieval_clock = retrieval_clock or (
+            lambda: datetime.now(timezone.utc)
+        )
         self.code_identity = "sha256:" + hashlib.sha256(
             Path(__file__).read_bytes()
         ).hexdigest()
@@ -195,7 +199,7 @@ class SzseOfficialDisclosureProvider:
             )
 
     def fetch(self, query: TypedDatasetQuery) -> FetchBatch:
-        now = datetime.now(timezone.utc)
+        now = self._retrieval_clock()
         params = {
             "security_id": getattr(query, "security_id", ""),
             "venue": getattr(query, "venue", ""),

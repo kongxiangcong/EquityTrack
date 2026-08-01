@@ -1,299 +1,86 @@
 ---
 name: equity-researcher
-description: Operate the local personal research platform and generate evidence-constrained equity research. Use for platform bootstrap, doctor, migration, sync, manual portfolio review, serving, tests, backup, restore, workflow resume/history, or company research and valuation requests. Never provide personalized trading instructions.
+description: Use the repository-local personal research platform through six natural-language tasks: view an account, update today's state, run a cycle review, research one stock with chart/report artifacts, create a trade plan, or update a trade plan. Never provide personalized trading instructions.
 ---
 
-# Personal Research Platform
+# 个人投研与交易纪律平台
 
-## Platform operations route
+这是本项目唯一的用户入口。用户只需用自然语言说想完成的事情；Codex 负责账户和证券识别、数据根生命周期、数据同步、确定性应用调用、失败恢复和结果呈现。不要让用户拼接命令、填写内部请求、启动网页或理解内部数据结构。
 
-For initialization, maintenance, recovery, or local service requests, use the single deterministic control plane below. Do not assemble ad-hoc SQLite, archive, or server commands and do not load prompts into the business runtime.
+## 六类任务
 
-```powershell
-python -m trading_platform.cli bootstrap --data-root <root>
-python -m trading_platform.cli health --data-root <root>
-python -m trading_platform.cli doctor --data-root <root>
-python -m trading_platform.cli migrate --data-root <root>
-python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
-python -m trading_platform.cli research --data-root <root> --request-file <request.json>
-python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
-python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest tests/fixtures/trading_discipline_kernel/expected-manifest.json
-python -m trading_platform.cli serve --data-root <root> --web-root <web/dist> --account-id <id> --security-id <id>
-python -m trading_platform.cli test --repo-root <repo>
-python -m trading_platform.cli inventory --repo-root <repo>
-python -m trading_platform.cli backup --data-root <root> --archive <outside-root.zip>
-python -m trading_platform.cli restore --archive <backup.zip> --target-root <new-root>
-python -m trading_platform.cli switch-restored-root --restored-root <validated-new-root> --pointer-file <active-root.json>
-python -m trading_platform.cli resume --data-root <root> --workflow-run-id <id> --owner-token <token>
-python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
-python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
-```
+### A. 查看当前账户
 
-All formal business mutations use one serialized route:
+示例：“查看 kong 当前账户。”
 
-```powershell
-python -m trading_platform.cli application-command --data-root <root> --envelope-file <command.json>
-```
+先直接回答账户截至何时、净值、现金、持仓、仓位、收益及数据质量。能计算的收益必须说明口径；不能计算时明确缺少什么，不能把未知值当成零。执行细节见 [账户与今日状态](tasks/account-status.md)。
 
-`command.json` must be exactly `ApplicationCommandEnvelope@1`. The application,
-not Skill or CLI, validates the versioned payload, computes the canonical
-request hash, enforces capability, invokes the named task, and emits
-`ApplicationCommandResult@1` or a typed failure.
-Skill is the interaction channel, not the decision actor. A Skill request transported by Codex therefore
-uses `interaction_channel = skill` and `transport_actor = agent:codex`; it may
-use `decision_actor = user:<id>` only after the user explicitly confirms that
-exact command. CLI is also only an adapter and never upgrades actor capability.
+### B. 更新今天状态
 
-The finite mutation contracts are:
+示例：“更新 kong 今天的状态。”
 
-```text
-account_snapshot.register_account@2 RegisterAccountForSnapshots@2
-account_snapshot.create_draft@1     CreateAccountSnapshotDraft@1
-account_snapshot.update_draft@1     UpdateAccountSnapshotDraft@1
-account_snapshot.confirm@1          ConfirmAccountSnapshot@1
-trade_plan.create_draft@1           CreateTradePlanDraft@1
-trade_plan.revise_draft@1           ReviseTradePlanDraft@1
-trade_plan.reject_draft@1           RejectTradePlanDraft@1
-trade_plan.issue_confirmation_challenge@1
-                                     IssuePlanConfirmationChallenge@1
-trade_plan.confirm@1                ConfirmTradePlanDraft@1
-manual_portfolio_review.run@1       RunManualPortfolioReview@1
-decision_task.defer@1               DeferDecisionTask@1
-decision_task.resolve@1             ResolveDecisionTask@1
-execution_record.declare@1          DeclareExecutionRecord@1
-execution_record.correct@1          CorrectExecutionRecord@1
-discipline_review.confirm@1         ConfirmDisciplineReview@1
-plan_impact_assessment.create@1     CreatePlanImpactAssessment@1
-plan_change_proposal.create@1       CreatePlanChangeProposal@1
-plan_change_proposal.accept@1       AcceptPlanChangeProposal@1
-plan_change_proposal.reject@1       RejectPlanChangeProposal@1
-```
+自动选择不晚于请求时点的最新已证明完整交易日，同步已确认持仓和默认观察池的行情，更新市值、收益、仓位与集中度，并评估已确认的活动计划。若今天休市，直接说明实际使用的最近完整交易日。没有新的券商或成交事实时，只能基于已确认数量估算；不得改变现金、数量或交易历史。执行细节见 [账户与今日状态](tasks/account-status.md)。
 
-`account_snapshot.register_account@2` is the only low-friction registration
-path for a new local account whose first evidence is a user-declared broker
-screenshot. It requires `decision_actor = user:<id>`, registers the local
-account alias and base currency, and records each user-confirmed current
-A-share code with an `observed_on` lower bound that does not claim a listing
-date or pre-observation validity. It persists an immutable command receipt,
-fails closed on a conflicting security-master identity, and does not create or
-confirm an account snapshot, reconstruct transactions, or upgrade screenshot
-evidence to broker reconciliation.
+### C. 本周或指定周期复盘
 
-The registry is closed. Commands whose owning ticket has not landed fail
-closed with `COMMAND_NOT_AVAILABLE`; their presence here reserves the canonical
-name and payload contract and does not claim the capability is implemented.
-Agents may create or revise drafts. Account confirmation, plan confirmation,
-task disposition, execution truth, and review confirmation require the user as
-decision actor. Plan confirmation additionally requires the unexpired,
-unconsumed challenge ID in `approval.challenge_id`. Never use arbitrary Shell,
-SQL, filesystem paths, provider destinations, credentials, or ad-hoc SQLite
-access as an application-command payload.
+示例：“复盘 kong 本周的纪律执行。”
 
-`manual_portfolio_review.run@1` is the only public portfolio-review workflow.
-Its `RunManualPortfolioReview@1` payload supplies `account_id`, `requested_at`,
-an explicit `selected_complete_session`,
-`first_window_start_exclusive` for the first review, and the current `code_identity` and
-`config_identity`. The application proves the selected complete A-share
-session, derives the confirmed snapshot and estimated state, and chooses the
-last successful cutoff; the caller must not supply holdings, outcomes,
-manifest IDs, task IDs, or a truth hash. Reviews are manual and may span
-multiple sessions. Sync and research only produce evidence and never trigger a
-review.
+自动选取周期内已证明完整的 A 股交易日，汇总收益、持仓贡献、符合或偏离计划的行为、延期事项、未记录事项、未核验事实和证据缺口。复盘是证据汇总，不主观打分，也不替用户声明成交。执行细节见 [周期复盘](tasks/cycle-review.md)。
 
-`decision_task.defer@1` and `decision_task.resolve@1` are the only user
-task-disposition mutations. Both require `decision_actor = user:<id>` with an
-explicitly confirmed command. Defer supplies `decision_task_id`,
-`defer_target_type`, optional `defer_target_value`, and `occurred_at`; valid
-targets are a specific date/session, the next manual review, or an exact
-evidence trigger. Resolve supplies `decision_task_id`, `disposition`, `reason`,
-and `occurred_at`. `skipped`, `overridden`, and `not_applicable` resolve
-directly. `executed` fails closed until the same transaction contains the
-required execution record. System workflow transitions may only reopen the
-same persistent task when its typed condition fires, or supersede it when the
-plan/condition is invalidated; they never create a user disposition.
+### D. 研究一只股票并生成图表报告
 
-`execution_record.declare@1` is the only command that resolves a task as
-`executed`. Its `DeclareExecutionRecord@1` payload supplies
-`decision_task_id`, `reason`, `effective_at`, `effective_session`,
-`intent_type`, positive decimal `quantity`, explicit price and fee
-state/value pairs, `currency`, and `confirmed_at`.
-`execution_record.correct@1` supplies the original execution ID and the full
-corrected record; it appends linked action/execution facts and never edits the
-original. Both require an explicitly confirmed user decision actor. Unknown
-price or fee remains unknown, makes dependent cash projection unknown, and is
-never inferred. A user declaration is always
-`user_declared_unverified` unless a future typed broker reconciliation record
-proves another state; absence of broker evidence never means “not executed”.
-The application atomically commits the action log, execution, task transition,
-and receipt.
+示例：“研究 kong 账户里的 002407.SZ，并生成图表和报告。”
 
-`DisciplineReviewVersion@1` is the only formal behavior-review contract.
-Create its draft through the named application task using a `weekly` (default
-presentation) or `custom` period whose start and end are proven complete
-Asia/Shanghai A-share sessions. A period is not tied to Friday and no
-scheduler starts it. The application derives task/action/execution/plan/
-snapshot refs and overridden, skipped, deferred, unrecorded, and unverified
-evidence; callers cannot classify behavior or supply a score.
-`discipline_review.confirm@1` supplies `discipline_review_id`,
-`expected_revision`, and `confirmed_at`, and requires an explicitly confirmed
-user decision actor. Confirmation appends an immutable version. Monthly views
-aggregate confirmed versions and do not create another workflow or table.
+自动冻结时点和来源，完成研究、估值适用性、可用建模与 Monte Carlo 门、近期趋势、图表及报告产物。只向用户展示结论、限制和可打开的产物；内部来源、模型和运行细节按需展开。执行细节见 [股票研究](tasks/equity-research.md)。
 
-`plan_impact_assessment.create@1` lets an Agent author a typed finding only
-against one immutable manual-review item, its frozen manifest, and one
-ReviewRule from the referenced plan version. An unable rule remains
-`unable_to_determine` with explicit uncertainty; the caller cannot upgrade it
-to a determined finding. `plan_change_proposal.create@1` stores a finite
-canonical content-replacement patch against that exact active plan version.
-Only a user may call `plan_change_proposal.accept@1` or
-`plan_change_proposal.reject@1`. Acceptance creates or revises an ordinary
-open `TradePlanDraft`; it cannot issue or consume a confirmation challenge and
-cannot activate a plan. The existing trade-plan challenge and user
-confirmation commands remain mandatory.
+### E. 创建交易计划
 
-Formal reads use the same six immutable application DTOs for Skill and Web:
-`PortfolioWorkspaceView@1`, `HoldingWorkspaceView@1`,
-`TradePlanDetailView@1`, `ReviewWorkspaceView@1`,
-`ResearchIndexView@1`, and `AccountSnapshotEditorView@1`. Use
-`open_read_models(...)` and the single `encode_read_model(...)` codec; adapters
-must not rebuild or rename fields. Every DTO carries exact source IDs,
-`generated_at`, a deterministic projection ID, and a content hash. The
-portfolio home contract has exactly five summary groups: account state,
-unresolved tasks, material changes, active-plan summaries, and discipline
-exceptions. Unknown, unable, and unverified remain explicit. Full manifest,
-policy, model, hash, and log detail is never promoted onto the home view.
+示例：“根据现有账户和研究，为 002407.SZ 创建交易计划。”
 
-The production local Web exposes those DTOs through six explicit versioned
-read routes and has exactly four primary destinations: `总览`, `组合`, `复核`,
-and `研究`. AccountSnapshot editing posts the same
-`ApplicationCommandEnvelope@1` to the shared dispatcher and always identifies
-an explicit local user; plan detail is read-only. Plan confirmation, task
-disposition, execution entry, and discipline-review confirmation remain
-Skill-first. `/api/workspace`, public `daily`, chart annotation routes, and
-update-authorization routes are retired and have no aliases or fallbacks.
+从已确认账户、研究、风险政策和内置策略生成可读草稿。研究和草稿生成期间不反复提问；只有最终修订需要一次明确确认。未确认草稿不生效，也不会产生订单。执行细节见 [交易计划](tasks/trade-plan.md)。
 
-Only `ProviderJob@2` is accepted. Its provider block contains only `provider_id`, `adapter_version`, and `credential_env`; the production composition owns the fixed approved destination and transport. Immutable `QueryPolicy@1` owns typed dataset queries and `SourcePolicy@1` owns source authority, rights, freshness, completeness, retry, fallback, and failure disposition. There is no caller-supplied endpoint, provider class selector, or implicit fallback order. The Tushare-compatible market-data role uses `credential_env = TUSHARE_TOKEN`; the token value must remain in the process environment or an approved credential adapter. The statically composed CNINFO/SZSE official-filing roles use `credential_env = not_applicable` and must not read a credential. Official filing jobs persist verified document evidence and PIT metadata only; without a separately qualified semantic extractor they do not create financial facts. `provider-qualify` runs the same raw, normalization, quality, PIT, and persistence path as `sync`, persists a `ProviderQualificationReceipt@1` through the data root's authoritative object/artifact/command-receipt path, and returns its artifact ID. Acceptance resolves only that ID and rejects caller-authored qualification files.
+### F. 更新交易计划
 
-Every command emits one JSON envelope and a typed error on failure. Credentials come only from the environment named by an explicit job configuration; never put credential values in job files, command lines, logs, database fields, backups, or artifacts. Backup archives are immutable and restore only into a new data root after full validation.
+示例：“根据今天的偏离更新 002407.SZ 的计划。”
 
-For company research requests, use the typed platform route below.
+根据新证据或用户自然语言要求生成差异清晰的修改草稿，说明变化、原因、未变化部分和限制，然后只对最终修订询问一次明确确认。拒绝、沉默、过期确认或内容变化都保持待确认，不得替用户确认。执行细节见 [交易计划](tasks/trade-plan.md)。
 
-# Equity Research
+## 默认返回合同
 
-Use one formal workflow for every new run:
+每次只按以下顺序展示用户当前需要的信息：
 
-```text
-Frozen DataSnapshot
-  -> Forecast Graph
-  -> Scenario Valuation
-  -> optional Monte Carlo / Market Path Simulation
-  -> ResearchDecisionView@2
-  -> canonical JSON + decision-first HTML + reconciled XLSX
-```
+1. `headline`：一句直接答案；
+2. 少量关键指标或一张紧凑表格；
+3. 变化、偏离、限制及其影响；
+4. 仅在确实需要用户作出最终决定时给出一个明确问题；
+5. 技术细节、来源、版本与审计只在用户要求时展开。
 
-The formal CLI invokes the named lifecycle task:
+正常结果不得显示命令行、迁移版本、内部 ID、数据传输对象、hash、manifest、命令信封、数据源资格过程或内部错误码。失败时使用用户语言说明发生了什么、当前仍能做什么、下一步是什么；完整诊断仍保存在内部证据中。
 
-```python
-ResearchWorkflow.handle(StartResearchWorkflow(request)) -> ResearchWorkflowResult
-```
+计划检查的中性表述只有三类：
 
-`WorkflowInspection`, `ResearchArchive`, and `ForecastReview` are separate
-query/task seams. New execution uses typed request and artifact contracts; no
-formal renderer reads source narrative magic keys or reconstructs valuation
-semantics.
+- “未触发复核条件 / 符合已确认计划”；
+- “触发复核，需要用户判断”；
+- “证据不足，暂时无法判断”。
 
-Python owns identity and date checks, evidence resolution, capability
-readiness, method routing, calculations, simulation, immutable artifact
-identity, reconciliation, permissions, and rendering.
+不得把它们改写成买入、卖出、持有、加仓、减仓或规避建议。
 
-## 1. Lock the request
+## 共同执行边界
 
-Before collecting data, record:
+- 用户查询自动处理安全备份、只向前迁移、健康检查和失败恢复；这些是内部生命周期，不是用户前置任务。
+- 账户、现金、数量、交易与执行事实只能来自已确认本地记录或用户新的明确声明。行情更新不能创造券商事实。
+- 研究和估值保持事实、计算、估计、假设与缺失项分离。关键官方来源或方法输入缺失时，保留完整研究结构，但不得给出正式目标价、评级或个性化行动建议。
+- 账户事实确认、交易计划最终确认和实际成交声明必须由用户作出；Codex 不代替用户决定。
+- Web 是可选的产物查看器，不是完成六类任务的前置条件。普通任务不要求用户启动 Web 或手动运行 CLI。
+- 每次内部操作都走唯一应用与持久化路径；不得直接 SQL、直接写产物、构造交易计划图、添加旧接口回退或并行实现。
 
-- target company, ticker, listing venue, and market;
-- `as_of_date`;
-- reporting and trading currencies;
-- accounting standard and latest reported period;
-- requested depth and output language.
+## 项目内按需参考
 
-Use the same workflow for concise and deep research. Depth changes the amount of evidence and narrative, not the execution architecture or safety rules.
-
-Completion criterion: the target identity and as-of boundary are unambiguous.
-
-## 2. Build the Evidence Ledger
-
-Use `references/source-manifest.md` as the manifest contract.
-
-Prioritize:
-
-1. exchange filings and official disclosures;
-2. company investor-relations materials;
-3. timestamped market-data terminals or APIs;
-4. reputable news and secondary research for events and cross-checking.
-
-Every critical number must resolve to a canonical evidence item. Keep estimates separate. An estimate may support a limited scenario but cannot upgrade official coverage.
-
-If a field is unavailable, record it as missing and continue with unaffected capabilities. Do not use a single source-status flag to stop the whole run.
-
-Completion criterion: every accepted fact has source identity, subject, period, unit, currency, availability date, and extraction metadata.
-
-## 3. Route valuation methods
-
-Read `valuation/valuation-method-router.md` before valuation. Read `valuation/dcf-and-sensitivity.md` only when DCF is selected or explicitly requested.
-
-Apply method-specific gates:
-
-- ordinary FCFF/WACC DCF requires an explicit forecast case, auditable WACC components, `WACC > g`, and a complete equity bridge;
-- financial firms use P/B–ROE/COE, DDM, residual-income, or excess-return framing;
-- pre-revenue biopharma uses rNPV/SOTP and cash-runway analysis;
-- cyclical and resource companies use mid-cycle, SOTP, or NAV framing;
-- peer conclusions require at least three comparable, source-compatible companies.
-
-A disabled method limits only that method. It does not erase valid company research.
-
-Completion criterion: every candidate method is `ready`, `limited`, `caution`, `blocked`, or `disabled`, with an evidence-backed reason.
-
-## 4. Build typed Forecast and Valuation artifacts
-
-Represent the company story as Event -> Driver -> Forecast Financial ->
-Valuation transmission. Build stress, base, and improvement scenarios from
-explicit driver conditions; do not create arbitrary percentage bands.
-
-Route each scenario through every applicable method, including industry
-specializations. Use Monte Carlo only after a frozen dependency model,
-distributions, constraints, and valuation model exist. Keep simulated intrinsic
-value and simulated market price paths as separate artifacts.
-
-Completion criterion: typed Forecast and Valuation artifacts reconcile their
-facts, formulas, diluted shares, equity bridges, identities, and source refs.
-
-## 5. Build the decision-first view
-
-`ResearchDecisionView@2` is the sole formal presentation model. It must expose:
-
-- the future story and what would change it;
-- key Drivers and scenario financials;
-- method applicability and conditional value ranges;
-- optional valuation distributions and market paths;
-- value-market divergence without action language;
-- a complete audit appendix with artifact, source, parameter, formula, model,
-  policy, and code identities.
-
-Formal JSON and HTML must serialize this exact view. XLSX must import the same
-view, recompute every bridge step with formulas, and fail when canonical values
-are hardcoded or links are broken.
-
-## Financial boundary
-
-- Provide educational company research, not personalized investment instructions.
-- Use `valuation_view`, `risk_reward_summary`, `data_quality_grade`, `key_uncertainties`, and `what_would_change_the_view`.
-- Do not publish a formal per-share valuation when its selected method or critical official inputs are blocked.
-- Integrity errors fail closed to an audit memo and remove professional synthesis.
-- A `completed_with_limits` run is a valid outcome when useful research is complete but some dimensions or methods remain limited.
-
-## On-demand references
-
-- Source schema and evidence rules: `references/source-manifest.md`
-- Valuation routing: `valuation/valuation-method-router.md`
-- Industry method matrix: `valuation/industry-valuation-matrix.md`
-- Conditional DCF rules: `valuation/dcf-and-sensitivity.md`
+- [内部控制面与应用边界](references/platform-control-plane.md)
+- [来源与证据规则](references/source-manifest.md)
+- [研究输出投影](references/output-schema.md)
+- [财务模型投影](references/financial-model-spec.md)
+- [估值方法路由](valuation/valuation-method-router.md)
+- [行业估值矩阵](valuation/industry-valuation-matrix.md)
+- [条件 DCF 规则](valuation/dcf-and-sensitivity.md)
+- [完整报告布局](output/report-layout.md)

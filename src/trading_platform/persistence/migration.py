@@ -124,6 +124,7 @@ class MigrationRunner:
                     "0014_research_evaluation.sql",
                     "0015_account_snapshot_version.sql",
                     "0016_strategy_plan_model_b.sql",
+                    "0022_manual_review_universe_v2.sql",
                 }
             )
             try:
@@ -138,10 +139,12 @@ class MigrationRunner:
                         self._preflight_research_evaluation_0014()
                     elif path.name == "0015_account_snapshot_version.sql":
                         self._preflight_account_snapshot_0015()
-                    else:
+                    elif path.name == "0016_strategy_plan_model_b.sql":
                         self._preflight_strategy_plan_0016()
                 elif path.name == "0017_manual_review_journal.sql":
                     self._preflight_manual_review_0017()
+                elif path.name == "0024_trade_plan_evidence_payload.sql":
+                    self._preflight_plan_evidence_0024()
                 statements = self._statements(path.read_text(encoding="utf-8"))
                 for statement_number, statement in enumerate(statements, start=1):
                     self.connection.execute(statement)
@@ -151,6 +154,16 @@ class MigrationRunner:
                     from .strategies import install_builtin_strategy_versions
 
                     install_builtin_strategy_versions(self.connection)
+                if path.name == "0022_manual_review_universe_v2.sql":
+                    self._migrate_manual_review_universe_0022()
+                    violations = self.connection.execute(
+                        "PRAGMA foreign_key_check"
+                    ).fetchall()
+                    if violations:
+                        raise PersistenceError(
+                            "MANUAL_REVIEW_HISTORY_UNMIGRATABLE",
+                            "Migration 0022 produced invalid foreign-key lineage.",
+                        )
                 if rebuilds_parent_tables:
                     violations = self.connection.execute(
                         "PRAGMA foreign_key_check"
@@ -186,6 +199,151 @@ class MigrationRunner:
                 if rebuilds_parent_tables:
                     self.connection.execute("PRAGMA legacy_alter_table=OFF")
                     self.connection.execute("PRAGMA foreign_keys=ON")
+
+    def _migrate_manual_review_universe_0022(self) -> None:
+        from trading_platform.domain.manual_review import (
+            ManualPortfolioReviewItem,
+            ManualReviewError,
+            ReviewOutcome,
+        )
+        from trading_platform.identity import canonical_hash
+
+        rows = tuple(
+            self.connection.execute(
+                "SELECT * FROM manual_portfolio_review_item "
+                "ORDER BY review_run_id,security_id"
+            )
+        )
+        for row in rows:
+            try:
+                base = ManualPortfolioReviewItem(
+                    review_item_id=row["review_item_id"],
+                    review_run_id=row["review_run_id"],
+                    account_id=row["account_id"],
+                    security_id=row["security_id"],
+                    universe_member_identity=(
+                        row["universe_member_identity"]
+                    ),
+                    universe_roles=tuple(
+                        json.loads(row["universe_roles_json"])
+                    ),
+                    account_snapshot_version_id=(
+                        row["account_snapshot_version_id"]
+                    ),
+                    account_snapshot_hash=row["account_snapshot_hash"],
+                    estimated_state_hash=row["estimated_state_hash"],
+                    active_plan_id=row["active_plan_id"],
+                    plan_version_id=row["plan_version_id"],
+                    plan_evaluation_id=row["plan_evaluation_id"],
+                    evaluation_reason_code=(
+                        row["evaluation_reason_code"]
+                    ),
+                    strategy_version_id=row["strategy_version_id"],
+                    sleeve_graph=tuple(
+                        json.loads(row["sleeve_graph_json"])
+                    ),
+                    data_snapshot_ids=tuple(
+                        json.loads(row["data_snapshot_ids_json"])
+                    ),
+                    research_run_ids=tuple(
+                        json.loads(row["research_run_ids_json"])
+                    ),
+                    evidence_ids=tuple(
+                        json.loads(row["evidence_ids_json"])
+                    ),
+                    market_snapshot_ids=tuple(
+                        json.loads(row["market_snapshot_ids_json"])
+                    ),
+                    hard_rule_evaluations=tuple(
+                        json.loads(row["hard_rule_evaluations_json"])
+                    ),
+                    review_rule_routing=tuple(
+                        json.loads(row["review_rule_routing_json"])
+                    ),
+                    conflict_resolution=json.loads(
+                        row["conflict_resolution_json"]
+                    ),
+                    outcome=ReviewOutcome(row["outcome"]),
+                    material_changes=tuple(
+                        json.loads(row["material_changes_json"])
+                    ),
+                    unable_reasons=tuple(
+                        json.loads(row["unable_reasons_json"])
+                    ),
+                    blocked_reasons=tuple(
+                        json.loads(row["blocked_reasons_json"])
+                    ),
+                    decision_task_ids=tuple(
+                        json.loads(row["decision_task_ids_json"])
+                    ),
+                    plan_impact_assessment_ids=tuple(
+                        json.loads(
+                            row["plan_impact_assessment_ids_json"]
+                        )
+                    ),
+                    plan_change_proposal_ids=tuple(
+                        json.loads(
+                            row["plan_change_proposal_ids_json"]
+                        )
+                    ),
+                    content_hash="",
+                    created_at=row["created_at"],
+                    schema_version=row["schema_version"],
+                )
+                identity = {
+                    key: value
+                    for key, value in base.__dict__.items()
+                    if key != "content_hash"
+                }
+                migrated = ManualPortfolioReviewItem(
+                    **{
+                        **base.__dict__,
+                        "content_hash": canonical_hash(identity),
+                    }
+                )
+                migrated.validate()
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                ManualReviewError,
+            ) as error:
+                raise PersistenceError(
+                    "MANUAL_REVIEW_HISTORY_UNMIGRATABLE",
+                    "A legacy manual review item cannot be rewritten "
+                    "to SecurityReviewItem@2.",
+                ) from error
+            self.connection.execute(
+                "UPDATE manual_portfolio_review_item "
+                "SET content_hash=? WHERE review_item_id=?",
+                (migrated.content_hash, migrated.review_item_id),
+            )
+            self.connection.execute(
+                "UPDATE manual_portfolio_review_checkpoint "
+                "SET input_fingerprint=? "
+                "WHERE review_run_id=? AND security_id=? "
+                "AND stage='review_item'",
+                (
+                    migrated.content_hash,
+                    migrated.review_run_id,
+                    migrated.security_id,
+                ),
+            )
+        self.connection.execute(
+            "CREATE TRIGGER manual_review_item_no_update "
+            "BEFORE UPDATE ON manual_portfolio_review_item "
+            "BEGIN SELECT RAISE("
+            "ABORT,'MANUAL_REVIEW_ITEM_IMMUTABLE'"
+            "); END"
+        )
+        self.connection.execute(
+            "CREATE TRIGGER manual_review_item_no_delete "
+            "BEFORE DELETE ON manual_portfolio_review_item "
+            "BEGIN SELECT RAISE("
+            "ABORT,'MANUAL_REVIEW_ITEM_IMMUTABLE'"
+            "); END"
+        )
 
     def _preflight_manual_review_0017(self) -> None:
         def block(message: str) -> None:
@@ -1284,6 +1442,69 @@ class MigrationRunner:
                 "RESEARCH_EVALUATION_HISTORY_UNMIGRATABLE",
                 "Legacy successful workflow lacks one complete decision view.",
             )
+
+
+    def _preflight_plan_evidence_0024(self) -> None:
+        from trading_platform.identity import canonical_hash
+
+        rows = tuple(
+            self.connection.execute(
+                "SELECT evidence.*,version.legacy_read_only,"
+                "draft.proposed_graph_json "
+                "FROM trade_plan_evidence_reference evidence "
+                "JOIN trade_plan_version version USING(plan_version_id) "
+                "LEFT JOIN user_approval_receipt receipt "
+                "ON receipt.user_approval_receipt_id="
+                "version.user_approval_receipt_id "
+                "LEFT JOIN trade_plan_draft draft "
+                "ON draft.draft_id=receipt.draft_id "
+                "ORDER BY evidence.plan_version_id,evidence.ref_order"
+            )
+        )
+        identities: dict[str, set[str]] = {}
+        for row in rows:
+            if row["legacy_read_only"]:
+                continue
+            try:
+                graph = json.loads(row["proposed_graph_json"])
+                version = graph["version"]
+                references = graph["evidence_references"]
+                reference = references[row["ref_order"]]
+                identity = {
+                    key: value
+                    for key, value in reference.items()
+                    if key != "content_hash"
+                }
+                plan_identities = identities.setdefault(
+                    row["plan_version_id"], set()
+                )
+                if (
+                    not isinstance(reference, dict)
+                    or version["plan_version_id"]
+                    != row["plan_version_id"]
+                    or reference["ref_type"] != row["ref_type"]
+                    or reference["ref_id"] != row["ref_id"]
+                    or reference["resolution_status"]
+                    != row["resolution_status"]
+                    or reference["content_hash"] != row["content_hash"]
+                    or canonical_hash(identity) != row["content_hash"]
+                    or reference["ref_id"] in plan_identities
+                ):
+                    raise ValueError("evidence reference mismatch")
+                plan_identities.add(reference["ref_id"])
+            except (
+                IndexError,
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                raise PersistenceError(
+                    "PLAN_EVIDENCE_HISTORY_UNMIGRATABLE",
+                    "A confirmed plan evidence reference cannot be "
+                    "reconstructed from its approved draft.",
+                ) from error
+
 
     @staticmethod
     def _statements(script: str) -> tuple[str, ...]:

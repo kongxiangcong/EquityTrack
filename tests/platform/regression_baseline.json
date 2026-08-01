@@ -5,6 +5,7 @@
   "suites": [
     "tests/test_research_engine.py",
     "tests/test_skill_entrypoint.py",
+    "tests/platform/test_skill_contract.py",
     "tests/platform/test_cli_application_tasks.py"
   ],
   "worked_examples": [

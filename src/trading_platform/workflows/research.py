@@ -21,6 +21,11 @@ from trading_platform.application.contracts import (
 from trading_platform.application.research_request_codec import (
     decode_research_workflow_request,
 )
+from trading_platform.application.research_workbook import (
+    ResearchWorkbookArtifact,
+    ResearchWorkbookProjectionError,
+    ResearchWorkbookProjector,
+)
 from trading_platform.application.workflow_ledger import (
     AcquireLease,
     ArtifactPayload,
@@ -60,13 +65,13 @@ from trading_platform.research_view import ResearchDecisionView
 
 _RESEARCH_WORKFLOW = WorkflowDefinition(
     "research-workflow",
-    "3",
+    "5",
     (
         NodeDefinition(
             "evaluate_research",
-            "1",
+            "3",
             "ResearchWorkflowRequest@2",
-            "ResearchDecisionViewBundle@2",
+            "ResearchEvaluationBundle@1",
             (
                 "security_exists",
                 "snapshot_frozen",
@@ -90,8 +95,8 @@ _RESEARCH_WORKFLOW = WorkflowDefinition(
         ),
         NodeDefinition(
             "publish_run_manifest",
-            "3",
-            "ResearchDecisionViewBundle@2",
+            "5",
+            "ResearchEvaluationBundle@1",
             "ArtifactManifestRef@1",
             ("research_evaluation_committed",),
             True,
@@ -150,12 +155,14 @@ class ResearchWorkflow:
         repository: WorkflowLedgerPort,
         repo_root: Path,
         fault_injector: Callable[[str], None] | None = None,
+        workbook_projector: ResearchWorkbookProjector | None = None,
     ) -> None:
         self.repository = repository
         self.repo_root = repo_root.resolve()
         self.evaluation = ResearchEvaluation(ResearchEngine())
         self.engine_identity = research_engine_identity(self.repo_root)
         self.fault_injector = fault_injector
+        self.workbook_projector = workbook_projector
 
     def _fault(self, boundary: str) -> None:
         if self.fault_injector is not None:
@@ -403,13 +410,18 @@ class ResearchWorkflow:
                 run_id, owner, lease_seconds
             ):
                 produced = self.evaluation.evaluate(request, evidence)
-            research_payload = produced.to_dict()
+            bundle_payload = produced.to_dict()
+            research_payload = dict(produced.research_run)
             view = ResearchDecisionViewFactory().build(
                 workflow_run_id=run_id,
                 request=request,
-                research_payload=research_payload,
+                evaluation_bundle=bundle_payload,
                 model_identity=self.engine_identity,
                 source_policy_identity=evidence.source_policy_identity,
+                expected_snapshot_member_ids=tuple(
+                    member.normalized_version_id
+                    for member in evidence.member_evidence
+                ),
             )
             decision_json = json.dumps(
                 view,
@@ -418,19 +430,23 @@ class ResearchWorkflow:
                 separators=(",", ":"),
                 allow_nan=False,
             ).encode("utf-8")
+            typed_view = ResearchDecisionView.from_dict(view)
             decision_html = render_research_decision_html(
-                ResearchDecisionView.from_dict(view)
+                typed_view
             ).encode("utf-8")
+            decision_workbook = self._project_workbook(typed_view)
             from trading_platform.research_pdf import ResearchDecisionPdf
 
             decision_pdf = ResearchDecisionPdf().render(view)
-            research_json = json.dumps(
-                research_payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
+            def json_bytes(value: object) -> bytes:
+                return json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            research_json = json_bytes(research_payload)
             checkpoint = self.repository.commit_checkpoint(
                 CommitEvaluationNode(
                     workflow_run_id=run_id,
@@ -440,10 +456,45 @@ class ResearchWorkflow:
                     request=request,
                     evaluation_fingerprint=evaluation_fingerprint,
                     engine_code_identity=self.engine_identity,
+                    bundle_json_artifact=ArtifactPayload(
+                        json_bytes(bundle_payload),
+                        "application/json",
+                        "ResearchEvaluationBundle@1",
+                    ),
                     research_json_artifact=ArtifactPayload(
                         research_json,
                         "application/json",
-                        f"ResearchRun@{produced.schema_version}",
+                        f"ResearchRun@{research_payload['schema_version']}",
+                    ),
+                    forecast_artifact=ArtifactPayload(
+                        json_bytes(produced.forecast.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
+                    ),
+                    scenario_valuation_artifact=ArtifactPayload(
+                        json_bytes(produced.scenario_valuation.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
+                    ),
+                    valuation_method_route_artifact=ArtifactPayload(
+                        json_bytes(produced.valuation_method_route.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
+                    ),
+                    valuation_simulation_decision_artifact=ArtifactPayload(
+                        json_bytes(produced.valuation_simulation_decision.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
+                    ),
+                    market_path_decision_artifact=ArtifactPayload(
+                        json_bytes(produced.market_path_decision.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
+                    ),
+                    recent_trend_assessment_artifact=ArtifactPayload(
+                        json_bytes(produced.recent_trend_assessment.to_dict()),
+                        "application/json",
+                        "ResearchComponentResult@1",
                     ),
                     decision_json_artifact=ArtifactPayload(
                         decision_json,
@@ -459,6 +510,11 @@ class ResearchWorkflow:
                         decision_pdf,
                         "application/pdf",
                         "ResearchDecisionPdf@1",
+                    ),
+                    decision_workbook_artifact=ArtifactPayload(
+                        decision_workbook.payload,
+                        decision_workbook.media_type,
+                        decision_workbook.schema_version,
                     ),
                 )
             )
@@ -494,6 +550,28 @@ class ResearchWorkflow:
             )
         self._fault("workflow.research_checkpoint_committed")
         return checkpoint, node, attempt
+
+    def _project_workbook(
+        self, view: ResearchDecisionView
+    ) -> ResearchWorkbookArtifact:
+        if self.workbook_projector is None:
+            return ResearchWorkbookArtifact.limited(
+                view_id=view.view_id,
+                reason_code="RESEARCH_WORKBOOK_RENDERER_UNAVAILABLE",
+            )
+        try:
+            result = self.workbook_projector.project(view)
+            if not isinstance(result, ResearchWorkbookArtifact):
+                raise ResearchWorkbookProjectionError(
+                    "RESEARCH_WORKBOOK_RENDERER_RESULT_INVALID"
+                )
+            result.validate()
+            return result
+        except ResearchWorkbookProjectionError as error:
+            return ResearchWorkbookArtifact.limited(
+                view_id=view.view_id,
+                reason_code=error.code,
+            )
 
     def _fail_node(
         self,

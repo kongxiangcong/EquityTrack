@@ -15,6 +15,48 @@ class DisciplineReviewError(ValueError):
 
 
 @dataclass(frozen=True)
+class DisciplineReviewPeriodRequest:
+    period_kind: str
+    requested_at: str
+    requested_start_date: str | None = None
+    requested_end_date: str | None = None
+
+    def validate(self) -> None:
+        try:
+            requested = datetime.fromisoformat(self.requested_at)
+            start = (
+                date.fromisoformat(self.requested_start_date)
+                if self.requested_start_date is not None
+                else None
+            )
+            end = (
+                date.fromisoformat(self.requested_end_date)
+                if self.requested_end_date is not None
+                else None
+            )
+        except ValueError as error:
+            raise DisciplineReviewError(
+                "DISCIPLINE_REVIEW_PERIOD_REQUEST_INVALID"
+            ) from error
+        if (
+            self.period_kind not in {"weekly", "custom"}
+            or requested.tzinfo is None
+            or requested.utcoffset() is None
+            or (
+                self.period_kind == "weekly"
+                and (start is not None or end is not None)
+            )
+            or (
+                self.period_kind == "custom"
+                and (start is None or end is None or start > end)
+            )
+        ):
+            raise DisciplineReviewError(
+                "DISCIPLINE_REVIEW_PERIOD_REQUEST_INVALID"
+            )
+
+
+@dataclass(frozen=True)
 class DisciplineReviewPeriod:
     period_kind: str
     period_start_session: str
@@ -171,6 +213,7 @@ class DisciplineReviewInputs:
     review_run_ids: tuple[str, ...]
     account_snapshot_version_ids: tuple[str, ...]
     drift_assessment_ids: tuple[str, ...] = ()
+    selection_evidence_gaps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -324,10 +367,13 @@ class DisciplineReviewService:
             evidence_gap_summary=tuple(
                 sorted(
                     {
-                        f"{item.kind}:{item.decision_task_id}"
-                        for item in exceptions
-                        if item.kind
-                        in {"deferred", "unrecorded", "unverified"}
+                        *inputs.selection_evidence_gaps,
+                        *(
+                            f"{item.kind}:{item.decision_task_id}"
+                            for item in exceptions
+                            if item.kind
+                            in {"deferred", "unrecorded", "unverified"}
+                        ),
                     }
                 )
             ),
@@ -524,6 +570,7 @@ def _collected_review_items(
 __all__ = [
     "DisciplineException",
     "DisciplineReviewPeriod",
+    "DisciplineReviewPeriodRequest",
     "DisciplineReviewService",
     "DisciplineReviewVersion",
 ]

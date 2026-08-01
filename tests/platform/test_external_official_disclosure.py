@@ -1063,7 +1063,12 @@ def test_official_provider_qualification_commits_identity_bound_pdf_receipt(
                 == canonical_official_source_policy(decoded.provider_id)
             )
             assert decoded.credential_variable == "not_applicable"
-            provider = SzseOfficialDisclosureProvider(transport=transport)
+            provider = SzseOfficialDisclosureProvider(
+                    transport=transport,
+                    retrieval_clock=lambda: datetime(
+                        2026, 7, 25, 12, 0, tzinfo=timezone.utc
+                    ),
+                )
             return ProviderRuntimeBinding(
                 provider,
                 hashlib.sha256(b"not_applicable").hexdigest(),
@@ -1122,7 +1127,7 @@ def test_official_provider_qualification_commits_identity_bound_pdf_receipt(
     ) as qualification:
         result = qualification.run()
 
-    assert result.status == "qualified"
+    assert result.status == "qualified", result
     assert result.source_authority == "official"
     assert result.provider_identity == "szse-statutory-disclosure"
     assert result.credential_scope_id == hashlib.sha256(

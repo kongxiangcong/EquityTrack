@@ -148,10 +148,10 @@ Close the risk section with a 150-200 word synthesis:
 
 ## Integration with Other Analysis Files
 
-- **Scenario deep dive** (`scenario-deep-dive.md`): Top risks map to Bear case triggers
+- **Scenario deep dive** (`scenario-deep-dive.md`): Top risks map to stress-scenario triggers
 - **Projection assumptions** (`projection-assumptions.md`): Risk impacts quantify assumption sensitivity
-- **Competitive landscape** (`research-document-template.md §IV` — Competitive Landscape + Entry Barriers): Industry risks inform competitive positioning
-- **Six-dimension H5** (main contradiction): The highest-priority risk often aligns with the bull/bear debate
+- **Competitive landscape** (`../output/report-layout.md` — Business and industry): Industry risks inform competitive positioning
+- **Six-dimension H5** (main contradiction): The highest-priority risk often aligns with the stress/improvement scenario debate
 
 ---
 

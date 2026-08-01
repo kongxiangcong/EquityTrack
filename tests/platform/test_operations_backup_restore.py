@@ -33,7 +33,10 @@ from tests.platform.test_workflow_ledger_recovery import (
     _expire_lease as _expire,
     recovery_root,
 )
-from trading_platform.application.workflow_ledger import GenericObjectCommit, IntegrityScope
+from trading_platform.application.workflow_ledger import (
+    GenericObjectCommit,
+    IntegrityScope,
+)
 from trading_platform.operations import OperationError, PlatformOperations
 from trading_platform.credentials import CredentialAdapter
 from trading_platform.persistence.presence import RuntimePresence
@@ -46,9 +49,7 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
 ) -> None:
     live = tmp_path / "live"
     root = _root(live)
-    before = root.chart.get_series(
-        "security_yihua", "snapshot_chart"
-    )
+    before = root.chart.get_series("security_yihua", "snapshot_chart")
     root.close()
     archive = tmp_path / "backups" / "platform-backup.zip"
     backup = PlatformOperations(live).backup(archive)
@@ -57,9 +58,7 @@ def test_backup_restore_new_root_preserves_database_objects_and_history(
     report = PlatformOperations.restore(archive, restored)
     assert report["status"] == "succeeded" and report["doctor_status"] == "passed"
     rebuilt = _root(restored)
-    assert rebuilt.chart.get_series(
-        "security_yihua", "snapshot_chart"
-    ) == before
+    assert rebuilt.chart.get_series("security_yihua", "snapshot_chart") == before
     restored_store = PlatformStore(restored, Path.cwd() / "migrations")
     assert restored_store.workflow_ledger.audit_integrity(IntegrityScope()).errors == ()
     restored_store.close()
@@ -118,9 +117,7 @@ def _exercise_release_root(
             "final_manifest",
         } <= set(refs)
         view = json.loads(
-            tasks.archive.decision_view(
-                workflow_result.workflow_run_id
-            ).json_bytes
+            tasks.archive.decision_view(workflow_result.workflow_run_id).json_bytes
         )
         assert view["schema_version"] == "ResearchDecisionView@2"
         assert workflow_result.artifact_record_ids == ()
@@ -153,8 +150,9 @@ def _exercise_release_root(
         )
         assert restored_history.final_manifest_id == workflow_result.final_manifest_id
         assert (
-            restored_tasks.archive.manifest(restored_history.final_manifest_id)
-            .artifact_manifest_id
+            restored_tasks.archive.manifest(
+                restored_history.final_manifest_id
+            ).artifact_manifest_id
             == workflow_result.final_manifest_id
         )
         restored_tasks.close()
@@ -479,8 +477,7 @@ def test_source_policy_migration_preserves_provable_populated_lineage(
     ).fetchone()
     assert tuple(rights) == (1, 1, 0, 0, 0)
     snapshot_policy = upgraded.connection.execute(
-        "SELECT query_policy_identity,source_policy_identity "
-        "FROM data_snapshot"
+        "SELECT query_policy_identity,source_policy_identity " "FROM data_snapshot"
     ).fetchone()
     assert tuple(snapshot_policy) == (query_identity, source_identity)
     assert (
@@ -490,9 +487,7 @@ def test_source_policy_migration_preserves_provable_populated_lineage(
         ).fetchone()
         is None
     )
-    assert upgraded.connection.execute(
-        "PRAGMA foreign_key_check"
-    ).fetchall() == []
+    assert upgraded.connection.execute("PRAGMA foreign_key_check").fetchall() == []
     upgraded.close()
 
 
@@ -527,10 +522,7 @@ def test_source_policy_migration_fault_rolls_back_schema_and_ledger(
         ).fetchone()
         is None
     )
-    assert (
-        upgraded.connection.execute("PRAGMA foreign_key_check").fetchall()
-        == []
-    )
+    assert upgraded.connection.execute("PRAGMA foreign_key_check").fetchall() == []
     upgraded.close()
 
 
@@ -614,9 +606,7 @@ def test_backup_is_immutable_validates_object_path_and_migrate_is_full_backup_fi
         shutil.copyfile(source, prior_migrations / source.name)
     object_store = PlatformStore(live, prior_migrations)
     object_store.migrate()
-    object_store.workflow_ledger.commit_artifacts(
-        GenericObjectCommit(b"backup-object")
-    )
+    object_store.workflow_ledger.commit_artifacts(GenericObjectCommit(b"backup-object"))
     object_store.close()
     operations = PlatformOperations(live)
     archive = tmp_path / "immutable.zip"
@@ -655,17 +645,20 @@ def test_maintenance_rejects_active_server_presence(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("nonterminal_status", ["queued", "running"])
 def test_maintenance_rejects_live_workflow_and_doctor_detects_manifest_corruption(
-    tmp_path: Path, nonterminal_status: str,
+    tmp_path: Path,
+    nonterminal_status: str,
 ) -> None:
     live = tmp_path / "live"
-    root = recovery_root(
-        live, CrashAt("workflow.final_manifest_committed")
-    )
+    root = recovery_root(live, CrashAt("workflow.final_manifest_committed"))
     with pytest.raises(InjectedCrash):
-        root.research.handle(StartResearchWorkflow(research_request("operations:maintenance")))
-    run_id = SQLiteOwningAdapterFixture(root.data_root).execute(
-        "SELECT workflow_run_id FROM workflow_run LIMIT 1"
-    ).fetchone()[0]
+        root.research.handle(
+            StartResearchWorkflow(research_request("operations:maintenance"))
+        )
+    run_id = (
+        SQLiteOwningAdapterFixture(root.data_root)
+        .execute("SELECT workflow_run_id FROM workflow_run LIMIT 1")
+        .fetchone()[0]
+    )
     SQLiteOwningAdapterFixture(root.data_root).execute(
         "UPDATE workflow_run SET status=?,completed_at=NULL,lease_expires_at='2999-01-01T00:00:00+00:00' WHERE workflow_run_id=?",
         (nonterminal_status, run_id),
@@ -900,12 +893,50 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
                     "adapter_version": "tushare-http@2",
                     "credential_env": "TUSHARE_TOKEN",
                 },
-                "query_policy": {"schema_version": "QueryPolicy@1", "lookback_days": 7, "market_universe_list_status": "L", "adjustment_mode": "none"},
+                "query_policy": {
+                    "schema_version": "QueryPolicy@1",
+                    "lookback_days": 7,
+                    "market_universe_list_status": "L",
+                    "adjustment_mode": "none",
+                },
                 "source_policy": {
-                    "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
-                    "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
-                    "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
-                    "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "optional" if dataset == "cashflow" else "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "quarantine" if dataset == "cashflow" else "block"} for dataset in ("trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow")],
+                    "schema_version": "SourcePolicy@1",
+                    "provider_id": "tushare-compatible",
+                    "adapter_version": "tushare-http@2",
+                    "source_identity": "preconfigured_tushare_compatible_non_official",
+                    "source_authority": "structured_aggregator",
+                    "terms_profile": "gateway-terms-pending@1",
+                    "rights": {
+                        "automation_allowed": True,
+                        "local_storage_allowed": True,
+                        "deterministic_replay_allowed": True,
+                        "derived_use_allowed": True,
+                        "redistribution_allowed": False,
+                        "reviewed_on": "2026-07-24",
+                        "evidence_sha256": None,
+                    },
+                    "routes": [
+                        {
+                            "dataset": dataset,
+                            "freshness_max_stale_days": 1,
+                            "completeness": (
+                                "optional" if dataset == "cashflow" else "required"
+                            ),
+                            "retry_max_attempts": 1,
+                            "fallback": "no_fallback",
+                            "failure_disposition": (
+                                "quarantine" if dataset == "cashflow" else "block"
+                            ),
+                        }
+                        for dataset in (
+                            "trade_cal",
+                            "market_universe",
+                            "daily",
+                            "income",
+                            "balancesheet",
+                            "cashflow",
+                        )
+                    ],
                 },
                 "request": {
                     "invocation_id": "missing-credential",
@@ -937,7 +968,14 @@ def test_windows_cli_returns_stable_json_envelopes_and_exit_codes(
         ],
         cwd=Path(__file__).resolve().parents[2],
         capture_output=True,
-        env={key: value for key, value in os.environ.items() if key != "TUSHARE_TOKEN"},
+        env={
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if key != "TUSHARE_TOKEN"
+            },
+            "TUSHARE_TOKEN": "",
+        },
         text=True,
         check=False,
     )
@@ -955,7 +993,9 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
     live = tmp_path / "live"
     root = _root(live)
     root.faults.record_official_filing_workflow_snapshot()
-    workflow = root.research.handle(StartResearchWorkflow(research_request("operations:e2e")))
+    workflow = root.research.handle(
+        StartResearchWorkflow(research_request("operations:e2e"))
+    )
     root.close()
     secret = "secret-value-that-must-never-leak"
     monkeypatch.setenv("TUSHARE_TOKEN", secret)
@@ -1047,8 +1087,7 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
         assert envelope["ok"] is True
         research = json.loads(
             urlopen(
-                envelope["result"]["url"]
-                + "/api/read-models/research-index@1",
+                envelope["result"]["url"] + "/api/read-models/research-index@1",
                 timeout=5,
             ).read()
         )
@@ -1066,14 +1105,16 @@ def test_windows_cli_backup_restore_doctor_serve_history_and_secret_redaction(
 def test_windows_cli_resume_executes_recovery_and_returns_refs(tmp_path: Path) -> None:
     repo = Path(__file__).resolve().parents[2]
     data_root = tmp_path / "resume"
-    root = recovery_root(
-        data_root, CrashAt("workflow.research_checkpoint_committed")
-    )
+    root = recovery_root(data_root, CrashAt("workflow.research_checkpoint_committed"))
     with pytest.raises(InjectedCrash):
-        root.research.handle(StartResearchWorkflow(research_request("operations:resume")))
-    run_id = SQLiteOwningAdapterFixture(root.data_root).execute(
-        "SELECT workflow_run_id FROM workflow_run LIMIT 1"
-    ).fetchone()[0]
+        root.research.handle(
+            StartResearchWorkflow(research_request("operations:resume"))
+        )
+    run_id = (
+        SQLiteOwningAdapterFixture(root.data_root)
+        .execute("SELECT workflow_run_id FROM workflow_run LIMIT 1")
+        .fetchone()[0]
+    )
     _expire(root, run_id)
     root.close()
     completed = subprocess.run(
@@ -1122,12 +1163,50 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
                         "adapter_version": "tushare-http@2",
                         "credential_env": "TUSHARE_TOKEN",
                     },
-                    "query_policy": {"schema_version": "QueryPolicy@1", "lookback_days": 7, "market_universe_list_status": "L", "adjustment_mode": "none"},
+                    "query_policy": {
+                        "schema_version": "QueryPolicy@1",
+                        "lookback_days": 7,
+                        "market_universe_list_status": "L",
+                        "adjustment_mode": "none",
+                    },
                     "source_policy": {
-                        "schema_version": "SourcePolicy@1", "provider_id": "tushare-compatible", "adapter_version": "tushare-http@2",
-                        "source_identity": "preconfigured_tushare_compatible_non_official", "source_authority": "structured_aggregator", "terms_profile": "gateway-terms-pending@1",
-                        "rights": {"automation_allowed": True, "local_storage_allowed": True, "deterministic_replay_allowed": True, "derived_use_allowed": True, "redistribution_allowed": False, "reviewed_on": "2026-07-24", "evidence_sha256": None},
-                        "routes": [{"dataset": dataset, "freshness_max_stale_days": 1, "completeness": "optional" if dataset == "cashflow" else "required", "retry_max_attempts": 1, "fallback": "no_fallback", "failure_disposition": "quarantine" if dataset == "cashflow" else "block"} for dataset in ("trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow")],
+                        "schema_version": "SourcePolicy@1",
+                        "provider_id": "tushare-compatible",
+                        "adapter_version": "tushare-http@2",
+                        "source_identity": "preconfigured_tushare_compatible_non_official",
+                        "source_authority": "structured_aggregator",
+                        "terms_profile": "gateway-terms-pending@1",
+                        "rights": {
+                            "automation_allowed": True,
+                            "local_storage_allowed": True,
+                            "deterministic_replay_allowed": True,
+                            "derived_use_allowed": True,
+                            "redistribution_allowed": False,
+                            "reviewed_on": "2026-07-24",
+                            "evidence_sha256": None,
+                        },
+                        "routes": [
+                            {
+                                "dataset": dataset,
+                                "freshness_max_stale_days": 1,
+                                "completeness": (
+                                    "optional" if dataset == "cashflow" else "required"
+                                ),
+                                "retry_max_attempts": 1,
+                                "fallback": "no_fallback",
+                                "failure_disposition": (
+                                    "quarantine" if dataset == "cashflow" else "block"
+                                ),
+                            }
+                            for dataset in (
+                                "trade_cal",
+                                "market_universe",
+                                "daily",
+                                "income",
+                                "balancesheet",
+                                "cashflow",
+                            )
+                        ],
                     },
                     "request": {
                         "invocation_id": "i",
@@ -1174,6 +1253,9 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
         and "telemetry" not in web_sources.casefold()
     )
     skill = (repo / "skills/SKILL.md").read_text(encoding="utf-8")
+    assert "六类任务" in skill
+    assert "trading_platform.cli" not in skill
+    maintenance = (repo / "README.md").read_text(encoding="utf-8")
     for command in (
         "bootstrap",
         "doctor",
@@ -1188,7 +1270,7 @@ def test_dependency_locks_offline_assets_skill_routing_and_runtime_separation() 
         "resume",
         "history",
     ):
-        assert f"trading_platform.cli {command}" in skill
+        assert f"trading_platform.cli {command}" in maintenance
     for path in (repo / "src/trading_platform").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert "skills/SKILL" not in source and "docs/prompts" not in source

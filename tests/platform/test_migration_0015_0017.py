@@ -208,7 +208,7 @@ def test_fresh_and_populated_roots_upgrade_idempotently(tmp_path: Path) -> None:
     fresh.migrate()
     assert fresh.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == 24
     fresh.close()
 
     data_root, _ = _legacy_root(tmp_path)
@@ -338,7 +338,7 @@ def test_strategy_plan_0016_installs_full_cohort_schema_idempotently(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == 24
     expected_tables = {
         "investment_thesis_version",
         "strategy_definition",
@@ -830,7 +830,7 @@ def test_strategy_plan_0016_rolls_back_and_replays_after_injected_failure(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == 24
     assert store.connection.execute(
         "SELECT count(*) FROM strategy_version "
         "WHERE publicly_selectable=1"
@@ -846,7 +846,7 @@ def test_manual_review_0017_installs_complete_final_cohort_idempotently(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == 24
     expected = {
         "manual_portfolio_review_run",
         "manual_portfolio_review_item",
@@ -999,7 +999,7 @@ def test_manual_review_0017_rolls_back_and_replays_after_injected_failure(
     store.migrate()
     assert store.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 18
+    ).fetchone()[0] == 24
 
 
 def test_terminal_financial_0018_is_installed_and_immutable(

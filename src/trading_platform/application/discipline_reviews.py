@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from trading_platform.domain.discipline_reviews import (
     DisciplineReviewError,
     DisciplineReviewInputs,
     DisciplineReviewPeriod,
+    DisciplineReviewPeriodRequest,
     DisciplineReviewService,
     DisciplineReviewVersion,
     MonthlyDisciplineSummary,
@@ -18,8 +19,7 @@ from trading_platform.identity import canonical_hash
 class CreateDisciplineReviewDraft:
     invocation_id: str
     account_id: str
-    period: DisciplineReviewPeriod
-    created_at: str
+    period_request: DisciplineReviewPeriodRequest
     decision_actor: str
     interaction_channel: str
     transport_actor: str
@@ -51,6 +51,10 @@ class DisciplineReviewRepository(Protocol):
     def latest(
         self, discipline_review_id: str
     ) -> DisciplineReviewVersion | None: ...
+
+    def resolve_period(
+        self, request: DisciplineReviewPeriodRequest
+    ) -> tuple[DisciplineReviewPeriod, tuple[str, ...]]: ...
 
     def collect(
         self,
@@ -108,35 +112,42 @@ class DisciplineReviews:
             raise DisciplineReviewError(
                 "DISCIPLINE_REVIEW_COMMAND_INVALID"
             )
+        command.period_request.validate()
+        period, selection_gaps = self._repository.resolve_period(
+            command.period_request
+        )
         replay = self._repository.by_draft_invocation(
             command.invocation_id
         )
         if replay is not None:
             if (
                 replay.account_id != command.account_id
-                or replay.period != command.period
-                or replay.created_at != command.created_at
+                or replay.period != period
+                or replay.created_at != command.period_request.requested_at
+                or not set(selection_gaps).issubset(
+                    replay.evidence_gap_summary
+                )
             ):
                 raise DisciplineReviewError(
                     "DISCIPLINE_REVIEW_INVOCATION_CONFLICT"
                 )
             return replay
-        command.period.validate()
-        inputs = self._repository.collect(
-            command.account_id, command.period
+        inputs = replace(
+            self._repository.collect(command.account_id, period),
+            selection_evidence_gaps=selection_gaps,
         )
         review_id = "discipline_review_"
         review_id += canonical_hash(
             {
                 "account_id": command.account_id,
-                "period": command.period,
+                "period": period,
             }
         )[:24]
         draft = self._service.create_draft(
             inputs=inputs,
             invocation_id=command.invocation_id,
             prior=self._repository.latest(review_id),
-            created_at=command.created_at,
+            created_at=command.period_request.requested_at,
         )
         return self._repository.insert_draft(draft)
 

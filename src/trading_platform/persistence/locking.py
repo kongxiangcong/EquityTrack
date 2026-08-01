@@ -56,16 +56,37 @@ class DataRootWriterLock:
                     stream.flush()
                     os.fsync(stream.fileno())
                 break
-            except FileExistsError as error:
+            except (FileExistsError, PermissionError) as error:
+                parsed = True
                 try:
-                    current = json.loads(self.path.read_text(encoding="utf-8"))
+                    current = json.loads(
+                        self.path.read_text(encoding="utf-8")
+                    )
                 except (OSError, ValueError, TypeError):
-                    current = {"owner_ref": "unknown", "pid": -1}
-                if attempt == 0 and not _process_is_alive(int(current.get("pid", -1))):
-                    self.path.unlink(missing_ok=True)
-                    continue
+                    parsed = False
+                    current = {"owner_ref": "unknown"}
                 owner = str(current.get("owner_ref", "unknown"))
-                raise PersistenceError("RUNTIME_BUSY", "Another mutation writer owns this data root.", owner) from error
+                pid = current.get("pid")
+                if (
+                    attempt == 0
+                    and parsed
+                    and isinstance(pid, int)
+                    and not _process_is_alive(pid)
+                ):
+                    try:
+                        self.path.unlink(missing_ok=True)
+                    except PermissionError as unlink_error:
+                        raise PersistenceError(
+                            "RUNTIME_BUSY",
+                            "Another mutation writer owns this data root.",
+                            owner,
+                        ) from unlink_error
+                    continue
+                raise PersistenceError(
+                    "RUNTIME_BUSY",
+                    "Another mutation writer owns this data root.",
+                    owner,
+                ) from error
         try:
             yield
         finally:

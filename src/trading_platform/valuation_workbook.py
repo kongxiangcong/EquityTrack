@@ -12,10 +12,22 @@ from typing import Any
 from xml.etree import ElementTree
 
 from trading_platform.research_view import ResearchDecisionView
+from trading_platform.application.research_workbook import (
+    ResearchWorkbookArtifact,
+    ResearchWorkbookProjectionError,
+)
 
 
-class ValuationWorkbookError(RuntimeError):
-    pass
+class ValuationWorkbookError(ResearchWorkbookProjectionError):
+    def __init__(self, code: str) -> None:
+        stable_code = code.split(":", 1)[0]
+        if (
+            not stable_code
+            or not stable_code.replace("_", "").isalnum()
+            or stable_code.upper() != stable_code
+        ):
+            stable_code = "RESEARCH_WORKBOOK_RENDERER_FAILED"
+        super().__init__(stable_code)
 
 
 @dataclass(frozen=True)
@@ -37,6 +49,30 @@ class ValuationWorkbookAdapter:
         self.node_executable = node_executable
         self.node_modules = node_modules
         self.builder_script = builder_script
+
+    def project(
+        self, view: ResearchDecisionView
+    ) -> ResearchWorkbookArtifact:
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="research-workbook-projection-"
+            ) as temporary:
+                exported = self.export(
+                    view, Path(temporary) / "research-decision.xlsx"
+                )
+                return ResearchWorkbookArtifact.ready(
+                    exported.workbook_path.read_bytes()
+                )
+        except ValuationWorkbookError:
+            raise
+        except subprocess.TimeoutExpired as error:
+            raise ValuationWorkbookError(
+                "RESEARCH_WORKBOOK_RENDERER_TIMEOUT"
+            ) from error
+        except (OSError, RuntimeError) as error:
+            raise ValuationWorkbookError(
+                "RESEARCH_WORKBOOK_RENDERER_FAILED"
+            ) from error
 
     def export(
         self,
@@ -201,6 +237,22 @@ class ValuationWorkbookAdapter:
                 worksheet = ElementTree.fromstring(
                     archive.read(sheet_path)
                 )
+                shared_strings: list[str] = []
+                if "xl/sharedStrings.xml" in archive.namelist():
+                    shared = ElementTree.fromstring(
+                        archive.read("xl/sharedStrings.xml")
+                    )
+                    shared_strings = [
+                        "".join(
+                            node.text or ""
+                            for node in item.findall(
+                                ".//main:t", namespaces
+                            )
+                        )
+                        for item in shared.findall(
+                            "main:si", namespaces
+                        )
+                    ]
         except (
             KeyError,
             StopIteration,
@@ -212,6 +264,7 @@ class ValuationWorkbookAdapter:
             ) from error
 
         formulas = []
+        not_ready_rows = 0
         summary_row_count = 0
         for row in worksheet.findall(
             ".//main:row",
@@ -236,14 +289,30 @@ class ValuationWorkbookAdapter:
                 if formula is not None
                 else None
             )
-            if formula_node is None or not formula_node.text:
+            if formula_node is not None and formula_node.text:
+                formulas.append(formula_node.text)
+                continue
+            method = ValuationWorkbookAdapter._cell_text(
+                cells["B"], namespaces, shared_strings
+            )
+            displayed = (
+                ValuationWorkbookAdapter._cell_text(
+                    formula, namespaces, shared_strings
+                )
+                if formula is not None
+                else ""
+            )
+            if (
+                displayed != "NOT_READY"
+                or method not in {"not_ready", "unavailable", "blocked"}
+            ):
                 raise ValuationWorkbookError(
                     "VALUATION_WORKBOOK_SUMMARY_FORMULA_CHAIN_BROKEN"
                 )
-            formulas.append(formula_node.text)
+            not_ready_rows += 1
         if (
-            not formulas
-            or len(formulas) != summary_row_count
+            summary_row_count == 0
+            or len(formulas) + not_ready_rows != summary_row_count
             or any(
                 not formula.startswith(
                     (
@@ -258,3 +327,24 @@ class ValuationWorkbookAdapter:
             raise ValuationWorkbookError(
                 "VALUATION_WORKBOOK_SUMMARY_FORMULA_CHAIN_BROKEN"
             )
+
+    @staticmethod
+    def _cell_text(
+        cell: ElementTree.Element,
+        namespaces: dict[str, str],
+        shared_strings: list[str],
+    ) -> str:
+        if cell.attrib.get("t") == "inlineStr":
+            return "".join(
+                node.text or ""
+                for node in cell.findall(".//main:t", namespaces)
+            )
+        value = cell.find("main:v", namespaces)
+        if value is None or value.text is None:
+            return ""
+        if cell.attrib.get("t") == "s":
+            try:
+                return shared_strings[int(value.text)]
+            except (IndexError, ValueError):
+                return ""
+        return value.text

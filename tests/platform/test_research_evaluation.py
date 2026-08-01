@@ -152,11 +152,14 @@ def test_concrete_evaluation_uses_only_frozen_evidence_and_degrades_truthfully(
 
     result = ResearchEvaluation(ResearchEngine()).evaluate(request, evidence)
 
-    assert result.status == "completed_with_limits"
-    assert result.integrity_issues == ()
-    assert result.permissions["formal_per_share_valuation"] is False
-    assert result.permissions["institution_style_rating"] is False
-    assert result.permissions["personalized_investment_instruction"] is False
+    assert result.research_run["status"] == "completed_with_limits"
+    assert result.research_run["integrity_issues"] == []
+    assert result.research_run["permissions"]["formal_per_share_valuation"] is False
+    assert result.research_run["permissions"]["institution_style_rating"] is False
+    assert (
+        result.research_run["permissions"]["personalized_investment_instruction"]
+        is False
+    )
     root.close()
 
 
@@ -405,7 +408,8 @@ def test_tushare_financial_snapshot_enables_limited_research_report(
     assert payload["permissions"]["research_report"] is True
     assert payload["permissions"]["formal_per_share_valuation"] is False
     assert payload["capabilities"]["research_report"]["status"] != "blocked"
-    assert payload["capabilities"]["financial_model"]["status"] == "blocked"
+    assert payload["capabilities"]["financial_model"]["status"] == "limited"
+    assert payload["permissions"]["scenario_analysis"] is True
     assert {
         item["field_name"] for item in payload["evidence"]
     } >= {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal, InvalidOperation
 import math
 from typing import Any, Literal
@@ -11,6 +11,15 @@ from .simulation import _SplitMix64
 
 
 PathStatus = Literal["ready", "partial"]
+
+
+def _market_timezone(name: str) -> tzinfo:
+    if name == "Asia/Shanghai":
+        return timezone(timedelta(hours=8), name)
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("MARKET_TIMEZONE_UNSUPPORTED") from error
 
 
 class MarketPathInvariantError(ValueError):
@@ -105,14 +114,10 @@ class MarketPathCalibration:
             "calendar_member_ids": list(self.calendar_member_ids),
             "trading_sessions": list(self.trading_sessions),
             "next_session_date": self.next_session_date,
-            "next_session_calendar_member_id": (
-                self.next_session_calendar_member_id
-            ),
+            "next_session_calendar_member_id": (self.next_session_calendar_member_id),
             "series_member_ids": list(self.series_member_ids),
             "adjustment_member_ids": list(self.adjustment_member_ids),
-            "corporate_action_member_ids": list(
-                self.corporate_action_member_ids
-            ),
+            "corporate_action_member_ids": list(self.corporate_action_member_ids),
             "state_model_identity": self.state_model_identity,
             "observations": [item.to_dict() for item in self.observations],
             "window_start": self.window_start,
@@ -135,9 +140,7 @@ class MarketConstraintPolicy:
     def to_dict(self) -> dict[str, Any]:
         return {
             "policy_identity": self.policy_identity,
-            "one_way_transaction_cost_bps": _text(
-                self.one_way_transaction_cost_bps
-            ),
+            "one_way_transaction_cost_bps": _text(self.one_way_transaction_cost_bps),
             "minimum_execution_lag_sessions": self.minimum_execution_lag_sessions,
             "price_limit_fraction": _text(self.price_limit_fraction),
             "price_tick_size": (
@@ -256,14 +259,10 @@ class MarketPathResult:
             "starting_price_session": self.starting_price_session,
             "starting_price_member_id": self.starting_price_member_id,
             "starting_price_available_at": self.starting_price_available_at,
-            "starting_price_evidence_refs": list(
-                self.starting_price_evidence_refs
-            ),
+            "starting_price_evidence_refs": list(self.starting_price_evidence_refs),
             "current_market_state": self.current_market_state,
             "current_state_available_at": self.current_state_available_at,
-            "current_state_evidence_refs": list(
-                self.current_state_evidence_refs
-            ),
+            "current_state_evidence_refs": list(self.current_state_evidence_refs),
             "price_thresholds": list(self.price_thresholds),
             "tail_return_threshold": self.tail_return_threshold,
             "horizon_return_basis": self.horizon_return_basis,
@@ -310,9 +309,7 @@ class MarketPathEngine:
         triggers = {threshold: 0 for threshold in request.price_thresholds}
         tail_count = 0
         round_trip_cost = (
-            float(request.constraints.one_way_transaction_cost_bps)
-            * 2.0
-            / 10_000.0
+            float(request.constraints.one_way_transaction_cost_bps) * 2.0 / 10_000.0
         )
         execution_lag = request.constraints.minimum_execution_lag_sessions
         for _ in range(request.budget.path_count):
@@ -356,8 +353,7 @@ class MarketPathEngine:
                         threshold >= request.starting_price
                         and price >= float(threshold)
                     ) or (
-                        threshold < request.starting_price
-                        and price <= float(threshold)
+                        threshold < request.starting_price and price <= float(threshold)
                     ):
                         triggered.add(threshold)
             gross_return = price / execution_price - 1.0
@@ -394,13 +390,9 @@ class MarketPathEngine:
             current_market_state=request.current_market_state,
             current_state_available_at=request.current_state_available_at,
             current_state_evidence_refs=request.current_state_evidence_refs,
-            price_thresholds=tuple(
-                _text(item) for item in request.price_thresholds
-            ),
+            price_thresholds=tuple(_text(item) for item in request.price_thresholds),
             tail_return_threshold=_text(request.tail_return_threshold),
-            horizon_return_basis=(
-                "net_of_declared_round_trip_transaction_costs"
-            ),
+            horizon_return_basis=("net_of_declared_round_trip_transaction_costs"),
             execution_period=f"T+{execution_lag} trading sessions",
             terminal_period=(
                 f"T+{execution_lag + request.budget.horizon_sessions} "
@@ -461,7 +453,7 @@ class MarketPathEngine:
         try:
             as_of = date.fromisoformat(request.as_of)
             as_of_at = self._timestamp(request.as_of_at)
-            market_timezone = ZoneInfo(request.calibration.market_timezone)
+            market_timezone = _market_timezone(request.calibration.market_timezone)
             as_of_local_date = self._local_date(
                 request.as_of_at,
                 market_timezone,
@@ -476,7 +468,7 @@ class MarketPathEngine:
             current_state_available = self._timestamp(
                 request.current_state_available_at
             )
-        except (ValueError, ZoneInfoNotFoundError):
+        except ValueError:
             raise MarketPathInvariantError(
                 "MARKET_PATH_DATE_INVALID",
                 "Market path dates must use ISO calendar dates.",
@@ -507,8 +499,7 @@ class MarketPathEngine:
             or not request.calibration.calendar_member_ids
             or not request.calibration.next_session_date
             or not request.calibration.next_session_calendar_member_id
-            or request.calibration.next_session_date
-            != request.starting_price_session
+            or request.calibration.next_session_date != request.starting_price_session
             or request.calibration.next_session_calendar_member_id
             not in request.calibration.calendar_evidence_refs
             or not request.calibration.series_identity
@@ -526,8 +517,7 @@ class MarketPathEngine:
                 }
             )
             or not request.calibration.state_model_identity
-            or request.calibration.state_model_identity
-            != "one_session_return_sign@1"
+            or request.calibration.state_model_identity != "one_session_return_sign@1"
             or not request.calibration.basis
             or request.budget.rng_algorithm != self.RNG_ALGORITHM
             or request.budget.path_count < 1000
@@ -710,9 +700,7 @@ class MarketPathEngine:
                     observations[index - 1].adjusted_close,
                 )
             )
-            required_state_refs = {
-                request.calibration.series_member_ids[index]
-            }
+            required_state_refs = {request.calibration.series_member_ids[index]}
             if index:
                 required_state_refs.add(
                     request.calibration.series_member_ids[index - 1]
@@ -724,18 +712,12 @@ class MarketPathEngine:
             if index:
                 required_state_available = max(
                     required_state_available,
-                    self._timestamp(
-                        observations[index - 1].close_available_at
-                    ),
-                    self._timestamp(
-                        observations[index - 1].factor_available_at
-                    ),
+                    self._timestamp(observations[index - 1].close_available_at),
+                    self._timestamp(observations[index - 1].factor_available_at),
                 )
             if (
                 observation.market_state != expected_state
-                or not required_state_refs.issubset(
-                    observation.evidence_refs
-                )
+                or not required_state_refs.issubset(observation.evidence_refs)
                 or self._timestamp(observation.state_available_at)
                 < required_state_available
             ):
@@ -784,7 +766,7 @@ class MarketPathEngine:
         return parsed.astimezone(timezone.utc)
 
     @staticmethod
-    def _local_date(value: str, market_timezone: ZoneInfo) -> date:
+    def _local_date(value: str, market_timezone: tzinfo) -> date:
         if "T" not in value:
             raise ValueError(value)
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -847,13 +829,9 @@ class MarketPathEngine:
             current_market_state=request.current_market_state,
             current_state_available_at=request.current_state_available_at,
             current_state_evidence_refs=request.current_state_evidence_refs,
-            price_thresholds=tuple(
-                _text(item) for item in request.price_thresholds
-            ),
+            price_thresholds=tuple(_text(item) for item in request.price_thresholds),
             tail_return_threshold=_text(request.tail_return_threshold),
-            horizon_return_basis=(
-                "net_of_declared_round_trip_transaction_costs"
-            ),
+            horizon_return_basis=("net_of_declared_round_trip_transaction_costs"),
             execution_period=(
                 f"T+{request.constraints.minimum_execution_lag_sessions} "
                 "trading sessions"

@@ -139,11 +139,13 @@ class EvidenceItem:
     estimated: bool
     derived_from: tuple[str, ...] = ()
     basis_sources: tuple[str, ...] = ()
+    estimate_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["derived_from"] = list(self.derived_from)
         payload["basis_sources"] = list(self.basis_sources)
+        payload["estimate_metadata"] = dict(self.estimate_metadata)
         return payload
 
 

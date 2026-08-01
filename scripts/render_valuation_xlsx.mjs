@@ -34,6 +34,10 @@ for (const sheet of [summary, imported, bridge, reconciliation, audit, checks]) 
 
 const methodRows = [];
 const bridgeRows = [];
+const valuationStatus = view.valuation_view?.status || "unknown";
+const valuationUnavailable = ["not_ready", "unavailable", "blocked"].includes(
+  valuationStatus,
+);
 for (const scenario of view.scenarios || []) {
   for (const method of scenario.methods || []) {
     const range = method.conditional_value_range;
@@ -74,11 +78,11 @@ for (const scenario of view.scenarios || []) {
     }
   }
 }
-if (!methodRows.length && view.valuation_view?.status === "not_ready") {
+if (!methodRows.length && valuationUnavailable) {
   methodRows.push([
     "limited",
     "Data insufficient",
-    "not_ready",
+    valuationStatus,
     "base",
     null,
     null,
@@ -91,7 +95,7 @@ if (!methodRows.length && view.valuation_view?.status === "not_ready") {
   ]);
   bridgeRows.push([
     "limited",
-    "not_ready",
+    valuationStatus,
     "base",
     1,
     "basis_value",
@@ -138,22 +142,27 @@ for (const scenario of view.scenarios || []) {
     }
   }
 }
-if (!summaryRows.length && view.valuation_view?.status === "not_ready") {
+if (!summaryRows.length && valuationUnavailable) {
   summaryRows.push([
     "Data insufficient",
-    "not_ready",
+    valuationStatus,
     2,
     "No formal valuation",
-    "basis_value",
+    "not_ready",
   ]);
 }
 if (summaryRows.length) {
   summary.getRangeByIndexes(11, 0, summaryRows.length, 4).values =
     summaryRows.map((row) => [row[0], row[1], null, row[3]]);
   for (let index = 0; index < summaryRows.length; index += 1) {
-    summary.getRange(`C${index + 12}`).formulas = [[
-      `='Reconciliation'!${summaryRows[index][4] === "basis_value" ? "D" : summaryRows[index][4] === "equity_value" ? "F" : "J"}${summaryRows[index][2]}`,
-    ]];
+    const target = summary.getRange(`C${index + 12}`);
+    if (summaryRows[index][4] === "not_ready") {
+      target.values = [["NOT_READY"]];
+    } else {
+      target.formulas = [[
+        `='Reconciliation'!${summaryRows[index][4] === "basis_value" ? "D" : summaryRows[index][4] === "equity_value" ? "F" : "J"}${summaryRows[index][2]}`,
+      ]];
+    }
   }
   summary.getRange(`C12:C${11 + summaryRows.length}`).format.numberFormat =
     "#,##0.00;[Red](#,##0.00);-";
@@ -191,20 +200,26 @@ reconciliation.getRange("A1:M1").values = [[
 reconciliation.getRangeByIndexes(1, 0, reconciliationRows.length, 3).values = reconciliationRows;
 for (let index = 0; index < reconciliationRows.length; index += 1) {
   const row = index + 2;
-  reconciliation.getRange(`D${row}`).formulas = [[`='Canonical Inputs'!E${row}`]];
+  reconciliation.getRange(`D${row}`).formulas = [[
+    `=IF('Canonical Inputs'!E${row}="","",'Canonical Inputs'!E${row})`,
+  ]];
   reconciliation.getRange(`E${row}`).formulas = [[
     `=IF(D${row}="","",SUMIFS('Bridge Trace'!$I$2:$I$${bridgeRows.length + 1},'Bridge Trace'!$A$2:$A$${bridgeRows.length + 1},A${row},'Bridge Trace'!$B$2:$B$${bridgeRows.length + 1},B${row},'Bridge Trace'!$C$2:$C$${bridgeRows.length + 1},C${row},'Bridge Trace'!$H$2:$H$${bridgeRows.length + 1},1))`,
   ]];
-  reconciliation.getRange(`F${row}`).formulas = [[`='Canonical Inputs'!F${row}`]];
+  reconciliation.getRange(`F${row}`).formulas = [[
+    `=IF('Canonical Inputs'!F${row}="","",'Canonical Inputs'!F${row})`,
+  ]];
   reconciliation.getRange(`G${row}`).formulas = [[`=IF(OR(E${row}="",F${row}=""),"",E${row}-F${row})`]];
   reconciliation.getRange(`H${row}`).formulas = [[
     `=SUMIFS('Bridge Trace'!$F$2:$F$${bridgeRows.length + 1},'Bridge Trace'!$A$2:$A$${bridgeRows.length + 1},A${row},'Bridge Trace'!$B$2:$B$${bridgeRows.length + 1},B${row},'Bridge Trace'!$C$2:$C$${bridgeRows.length + 1},C${row},'Bridge Trace'!$E$2:$E$${bridgeRows.length + 1},"divide_diluted_shares")`,
   ]];
   reconciliation.getRange(`I${row}`).formulas = [[`=IF(OR(H${row}=0,E${row}=""),"",E${row}/H${row})`]];
-  reconciliation.getRange(`J${row}`).formulas = [[`='Canonical Inputs'!G${row}`]];
+  reconciliation.getRange(`J${row}`).formulas = [[
+    `=IF('Canonical Inputs'!G${row}="","",'Canonical Inputs'!G${row})`,
+  ]];
   reconciliation.getRange(`K${row}`).formulas = [[`=IF(OR(I${row}="",J${row}=""),"",I${row}-J${row})`]];
-  reconciliation.getRange(`L${row}`).formulas = [[`=IF(G${row}="","NOT_READY",IF(ABS(G${row})<0.0000001,"OK","FAIL"))`]];
-  reconciliation.getRange(`M${row}`).formulas = [[`=IF(K${row}="","NOT_READY",IF(ABS(K${row})<0.0000001,"OK","FAIL"))`]];
+  reconciliation.getRange(`L${row}`).formulas = [[`=IF(COUNT(E${row}:F${row})<2,"NOT_READY",IF(ABS(G${row})<0.0000001,"OK","FAIL"))`]];
+  reconciliation.getRange(`M${row}`).formulas = [[`=IF(COUNT(I${row}:J${row})<2,"NOT_READY",IF(ABS(K${row})<0.0000001,"OK","FAIL"))`]];
 }
 
 const artifactRows = (view.audit?.artifact_records || []).map((item) => [
@@ -246,7 +261,7 @@ checks.getRange("A2:F5").values = [
   ["Workbook projection rows", methodRows.length, methodRows.length, 0, 0, null],
   ["Equity reconciliation failures", null, 0, null, 0, null],
   ["Per-share reconciliation failures", null, 0, null, 0, null],
-  ["Valuation readiness", view.valuation_view?.status || "unknown", "ready", null, null, null],
+  ["Valuation readiness", valuationStatus, "ready", null, null, null],
 ];
 checks.getRange("F2").formulas = [['=IF(B2=C2,"OK","FAIL")']];
 checks.getRange("B3").formulas = [[`=COUNTIF('Reconciliation'!L2:L${methodRows.length + 1},"FAIL")`]];

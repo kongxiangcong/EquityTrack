@@ -14,7 +14,9 @@ class CapabilitySpec:
     label: str
     required_official: tuple[str, ...] = ()
     required_sourced: tuple[str, ...] = ()
+    required_sourced_or_estimate: tuple[str, ...] = ()
     estimate_allowed: tuple[str, ...] = ()
+    estimate_optional: tuple[str, ...] = ()
     optional_fields: tuple[str, ...] = ()
     context_checks: tuple[str, ...] = ()
 
@@ -29,33 +31,34 @@ CAPABILITY_SPECS = (
     CapabilitySpec(
         "earnings_quality",
         "盈利质量",
-        required_official=("net_income", "cfo"),
+        required_sourced=("net_income", "cfo"),
         optional_fields=("fcf", "capex", "working_capital", "cash"),
     ),
     CapabilitySpec(
         "per_share_context",
         "每股与市场口径",
-        required_official=("eps", "diluted_shares"),
-        required_sourced=("current_price",),
+        required_sourced=("eps", "diluted_shares", "current_price"),
         optional_fields=("market_cap", "sbc_options_dilution"),
     ),
     CapabilitySpec(
         "financial_model",
         "财务模型与情景",
-        required_official=(
+        required_sourced=(
             "revenue",
-            "ebit",
             "net_income",
-            "tax",
+            "cash",
+            "debt",
+        ),
+        required_sourced_or_estimate=("ebit", "tax", "diluted_shares"),
+        estimate_optional=("d_and_a", "lease_debt"),
+        optional_fields=(
             "capex",
             "cfo",
             "working_capital",
-            "cash",
-            "debt",
-            "diluted_shares",
+            "fcf",
+            "minority_interest",
+            "preferred_stock",
         ),
-        estimate_allowed=("d_and_a", "lease_debt"),
-        optional_fields=("fcf", "minority_interest", "preferred_stock"),
     ),
     CapabilitySpec(
         "dcf",
@@ -291,6 +294,18 @@ def evaluate_capabilities(
             else:
                 missing.append(field_name)
 
+        for field_name in spec.required_sourced_or_estimate:
+            sourced_item = book.best(field_name)
+            estimate_item = book.best_estimate(field_name)
+            if field_name in book.sourced_fields and sourced_item is not None:
+                sourced.append(field_name)
+                evidence_ids.append(sourced_item.evidence_id)
+            elif field_name in book.estimated_fields and estimate_item is not None:
+                estimated.append(field_name)
+                evidence_ids.append(estimate_item.evidence_id)
+            else:
+                missing.append(field_name)
+
         for field_name in spec.estimate_allowed:
             official_item = book.best(field_name, official_only=True)
             estimate_item = book.best_estimate(field_name)
@@ -303,9 +318,23 @@ def evaluate_capabilities(
             else:
                 missing.append(field_name)
 
+        estimate_optional_gaps: list[str] = []
+        for field_name in spec.estimate_optional:
+            sourced_item = book.best(field_name)
+            estimate_item = book.best_estimate(field_name)
+            if field_name in book.sourced_fields and sourced_item is not None:
+                sourced.append(field_name)
+                evidence_ids.append(sourced_item.evidence_id)
+            elif field_name in book.estimated_fields and estimate_item is not None:
+                estimated.append(field_name)
+                evidence_ids.append(estimate_item.evidence_id)
+            else:
+                estimate_optional_gaps.append(field_name)
+
         optional_gaps = tuple(
-            field_name for field_name in spec.optional_fields if field_name not in book.fields
-        )
+            field_name for field_name in spec.optional_fields
+            if field_name not in book.fields
+        ) + tuple(estimate_optional_gaps)
         context_gaps = tuple(
             check
             for check in spec.context_checks
@@ -326,7 +355,12 @@ def evaluate_capabilities(
             explanation = "该能力的必要输入已满足。"
 
         required_fields = tuple(
-            dict.fromkeys(spec.required_official + spec.required_sourced + spec.estimate_allowed)
+            dict.fromkeys(
+                spec.required_official
+                + spec.required_sourced
+                + spec.required_sourced_or_estimate
+                + spec.estimate_allowed
+            )
         )
         results[spec.capability_id] = CapabilityResult(
             capability_id=spec.capability_id,

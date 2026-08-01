@@ -290,7 +290,11 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertNotEqual("blocked", run.capabilities["research_report"].status)
         self.assertTrue(run.permissions["research_report"])
         self.assertFalse(run.permissions["formal_per_share_valuation"])
-        self.assertEqual("blocked", run.capabilities["financial_model"].status)
+        self.assertIn(
+            run.capabilities["financial_model"].status,
+            {"ready", "limited"},
+        )
+        self.assertTrue(run.permissions["scenario_analysis"])
         self.assertEqual("blocked", run.methods["dcf"].status)
 
     def test_manifest_estimate_tier_never_counts_as_sourced_market_data(self) -> None:
@@ -1207,9 +1211,16 @@ class ResearchEngineBehaviorTests(unittest.TestCase):
         self.assertEqual("limited", run.methods["mid_cycle"].status)
 
     def test_scenarios_are_hidden_when_scenario_permission_is_false(self) -> None:
+        manifest = json.loads(json.dumps(self.manifest, ensure_ascii=False))
+        for source in manifest["sources"]:
+            source["extracted_fields"] = [
+                field
+                for field in source["extracted_fields"]
+                if field["field_name"] != "ebit"
+            ]
         run = ResearchEngine().run(
             ResearchRequest(
-                manifest=self.manifest,
+                manifest=manifest,
                 research_inputs=ResearchInputs.from_mapping(self.inputs_payload),
                 as_of_date="2026-07-07",
             )

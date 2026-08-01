@@ -96,6 +96,8 @@ class AccountSnapshotRepository(Protocol):
 
     def latest(self, account_id: str) -> AccountSnapshotVersion | None: ...
 
+    def resolve_account(self, reference: str) -> str: ...
+
 
 class AccountSnapshotCommands:
     """Complete account snapshot mutation tasks behind one application seam."""
@@ -166,6 +168,11 @@ class AccountSnapshotQueries:
             raise AccountSnapshotError("SNAPSHOT_QUERY_IDENTITY_REQUIRED")
         return self._repository.get(query)
 
+
+    def resolve(self, reference: str) -> str:
+        if not reference or not reference.strip():
+            raise AccountSnapshotError("ACCOUNT_REFERENCE_REQUIRED")
+        return self._repository.resolve_account(reference.strip())
 
 __all__ = [
     "RegisterAccountForSnapshots",

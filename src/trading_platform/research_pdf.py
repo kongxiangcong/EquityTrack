@@ -11,6 +11,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import (
     PageBreak,
     Paragraph,
+    Preformatted,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -51,6 +52,34 @@ class ResearchDecisionPdf:
             pageCompression=1,
         )
         styles = getSampleStyleSheet()
+        audit = view.get("audit")
+        audit = audit if isinstance(audit, Mapping) else {}
+        bundle = audit.get("evaluation_bundle")
+        bundle = bundle if isinstance(bundle, Mapping) else {}
+        components = bundle.get("components")
+        components = components if isinstance(components, Mapping) else {}
+        pipeline_rows = [("Component", "Status", "Reason")]
+        pipeline_rows.extend(
+            (
+                str(name),
+                str(item.get("status", "")),
+                ", ".join(
+                    str(code)
+                    for code in item.get("reason_codes", ())
+                ),
+            )
+            for name, item in sorted(
+                components.items(),
+                key=lambda pair: str(pair[0]),
+            )
+            if isinstance(item, Mapping)
+        )
+        audit_json = json.dumps(
+            audit,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         story = [
             Paragraph("Research Decision", styles["Title"]),
             Spacer(1, 4 * mm),
@@ -88,16 +117,29 @@ class ResearchDecisionPdf:
                 "frozen evidence is insufficient.",
                 styles["BodyText"],
             ),
+            Spacer(1, 5 * mm),
+            Paragraph("Research pipeline", styles["Heading2"]),
+            Table(
+                pipeline_rows,
+                colWidths=(42 * mm, 24 * mm, 94 * mm),
+                repeatRows=1,
+                style=TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EAF0F3")),
+                        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#AAB8BF")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 7),
+                        ("LEADING", (0, 0), (-1, -1), 9),
+                    ]
+                ),
+            ),
             PageBreak(),
             Paragraph("Audit binding", styles["Heading2"]),
-            Paragraph(
-                json.dumps(
-                    view.get("audit", {}),
-                    ensure_ascii=True,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
+            Preformatted(
+                audit_json,
                 styles["Code"],
+                maxLineLength=88,
             ),
         ]
         document.build(story)

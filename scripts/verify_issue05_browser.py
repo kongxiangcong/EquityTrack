@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from tests.platform.test_plan_change_proposals import _proposal_authority
 from trading_platform.application import (
     open_application_commands,
+    open_browser_acceptance_fixture,
     open_read_models,
 )
 from trading_platform.web_server import LocalChartWorkspaceServer
@@ -126,9 +127,15 @@ def _connect(port: int) -> Cdp:
 def _navigate(cdp: Cdp, url: str) -> None:
     cdp.call("Page.navigate", {"url": url})
     cdp.wait_for("document.readyState === 'complete'")
-    cdp.wait_for(
-        "document.querySelector('#load-status')?.dataset.state === 'ready'"
-    )
+    try:
+        cdp.wait_for(
+            "document.querySelector('#load-status')?.dataset.state === 'ready'"
+        )
+    except TimeoutError as error:
+        diagnostic = cdp.evaluate(
+            "JSON.stringify({state:document.querySelector('#load-status')?.dataset.state,text:document.querySelector('#load-status')?.textContent,body:document.body?.innerText})"
+        )
+        raise RuntimeError(diagnostic) from error
 
 
 def _server(
@@ -141,7 +148,7 @@ def _server(
         ),
         web_root=ROOT / "web" / "dist",
         account_id="account_local",
-        security_id="security_600000",
+        security_id="security_yihua",
     )
     base_url = server.start()
     stack.callback(server.close)
@@ -181,6 +188,14 @@ def main() -> None:
     data_root, _, _ = _proposal_authority(
         temp_root, "production-browser"
     )
+    with open_browser_acceptance_fixture(
+        data_root,
+        ROOT / "tests" / "fixtures" / "platform_data" / "manifest.json",
+        ROOT,
+    ) as fixture:
+        prepared_chart = fixture.prepare()
+    if prepared_chart.security_id != "security_yihua":
+        raise AssertionError(prepared_chart.security_id)
     evidence_file = (
         args.evidence_file.resolve()
         if args.evidence_file is not None
@@ -234,7 +249,8 @@ def main() -> None:
             )
         )
         if (
-            initial["navigation"] != ["总览", "组合", "复核", "研究"]
+            initial["navigation"]
+            != ["今日", "组合", "研究与计划", "周期复盘"]
             or initial["homeGroups"]
             != [
                 "account-summary",
@@ -256,6 +272,30 @@ def main() -> None:
             )
         ):
             raise AssertionError(initial)
+
+        cdp.evaluate(
+            "document.querySelector('#run-today-review').click()"
+        )
+        cdp.wait_for(
+            """!document.querySelector('#today-action-status')
+              .textContent.includes('正在冻结')"""
+        )
+        manual_review = json.loads(
+            cdp.evaluate(
+                """JSON.stringify({
+                  status:document.querySelector('#today-action-status')
+                    .textContent,
+                  completed:document.querySelector('#today-action-status')
+                    .textContent.includes('今日复核已完成'),
+                  review:document.querySelector('#review-content').textContent
+                })"""
+            )
+        )
+        if (
+            not manual_review["completed"]
+            or "MANUAL_REVIEW_COMMAND_INVALID" in manual_review["status"]
+        ):
+            raise AssertionError(manual_review)
 
         routes_and_headers = json.loads(
             cdp.evaluate(
@@ -293,6 +333,11 @@ def main() -> None:
             else:
                 retired_status[route] = 200
         routes_and_headers["retired"] = retired_status
+        routes_and_headers["chart_schema"] = json.loads(
+            urlopen(
+                base_url + "/api/read-models/chart-workspace@1"
+            ).read()
+        )["schema_version"]
         expected_home = sorted(
             [
                 "account_state_summary",
@@ -307,6 +352,7 @@ def main() -> None:
             != "PortfolioWorkspaceView@1"
             or routes_and_headers["homeKeys"] != expected_home
             or set(routes_and_headers["retired"].values()) != {404}
+            or routes_and_headers["chart_schema"] != "ChartWorkspaceView@1"
             or "default-src 'self'"
             not in routes_and_headers["headers"]["csp"]
             or routes_and_headers["headers"]["nosniff"] != "nosniff"
@@ -323,7 +369,7 @@ def main() -> None:
             _page(cdp, page)
             if page == "review":
                 review_rendering = cdp.evaluate(
-                    "!document.querySelector('#page-review').textContent.includes('undefined') && document.querySelector('#page-review').textContent.includes('impact_assessment_')"
+                    "!document.querySelector('#page-review').textContent.includes('undefined') && document.querySelector('#page-review').textContent.includes('最近一次今日复核')"
                 )
                 if not review_rendering:
                     raise AssertionError(
@@ -335,6 +381,60 @@ def main() -> None:
                 cdp, screenshot_root / f"{page}.png"
             )
 
+        _page(cdp, "research")
+        cdp.wait_for("Boolean(document.querySelector('#chart-workspace svg'))")
+        cdp.evaluate("document.querySelector('#add-chart-annotation').click()")
+        cdp.wait_for(
+            "document.querySelector('#chart-action-status').textContent.includes('刷新或重启后仍会')"
+        )
+        chart_annotation = json.loads(
+            cdp.evaluate(
+                """JSON.stringify((()=>{
+                  const line=document.querySelector('#chart-workspace [data-annotation-id]');
+                  return {
+                    markerCount:document.querySelectorAll('#chart-workspace [data-annotation-id]').length,
+                    annotationId:line?.dataset.annotationId,
+                    marketTimestamp:line?.dataset.marketTimestamp,
+                    exactPriceDecimal:line?.dataset.exactPriceDecimal,
+                    detailsClosed:!document.querySelector('#chart-workspace details').open
+                  };
+                })())"""
+            )
+        )
+        if (
+            chart_annotation["markerCount"] != 1
+            or not chart_annotation["marketTimestamp"]
+            or not chart_annotation["exactPriceDecimal"]
+            or not chart_annotation["detailsClosed"]
+        ):
+            raise AssertionError(chart_annotation)
+        cdp.evaluate("location.reload()")
+        cdp.wait_for(
+            "document.querySelector('#load-status')?.dataset.state === 'ready'"
+        )
+        _page(cdp, "research")
+        cdp.wait_for("Boolean(document.querySelector('#chart-workspace [data-annotation-id]'))")
+        refreshed_chart_annotation = json.loads(
+            cdp.evaluate(
+                """JSON.stringify((()=>{
+                  const line=document.querySelector('#chart-workspace [data-annotation-id]');
+                  return {
+                    annotationId:line.dataset.annotationId,
+                    marketTimestamp:line.dataset.marketTimestamp,
+                    exactPriceDecimal:line.dataset.exactPriceDecimal
+                  };
+                })())"""
+            )
+        )
+        if refreshed_chart_annotation != {
+            key: chart_annotation[key]
+            for key in (
+                "annotationId",
+                "marketTimestamp",
+                "exactPriceDecimal",
+            )
+        }:
+            raise AssertionError(refreshed_chart_annotation)
         _page(cdp, "overview")
         cdp.evaluate(
             "document.querySelector('#plan-summary button').click()"
@@ -353,7 +453,7 @@ def main() -> None:
             cdp.evaluate(
                 """JSON.stringify({
                   open:document.querySelector('#plan-dialog').open,
-                  rules:document.querySelector('#plan-detail-content').textContent.includes('HardRule / ReviewRule'),
+                  rules:document.querySelector('#plan-detail-content').textContent.includes('触发条件与触发后行为') && document.querySelector('#plan-detail-content').textContent.includes('下一步') && !document.querySelector('#plan-detail-content').textContent.includes('undefined'),
                   diagnosticsClosed:!document.querySelector('#plan-detail-content details').open
                 })"""
             )
@@ -438,7 +538,22 @@ def main() -> None:
         )
         if "已确认 v2" not in restart_state:
             raise AssertionError(restart_state)
-
+        _page(cdp, "research")
+        cdp.wait_for("Boolean(document.querySelector('#chart-workspace [data-annotation-id]'))")
+        restarted_chart_annotation = json.loads(
+            cdp.evaluate(
+                """JSON.stringify((()=>{
+                  const line=document.querySelector('#chart-workspace [data-annotation-id]');
+                  return {
+                    annotationId:line.dataset.annotationId,
+                    marketTimestamp:line.dataset.marketTimestamp,
+                    exactPriceDecimal:line.dataset.exactPriceDecimal
+                  };
+                })())"""
+            )
+        )
+        if restarted_chart_annotation != refreshed_chart_annotation:
+            raise AssertionError(restarted_chart_annotation)
         cdp.call("Runtime.evaluate", {"expression": "void 0"})
         console_errors = [
             event
@@ -494,8 +609,14 @@ def main() -> None:
             "status": "passed",
             "initial": initial,
             "routes_and_headers": routes_and_headers,
+            "manual_review": manual_review,
             "screenshots": screenshots,
             "plan_progressive_disclosure": plan_disclosure,
+            "chart_annotation": {
+                "created": chart_annotation,
+                "refreshed": refreshed_chart_annotation,
+                "restarted": restarted_chart_annotation,
+            },
             "account_editor": editor,
             "responsive": responsive,
             "reduced_motion": reduced_motion,

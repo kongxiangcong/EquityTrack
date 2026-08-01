@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -69,6 +70,48 @@ def test_active_data_root_rejects_known_synchronized_location(tmp_path: Path) ->
         PlatformStore(tmp_path / "OneDrive" / "data", ROOT / "migrations")
     assert error.value.code == "DATA_ROOT_NOT_LOCAL"
 
+
+def test_permission_denied_while_creating_lock_is_typed_busy(
+    tmp_path: Path,
+) -> None:
+    store = PlatformStore(tmp_path, ROOT / "migrations")
+    store.migrate()
+
+    with patch(
+        "trading_platform.persistence.locking.os.open",
+        side_effect=PermissionError(13, "busy"),
+    ):
+        with pytest.raises(PersistenceError) as busy:
+            store.watchlist.add(
+                "inv",
+                SecurityIdentity(
+                    "stable", "SZSE", "002897", "CNY", "2026-07-10"
+                ),
+            )
+
+    assert busy.value.code == "RUNTIME_BUSY"
+    store.close()
+
+def test_incomplete_live_lock_is_busy_and_never_unlinked(
+    tmp_path: Path,
+) -> None:
+    store = PlatformStore(tmp_path, ROOT / "migrations")
+    store.migrate()
+    lock = tmp_path / ".writer.lock"
+    lock.write_text("{", encoding="utf-8")
+
+    with pytest.raises(PersistenceError) as busy:
+        store.watchlist.add(
+            "inv",
+            SecurityIdentity(
+                "stable", "SZSE", "002897", "CNY", "2026-07-10"
+            ),
+        )
+
+    assert busy.value.code == "RUNTIME_BUSY"
+    assert lock.read_text(encoding="utf-8") == "{"
+    lock.unlink()
+    store.close()
 
 def test_second_writer_future_ledger_and_identity_conflict_fail_closed(tmp_path: Path) -> None:
     store = PlatformStore(tmp_path, ROOT / "migrations"); store.migrate()

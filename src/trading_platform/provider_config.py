@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
+from trading_platform.credentials import CredentialAdapter, LocalCredentialAdapter
 from trading_platform.data.providers import TushareCompatibleProvider
 from trading_platform.data.official_disclosures import (
     CninfoOfficialDisclosureProvider,
@@ -142,7 +142,7 @@ class PreconfiguredTushareRuntime:
     """Own the approved destination, credential scope, and production adapter composition."""
 
     def __init__(self, credential_adapter: CredentialAdapter | None = None) -> None:
-        self._credentials = credential_adapter or EnvironmentCredentialAdapter()
+        self._credentials = credential_adapter or LocalCredentialAdapter()
 
     def bind(self, decoded: DecodedProviderJob) -> ProviderRuntimeBinding:
         validate_preconfigured_source_policy(decoded)

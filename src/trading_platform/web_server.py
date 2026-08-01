@@ -17,6 +17,10 @@ from trading_platform.application.command_envelope import (
 )
 from trading_platform.application.commands import ApplicationCommandDispatcher
 from trading_platform.application.read_model_codecs import encode_read_model
+from trading_platform.application.web_command_policy import (
+    WebCommandPolicy,
+    WebCommandPolicyError,
+)
 from trading_platform.application.read_models import (
     ReadModelError,
     ReadModelService,
@@ -55,6 +59,7 @@ class LocalChartWorkspaceServer:
                 "/api/read-models/review@1",
                 "/api/read-models/research-index@1",
                 "/api/read-models/account-snapshot-editor@1",
+                "/api/read-models/chart-workspace@1",
             }
 
             def do_GET(self) -> None:
@@ -125,20 +130,14 @@ class LocalChartWorkspaceServer:
                         },
                         400,
                     )
-                if (
-                    envelope.interaction_channel is not InteractionChannel.WEB
-                    or envelope.transport_actor.identity
-                    != "adapter:web-local"
-                    or envelope.decision_actor.identity != "user:local-user"
-                    or not envelope.command_name.startswith(
-                        "account_snapshot."
-                    )
-                ):
+                try:
+                    WebCommandPolicy().authorize(envelope)
+                except WebCommandPolicyError as error:
                     return self._json(
                         {
                             "schema_version": "ApplicationCommandFailure@1",
                             "status": "failed",
-                            "code": "WEB_COMMAND_CAPABILITY_DENIED",
+                            "code": error.code,
                         },
                         403,
                     )
@@ -157,10 +156,13 @@ class LocalChartWorkspaceServer:
                             owner.account_id, generated_at
                         )
                     elif path == "/api/read-models/holding@1":
-                        self._require_no_query(query)
+                        self._require_keys(query, {"security_id"})
+                        selected_security = self._single(
+                            query, "security_id", optional=True
+                        )
                         view = owner.read_models.holding(
                             owner.account_id,
-                            owner.security_id,
+                            selected_security or owner.security_id,
                             generated_at,
                         )
                     elif path == "/api/read-models/review@1":
@@ -175,6 +177,15 @@ class LocalChartWorkspaceServer:
                         view = owner.read_models.research_index(
                             generated_at, owner.security_id
                         )
+                    elif path == "/api/read-models/chart-workspace@1":
+                        self._require_keys(query, {"snapshot_id"})
+                        view = owner.read_models.chart_workspace(
+                            owner.security_id,
+                            generated_at,
+                            self._single(
+                                query, "snapshot_id", optional=True
+                            ),
+                        )
                     elif path == (
                         "/api/read-models/account-snapshot-editor@1"
                     ):
@@ -182,18 +193,19 @@ class LocalChartWorkspaceServer:
                         view = owner.read_models.account_editor(
                             owner.account_id, generated_at
                         )
-                    else:
+                    elif path == (
+                        "/api/read-models/trade-plan-detail@1"
+                    ):
                         self._require_keys(query, {"plan_id"})
                         plan_id = self._single(query, "plan_id")
                         view = owner.read_models.plan_detail(
                             plan_id, generated_at
                         )
                         identity = view.plan_identity
-                        if (
-                            identity["account_id"] != owner.account_id
-                            or identity["security_id"] != owner.security_id
-                        ):
+                        if identity["account_id"] != owner.account_id:
                             return self.send_error(404)
+                    else:
+                        return self.send_error(404)
                 except (ReadModelError, ValueError, KeyError):
                     return self.send_error(404)
                 self._encoded_json(encode_read_model(view))

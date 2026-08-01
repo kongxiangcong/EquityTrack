@@ -188,6 +188,15 @@ input, select {
 .form-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; }
 .primary { color: #fff; border-color: #174f86; background: #174f86; }
 pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.candlestick-chart {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  margin: 0.8rem 0 1rem;
+  border: 1px solid #d3d9e1;
+  border-radius: 0.75rem;
+  background: linear-gradient(#fff, #f8fafc);
+}
 details { margin-top: 1rem; padding: 0.8rem; border-radius: 0.7rem; background: #f2f4f7; }
 summary { cursor: pointer; font-weight: 700; }
 

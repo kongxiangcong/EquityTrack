@@ -84,6 +84,22 @@ class DecisionTask:
     deferral_condition: DeferralCondition | None = None
     schema_version: str = "DecisionTask@1"
 
+    def represents_same_persistent_condition(
+        self, candidate: "DecisionTask"
+    ) -> bool:
+        """Keep one task while later reviews observe the same condition."""
+        return (
+            self.decision_task_id == candidate.decision_task_id
+            and self.account_id == candidate.account_id
+            and self.security_id == candidate.security_id
+            and self.plan_version_id == candidate.plan_version_id
+            and self.task_kind == candidate.task_kind
+            and self.reason_code == candidate.reason_code
+            and self.priority == candidate.priority
+            and self.condition_identity == candidate.condition_identity
+            and self.schema_version == candidate.schema_version
+        )
+
     def validate(self) -> None:
         identity = {
             key: value

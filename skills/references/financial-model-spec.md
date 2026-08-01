@@ -1,646 +1,248 @@
-# Financial Model Build Specification
+# Financial Model Projection Specification
 
-> Legacy workbook specification. Retained for reading and checking historical
-> models only. New workbooks are output adapters over
-> `ResearchDecisionView@2` and must reconcile the canonical Valuation artifact.
+> Policy-target reference. The financial model is a recomputable projection of
+> canonical Forecast and Valuation artifacts, not an independent valuation
+> authority or a second research workflow.
 
-> **This file is the sole source of truth for Task 2: Financial Model + Valuation.**
-> The agent MUST build a real, working Excel (.xlsx) file with formulas that link across sheets.
-> Do NOT produce a markdown table pretending to be a model. Do NOT calculate numbers "in your head."
-> The deliverable is an actual Excel workbook that an analyst can open, change an assumption, and see the entire model update.
+## Wired canonical boundary
 
----
+The formal research workflow persists the complete typed Forecast ->
+ScenarioValuation -> valuation/path decision -> RecentTrendAssessment chain and
+one workbook manifest slot. That slot contains reconciled OOXML only when the
+renderer succeeds; otherwise it contains one typed limitation projection.
+Inspect the manifest and never assemble a manual workbook to replace that
+formal member.
 
-## File Naming
+## Canonical sequence
 
-```
-{Company}_{Ticker}_Financial_Model_{Date}.xlsx
-```
-
-Example: `{Company}_{Ticker}_Financial_Model_{Date}.xlsx`
-
----
-
-## Required Tabs (8 minimum)
-
-| # | Tab Name | Purpose | Approx. Rows |
-|---|----------|---------|-------------|
-| 1 | **Raw Data** | Historical financials extracted from APIs/filings (untouched source data) | 60-90 |
-| 2 | **Operating Drivers** | All assumptions with Source + Rationale columns | 25-35 |
-| 3 | **Revenue Model** | Segment-level revenue buildup (Volume × Price) | 30-50 |
-| 4 | **Income Statement** | Full P&L: Revenue through Net Income, 3-5Y historical + 5Y projected | 40-50 |
-| 5 | **Balance Sheet** | Full BS: Assets / Liabilities / Equity, with balance check row | 35-45 |
-| 6 | **Cash Flow** | Full CF: Operating / Investing / Financing + FCF, ending cash ties to BS | 30-40 |
-| 7 | **DCF** | WACC calculation + 5Y FCF discounting + Terminal Value + Equity Bridge | 30-40 |
-| 8 | **Comps** | 5-10 comparable companies + statistical summary (Max/75th/Median/25th/Min) | 20-30 |
-
-### Optional Tabs (add as needed)
-
-| Tab | When to Include |
-|-----|----------------|
-| **Sensitivity** | Always recommended. WACC × Terminal Growth matrix. |
-| **Scenarios** | Always recommended. Bull/Base/Bear parameter sets + output comparison. |
-| **Supporting Schedules** | If PP&E/depreciation or debt schedules are complex. |
-| **SOTP** | If company has 3+ distinct business segments with different valuation profiles. |
-| **Historical Band** | If 5-year PE/PB data available for percentile analysis. |
-
----
-
-## Tab 1: Raw Data
-
-### Purpose
-Store the unmodified historical financial data exactly as retrieved from APIs or filings. This tab is the **source of truth** — all other tabs reference it.
-
-### Structure
-
-```
-Row 1: [Company Name] ([Ticker]) — Raw Financial Data ([Currency] millions)
-Row 2: (blank)
-Row 3: Headers →  B: Line Item | C: FY-4 | D: FY-3 | E: FY-2 | F: FY-1 | G: FY0 (latest)
-Row 4: (blank)
-Row 5: "Income Statement" (section header)
-Row 6-25: IS line items (Revenue, COGS, Gross Profit, R&D, SG&A, D&A, Operating Income, Interest, Tax, Net Income, EPS, Shares, EBITDA, SBC)
-Row 26: (blank)
-Row 27: "Balance Sheet" (section header)
-Row 28-55: BS line items (Cash, AR, Inventory, Current Assets, PP&E, Goodwill, Intangibles, Total Assets, AP, Accrued, Deferred Revenue, Current Debt, Current Liabilities, LT Debt, Total Liabilities, Equity, Retained Earnings, Total L+E)
-Row 56: (blank)
-Row 57: "Cash Flow Statement" (section header)
-Row 58-80: CF line items (Net Income, D&A, SBC, WC changes, CFO, CapEx, Acquisitions, CFI, Debt issuance/repayment, Dividends, CFF, Net Change, Beginning Cash, Ending Cash, FCF)
-Row 81: (blank)
-Row 82: "Per Share & Ratios" (section header)
-Row 83-90: Key ratios (Gross Margin, Op Margin, Net Margin, ROE, ROA, D/E, Current Ratio, FCF Margin)
+```text
+Tushare-compatible Frozen DataSnapshot
+  -> ResearchInputOrigin classification
+  -> BoundedEstimate
+  -> Forecast
+  -> stress / base / improvement ScenarioValuation
+  -> ValuationSimulationDecision
+  -> MarketPathDecision
+  -> CompleteResearchReport
+  -> RecentTrendAssessment
+  -> OPEN TradePlanDraft
+  -> one explicit user confirmation
 ```
 
-### Data Entry Rules
-- **Blue font** for all hardcoded data (manual entry from APIs)
-- **Source annotation is mandatory**: every historical financial value, share count, net debt component, and market-data input must carry `source_id`, period, currency, unit, and retrieved_at from the source manifest. If the compact layout cannot fit all metadata beside each cell, add a Raw Data Source Map directly below the table keyed by line item and period.
-- **Missing critical values**: leave the model input blank or `NA`, mark the field as `missing` in the source manifest, and stop valuation outputs when the validator requires `data_insufficient_memo`.
-- **Currency**: State currency in the header row. All numbers in same currency.
-- **Units**: Millions unless otherwise stated. Per-share data in actual units.
-
----
-
-## Tab 2: Operating Drivers
-
-### Purpose
-Central assumption dashboard. Every forward-looking number in the model traces back to an assumption here.
-
-### Structure
-
-```
-Row 1: [Company Name] ([Ticker]) — Operating Drivers & Assumptions ([Currency] millions)
-Row 2: (blank)
-Row 3: Headers → B: Driver | C-G: FY-4A through FY0A | H-L: FY+1E through FY+5E | M: Source | N: Rationale
-Row 4: (blank)
-Row 5: "Revenue Growth Drivers" (section header)
-Row 6: Revenue YoY Growth %
-Row 7: Total Revenue (formula: prior year × (1 + growth))
-Row 8: Gross Margin %
-Row 9: R&D / Revenue %
-Row 10: SG&A / Revenue %
-Row 11: D&A / Revenue %
-Row 12: Tax Rate (Normalized) %
-Row 13: (blank)
-Row 14: "Balance Sheet Assumptions" (section header)
-Row 15: AR Days (DSO)
-Row 16: Inventory Days (DIO)
-Row 17: AP Days (DPO)
-Row 18: Deferred Revenue / Revenue %
-Row 19: CapEx / Revenue %
-Row 20: Depreciation / Gross PPE %
-Row 21: SBC / Revenue %
-Row 22: (blank)
-Row 23: "Other Assumptions" (section header)
-Row 24: Interest Income Rate %
-Row 25: Interest Expense Rate %
-Row 26: Dividend Payout Ratio %
-Row 27: Minority Interest / Revenue %
-Row 28: Diluted Share Count (millions)
-```
-
-### Critical Rules
-- **Historical columns (A)**: Show actual historical ratios calculated from Raw Data (formulas, not hardcoded)
-- **Projected columns (E)**: Hardcoded assumptions (blue font) that the user can change
-- **Source column**: Must be filled for every projected assumption (e.g., "Mgmt guidance", "Historical avg", "Consensus", "Our estimate")
-- **Rationale column**: 1-2 sentence explanation of why this assumption is reasonable
-
----
-
-## Tab 3: Revenue Model
-
-### Purpose
-Bottom-up revenue buildup by business segment. Shows Volume × Price (or equivalent driver) for each segment.
-
-### Structure
-
-```
-Section A: Revenue by Segment
-─────────────────────────────────────────────────────
-[Segment 1 Name]
-  Revenue            =Volume × Price (formula)
-  Volume / Units     hardcoded assumptions
-  ASP / ARPU         hardcoded assumptions
-  YoY Growth %       formula
-  % of Total         formula
-
-[Segment 2 Name]
-  Revenue            =Volume × Price
-  ...
-
-[Segment 3-6]
-  ...
-─────────────────────────────────────────────────────
-Total Revenue        =SUM of all segments (must match IS)
-  YoY Growth %       formula
-
-Section B: Revenue by Geography (if applicable)
-─────────────────────────────────────────────────────
-[Region 1]           Revenue + % of Total + YoY Growth
-[Region 2]           ...
-─────────────────────────────────────────────────────
-Total                =Must match Section A total
-```
-
-### Rules
-- Minimum 3 segments, ideally 4-6
-- Each segment must have an explicit volume × price (or equivalent) driver
-- Historical data (3-5 years) + projected (5 years)
-- **Cross-check**: Total Revenue in Revenue Model tab MUST equal Total Revenue in Income Statement tab (link via formula)
-
----
-
-## Tab 4: Income Statement
-
-### Purpose
-Complete Profit & Loss statement with full cost structure breakdown.
-
-### Structure (40-50 line items)
-
-```
-Income Statement
-─────────────────────────────────────────────────────
-Total Revenue                    =Revenue Model!Total
-  YoY Growth %                   formula
-Cost of Revenue                  =Revenue × (1 - Gross Margin from Drivers)
-─────────────────────────────────────────────────────
-Gross Profit                     =Revenue - COGS
-  Gross Margin %                 formula
-
-R&D Expense                      =Revenue × R&D% from Drivers
-SG&A Expense                     =Revenue × SG&A% from Drivers
-Depreciation & Amortization      =Supporting Schedules or Revenue × D&A% from Drivers
-Other Operating Income/(Expense) hardcoded or zero
-─────────────────────────────────────────────────────
-Operating Income (EBIT)          =Gross Profit - R&D - SG&A - D&A - Other
-  Operating Margin %             formula
-
-Interest Income                  =Avg Cash × Interest Income Rate from Drivers
-Interest Expense                 =Avg Debt × Interest Expense Rate from Drivers
-Other Non-Operating              hardcoded or zero
-─────────────────────────────────────────────────────
-EBT (Earnings Before Tax)        =EBIT + Int Income - Int Expense + Other
-Tax Provision                    =EBT × Tax Rate from Drivers
-  Effective Tax Rate %           formula
-─────────────────────────────────────────────────────
-Net Income to Company            =EBT - Tax
-  Minority Interest              hardcoded or Revenue × MI% from Drivers
-Net Income                       =Net Income to Company - MI
-  Net Margin %                   formula
-
-Diluted Shares (millions)        from Drivers
-Diluted EPS                      =Net Income / Diluted Shares
-
-─────────────────────────────────────────────────────
-Memo Items:
-EBITDA                           =EBIT + D&A
-  EBITDA Margin %                formula
-Stock-Based Compensation         =Revenue × SBC% from Drivers
-```
-
-### Critical Rules
-- **Historical columns**: Must match Raw Data tab exactly (use formulas referencing Raw Data, not re-entered numbers)
-- **Projected columns**: All driven by Operating Drivers assumptions (formulas, not hardcoded)
-- **Revenue link**: Revenue MUST be a formula linking to Revenue Model tab
-- **Margin calculations**: Every margin is a formula (not hardcoded)
-
----
-
-## Tab 5: Balance Sheet
-
-### Purpose
-Complete Balance Sheet that balances for every period.
-
-### Structure (35-45 line items)
-
-```
-Assets
-─────────────────────────────────────────────────────
-Cash & Equivalents               =Prior Cash + Net Change from CF tab
-Short-Term Investments           hardcoded or zero
-Total Cash & ST Investments      =Cash + STI
-Accounts Receivable              =Revenue × (AR Days / 365)
-Inventory                        =COGS × (Inventory Days / 365)
-Prepaid & Other Current          hardcoded or % of revenue
-─────────────────────────────────────────────────────
-Total Current Assets             =SUM
-
-Net PP&E                         =Supporting Schedules or formula
-Goodwill                         hardcoded (constant unless M&A)
-Intangible Assets                =Supporting Schedules or declining
-Other Non-Current Assets         hardcoded or % of revenue
-─────────────────────────────────────────────────────
-Total Non-Current Assets         =SUM
-Total Assets                     =Current + Non-Current
-
-Liabilities
-─────────────────────────────────────────────────────
-Accounts Payable                 =COGS × (AP Days / 365)
-Accrued Expenses                 hardcoded or % of revenue
-Deferred Revenue                 =Revenue × Deferred Rev% from Drivers
-Current Portion of Debt          from debt schedule or constant
-Other Current Liabilities        hardcoded or % of revenue
-─────────────────────────────────────────────────────
-Total Current Liabilities        =SUM
-
-Long-Term Debt                   from debt schedule or constant
-Other Non-Current Liabilities    hardcoded or % of revenue
-─────────────────────────────────────────────────────
-Total Non-Current Liabilities    =SUM
-Total Liabilities                =Current + Non-Current
-
-Equity
-─────────────────────────────────────────────────────
-Common Stock & APIC              =Prior + SBC
-Treasury Stock                   hardcoded or zero
-Retained Earnings                =Prior + Net Income - Dividends
-OCI / Other                      hardcoded or zero
-─────────────────────────────────────────────────────
-Total Common Equity              =SUM
-Minority Interest                hardcoded or formula
-Total Equity                     =Common Equity + MI
-─────────────────────────────────────────────────────
-Total Liabilities & Equity       =Total Liabilities + Total Equity
-
-⚠️ BALANCE CHECK                 =Total Assets - Total L&E (MUST = 0)
-```
-
-### Critical Rules
-- **Balance Check row**: MUST be present. Value MUST be 0 (or <$1M rounding) for every column.
-- **Cash**: Derived from Cash Flow tab (not hardcoded for projected years)
-- **Working capital items**: Driven by days ratios from Operating Drivers
-- **Retained Earnings**: Formula linking to Net Income from IS tab
-
----
-
-## Tab 6: Cash Flow
-
-### Purpose
-Complete Cash Flow Statement with FCF calculation. Ending cash must tie to Balance Sheet.
-
-### Structure (30-40 line items)
-
-```
-Cash From Operations
-─────────────────────────────────────────────────────
-Net Income                       =IS!Net Income
-  Depreciation                   =IS!D&A (or Supporting Schedules)
-  Amortization                   from schedules or IS
-  Stock-Based Compensation       =IS!SBC
-  Other Non-Cash Items           hardcoded or zero
-  Change in Receivables          =-(Current AR - Prior AR)
-  Change in Inventory            =-(Current Inv - Prior Inv)
-  Change in Payables             =Current AP - Prior AP
-  Change in Other Working Capital formula
-─────────────────────────────────────────────────────
-Cash From Operations (CFO)       =SUM
-
-Cash From Investing
-─────────────────────────────────────────────────────
-  Capital Expenditure            =-(Revenue × CapEx% from Drivers)
-  Acquisitions / Investments     hardcoded or zero
-  Other Investing                hardcoded or zero
-─────────────────────────────────────────────────────
-Cash From Investing (CFI)        =SUM
-
-Cash From Financing
-─────────────────────────────────────────────────────
-  Net Debt Issuance / (Repayment) from debt schedule or hardcoded
-  Equity Issuance / SBC Exercise  hardcoded or zero
-  Dividends Paid                  =-(Net Income × Payout Ratio)
-  Other Financing                 hardcoded or zero
-─────────────────────────────────────────────────────
-Cash From Financing (CFF)        =SUM
-
-Net Change in Cash               =CFO + CFI + CFF
-  FX Effect                      hardcoded or zero
-Net Change in Cash (incl. FX)    =Net Change + FX
-Beginning Cash                   =Prior period Ending Cash (or BS!Cash for first projected year)
-Ending Cash                      =Beginning + Net Change
-
-⚠️ CASH TIE-OUT                  =Ending Cash - BS!Cash (MUST = 0)
-
-─────────────────────────────────────────────────────
-Free Cash Flow                   =CFO - CapEx (positive CapEx as absolute value)
-  FCF Margin %                   =FCF / Revenue
-```
-
-### Critical Rules
-- **Cash Tie-Out**: Ending Cash MUST equal Balance Sheet Cash for every period
-- **Working capital changes**: Derived from BS changes (formulas, not hardcoded)
-- **CapEx**: Driven by Operating Drivers assumption (formula)
-- **FCF definition**: CFO - CapEx (standard definition)
-
----
-
-## Tab 7: DCF
-
-### Purpose
-Discounted Cash Flow valuation from projected FCF to per-share equity value.
-
-### Structure
-
-```
-Section A: WACC Calculation
-─────────────────────────────────────────────────────
-Risk-Free Rate               hardcoded (10Y govt bond yield)
-Beta                         hardcoded (from data source)
-Equity Risk Premium          hardcoded (market-specific: A股 6-7%, US 4.5-5.5%, HK 5.5-6.5%)
-Size Premium                 hardcoded (0-3% based on market cap)
-Cost of Equity (Ke)          =Rf + Beta × ERP + Size Premium
-Cost of Debt (pre-tax)       hardcoded (weighted avg interest rate)
-Tax Rate                     =Operating Drivers tax rate
-Cost of Debt (after-tax)     =Kd × (1 - Tax Rate)
-Equity Weight (E/V)          =Market Cap / (Market Cap + Debt)
-Debt Weight (D/V)            =1 - Equity Weight
-WACC                         =Ke × E/V + Kd(1-t) × D/V
-
-Section B: FCF Projection + Discounting
-─────────────────────────────────────────────────────
-                             FY+1E    FY+2E    FY+3E    FY+4E    FY+5E
-Revenue                      =IS link
-EBIT                         =IS link
-NOPAT (EBIT × (1-t))        formula
-+ D&A                        =IS link
-- CapEx                       =CF link
-- Change in NWC               =CF link (or BS-derived)
-─────────────────────────────────────────────────────
-Unlevered FCF (UFCF)         =NOPAT + D&A - CapEx - ΔNWC
-Discount Factor              =1 / (1 + WACC)^year
-PV of UFCF                   =UFCF × Discount Factor
-
-Section C: Terminal Value
-─────────────────────────────────────────────────────
-Terminal Growth Rate          hardcoded (1.5-4% based on market)
-Terminal UFCF                 =FY+5 UFCF × (1 + g)
-Terminal Value (Gordon)       =Terminal UFCF / (WACC - g)
-PV of Terminal Value          =TV × Discount Factor for Year 5
-
-⚠️ TV as % of EV             =PV(TV) / EV (flag if >80%)
-
-Section D: Equity Bridge
-─────────────────────────────────────────────────────
-Sum of PV(UFCF)              =SUM of discounted FCFs
-PV of Terminal Value          from above
-Enterprise Value              =Sum PV(UFCF) + PV(TV)
-- Net Debt                    =(Total Debt - Cash) from BS
-- Minority Interest           from BS
-- Preferred Stock             if applicable
-+ Associates / JVs            if applicable
-─────────────────────────────────────────────────────
-Equity Value                  =EV - Net Debt - MI - Preferred + Associates
-Diluted Shares Outstanding    from Operating Drivers
-Equity Value per Share        =Equity Value / Shares
-
-Current Price                 hardcoded
-Upside / (Downside) %        =(Implied - Current) / Current
-```
-
-### Rules
-- WACC reasonability: Must be within market-typical range (see `valuation/dcf-and-sensitivity.md` §Part 1 — WACC Calculation)
-- WACC input sources are mandatory: risk-free rate, beta, ERP, size/country premium, cost of debt, tax rate, market cap, gross debt, lease debt, cash, preferred stock, minority interest, and diluted shares must all reference `source_id` or an explicit `missing` record.
-- Net debt and equity bridge source annotations are mandatory: each bridge line must tie to Raw Data and source manifest fields before any per-share value is shown.
-- All FCF inputs are formula links to IS/CF tabs (not hardcoded)
-- Terminal Value sanity check row is mandatory
-
----
-
-## Tab 8: Comps
-
-### Purpose
-Comparable company analysis with mandatory statistical summary.
-
-### Structure
-
-```
-Section A: Comparable Companies
-─────────────────────────────────────────────────────
-Company | Ticker | Market Cap | Revenue(TTM) | EBITDA(TTM) | Net Income | EV/Rev | EV/EBITDA | P/E(TTM) | P/E(NTM) | P/B | P/S | PEG
-[Comp 1] | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ...
-[Comp 2-10] ...
-[Target Company — highlighted row]
-
-Section B: Statistical Summary (MANDATORY)
-─────────────────────────────────────────────────────
-           | EV/Rev | EV/EBITDA | P/E(TTM) | P/E(NTM) | P/B | P/S
-Maximum    | formula | formula  | formula  | formula  | formula | formula
-75th Pctl  | formula | formula  | formula  | formula  | formula | formula
-Median     | formula | formula  | formula  | formula  | formula | formula
-Mean       | formula | formula  | formula  | formula  | formula | formula
-25th Pctl  | formula | formula  | formula  | formula  | formula | formula
-Minimum    | formula | formula  | formula  | formula  | formula | formula
-
-[Target]   | actual  | actual   | actual   | actual   | actual  | actual
-Percentile | formula | formula  | formula  | formula  | formula | formula
-
-Section C: Implied Valuation Range
-─────────────────────────────────────────────────────
-Method          | Low (25th) | Mid (Median) | High (75th)
-EV/EBITDA       | formula    | formula      | formula
-P/E (NTM)       | formula    | formula      | formula
-Implied Price   | formula    | formula      | formula
-vs. Current     | formula    | formula      | formula
-```
-
-### Rules
-- Minimum 5 comparable companies (ideally 8-10)
-- Statistical summary with Max/75th/Median/25th/Min is **MANDATORY** (non-negotiable)
-- Peer data source annotations are mandatory: each peer's market cap, EV, revenue, EBITDA, net income, book value, share count, reporting period, currency, and unit must reference source manifest `source_id` or be excluded from the usable peer set.
-- Peer rows with missing source_id, incompatible accounting period, incompatible currency/unit, or unresolved source conflicts are not usable. Fewer than 3 usable peers means comps cannot support a valuation conclusion.
-- All statistics use Excel formulas (PERCENTILE.INC, MEDIAN, MAX, MIN)
-- Target company row uses `.row-highlight` equivalent formatting
-- Currency unified per `valuation/comparable.md` rules
-
----
-
-## Tab 9: Sensitivity (Recommended)
-
-### Structure
-
-```
-Section A: WACC × Terminal Growth (Primary — MANDATORY if DCF tab exists)
-─────────────────────────────────────────────────────
-                g=1.5%    g=2.0%    g=2.5%    g=3.0%    g=3.5%
-WACC=X-1.0%     formula   formula   formula   formula   formula
-WACC=X-0.5%     formula   formula   formula   formula   formula
-WACC=X (base)   formula   formula   [BASE]    formula   formula
-WACC=X+0.5%     formula   formula   formula   formula   formula
-WACC=X+1.0%     formula   formula   formula   formula   formula
-
-Section B: Revenue CAGR × Terminal EBITDA Margin (Optional)
-─────────────────────────────────────────────────────
-Same 5×5 grid structure
-```
-
-### Rules
-- Center cell = DCF base case value (formula linking to DCF tab)
-- All cells are formulas that recalculate when DCF inputs change
-- Symmetric ranges around base case
-
----
-
-## Tab 10: Scenarios (Recommended)
-
-### Structure
-
-```
-                        Bull Case    Base Case    Bear Case
-Probability              XX%          XX%          XX%
-─────────────────────────────────────────────────────
-Key Assumptions:
-  Revenue CAGR (5Y)      X%           X%           X%
-  Terminal Gross Margin   X%           X%           X%
-  Terminal Op Margin      X%           X%           X%
-  WACC                    X%           X%           X%
-  Terminal Growth         X%           X%           X%
-─────────────────────────────────────────────────────
-Outputs:
-  FY+2 Revenue            formula      formula      formula
-  FY+2 EPS                formula      formula      formula
-  DCF Value/Share         formula      formula      formula
-  Target P/E              X            X            X
-  Implied Price           formula      formula      formula
-─────────────────────────────────────────────────────
-Probability-Weighted Price  =SUM(Prob × Price)
-Current Price               hardcoded
-Upside/(Downside)           formula
-```
-
-### Rules
-- Bull + Base + Bear probabilities = 100%
-- Base probability: 45-60%
-- Each scenario's outputs should be formula-driven where possible
-
----
-
-## Excel Formatting Standards
-
-### Font Colors (Data Type Convention)
-| Color | Meaning |
-|-------|---------|
-| **Blue** | Hardcoded input / assumption (user can change) |
-| **Black** | Formula / calculated value |
-| **Green** | Cross-sheet link (formula referencing another tab) |
-
-### Number Formatting
-| Type | Format | Example |
-|------|--------|---------|
-| Revenue / large numbers | #,##0 | 96,773 |
-| Per-share values | #,##0.00 | 4.73 |
-| Percentages | 0.0% | 18.3% |
-| Negative values | (#,##0) in red or parentheses | (1,234) |
-| Ratios (PE, PB) | 0.0x | 25.3x |
-
-### Layout Standards
-- Row 1: Company name + tab description + currency
-- Row 3: Column headers (years)
-- Section headers in bold with light gray background
-- Totals / subtotals with top border
-- Balance check / tie-out rows with conditional formatting (green if 0, red if ≠0)
-
----
-
-## Model Integrity Checks (Agent Must Verify)
-
-Workbook output is a projection of the canonical `ResearchDecisionView@2` and
-typed Valuation artifacts. Verify it through the platform workbook adapter
-suite; do not run a standalone workbook authority or create a parallel report
-gate.
-
-```bash
-python -m pytest -q tests/platform/test_valuation_workbook_adapter.py
-```
-
-The adapter must preserve exact decimals, formulas, source identities, method
-applicability, and financial-output boundaries. A failed adapter check blocks
-the workbook projection but does not create a second research result.
-
-Before declaring Task 2 complete, verify the following gate summary:
-
-| # | Check | Method | Pass Criteria |
-|---|-------|--------|---------------|
-| 1 | BS balances | =Total Assets - Total L&E | = 0 for all periods |
-| 2 | Cash ties | =CF Ending Cash - BS Cash | = 0 for all periods |
-| 3 | Revenue ties | =Revenue Model Total - IS Revenue | = 0 for all periods |
-| 4 | Historical accuracy | Compare IS/BS/CF to Raw Data | Difference < 1% |
-| 5 | Source manifest validation | Read validation result JSON | `passed = true`, `source_manifest_status = sufficient`, `data_insufficient_memo_required = false` |
-| 6 | Workbook projection | Run the platform workbook adapter suite | all tests pass with the configured workbook runtime |
-| 7 | Source annotation coverage | Check Raw Data, share count, net debt, WACC inputs, peer data | Every critical input has `source_id` or explicit `missing`; missing critical inputs block valuation outputs |
-| 8 | WACC range | Check vs market-typical range | Within normal range (flag if outside) |
-| 9 | TV % of EV | =PV(TV) / EV | < 80% (flag if higher) |
-| 10 | Sensitivity center | =Sensitivity center cell - DCF base | = 0 |
-| 11 | Comps stats | Check PERCENTILE formulas work | No #N/A or #REF errors |
-| 12 | Scenarios sum | =Bull% + Base% + Bear% | = 100% |
-| 13 | FCF sign | Check FCF is positive for base case | Positive (flag if negative with explanation) |
-
-**If any check fails**: Fix the model before proceeding. Do NOT deliver a broken model.
-
----
-
-## Implementation Notes for Agent
-
-### Using openpyxl (Python)
-
-The agent builds the Excel file using Python's `openpyxl` library:
-
-```python
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
-
-wb = openpyxl.Workbook()
-
-# Color conventions
-BLUE_FONT = Font(color="0000FF")        # Hardcoded inputs
-BLACK_FONT = Font(color="000000")        # Formulas
-GREEN_FONT = Font(color="008000")        # Cross-sheet links
-HEADER_FILL = PatternFill("solid", fgColor="D9E1F2")
-SECTION_FILL = PatternFill("solid", fgColor="F2F2F2")
-
-# Number formats
-PCT_FORMAT = '0.0%'
-NUM_FORMAT = '#,##0'
-DECIMAL_FORMAT = '#,##0.00'
-```
-
-### Formula Patterns
-
-```python
-# Cross-sheet reference (green font)
-cell.value = "='Income Statement'!G6"
-cell.font = GREEN_FONT
-
-# Within-sheet formula (black font)
-cell.value = "=G6-G7"
-cell.font = BLACK_FONT
-
-# Hardcoded assumption (blue font)
-cell.value = 0.19
-cell.font = BLUE_FONT
-cell.number_format = PCT_FORMAT
-```
-
-### Key Principle
-Every projected number must be either:
-1. A **blue hardcoded assumption** in Operating Drivers (with Source + Rationale), or
-2. A **formula** that references other cells
-
-There should be ZERO unexplained hardcoded numbers in projected columns of IS/BS/CF tabs.
+The model owns the Forecast and deterministic valuation calculations inside
+that sequence. It does not own report narrative, recent-trend interpretation,
+TradePlanDraft confirmation, or application mutations.
+
+## Input-origin model
+
+Every input cell or typed quantity has exactly one origin:
+
+| Origin | Meaning | Required lineage |
+|---|---|---|
+| `observed_official` | Official disclosure or exchange fact | Source identity, period, available/retrieved timestamps |
+| `observed_structured` | PIT-valid structured provider observation | Actual provider/gateway identity and timestamps |
+| `derived` | Deterministic result from named operands | Operand refs and formula identity |
+| `estimated` | `BoundedEstimate` | Estimate identity, method, bounds, calibration and source refs |
+| `missing` | No defensible value | Missing reason; no numeric placeholder |
+
+Tushare-compatible observations are `observed_structured`, not official. Keep
+their actual gateway identity. Unknown is never zero.
+
+## BoundedEstimate
+
+Use a bounded estimate only when the missing driver can be tied to frozen
+observations or a versioned prior. Store:
+
+- estimator and estimate-policy identities;
+- source refs, calibration sample/window and as-of date;
+- point, lower bound, upper bound, unit, currency and period;
+- confidence, rationale and invalidation condition.
+
+Allowed bases, in order of preference:
+
+1. the company’s PIT-valid historical distribution;
+2. segment/driver history with a stable definition;
+3. source-compatible peer or industry distribution;
+4. an explicit user assumption with identity and bounds.
+
+Do not use an unexplained scalar, a silent default, stale/future data, or zero
+as a substitute for missing. Estimates remain estimates in every formula,
+scenario, report and workbook style.
+
+## Forecast model
+
+Build Event -> Driver -> Forecast Financial transmission. The model may include
+segment revenue, operating drivers, income statement, balance sheet, cash flow
+and supporting schedules as required by the company archetype. Do not force an
+industrial three-statement template onto a financial institution or pipeline
+biopharma company.
+
+Each projected value must be one of:
+
+1. an observed input linked to its frozen source;
+2. a bounded estimate linked to `BoundedEstimate`;
+3. a formula linked to named operands;
+4. `missing`/`n.m.` with a reason.
+
+There are no unexplained hardcoded values and no implicit zero branches.
+
+### General non-financial reconciliation
+
+- Segment revenue sums to total revenue.
+- Income-statement revenue links to the revenue build.
+- Projected cash links to the cash-flow statement.
+- Balance-sheet assets equal liabilities plus equity within declared rounding.
+- Cash-flow ending cash ties to balance-sheet cash.
+- Working-capital changes reconcile between balance sheet and cash flow.
+- Diluted shares and net-debt/equity bridge use one unit/currency/as-of basis.
+
+### Specialized archetypes
+
+- Financial institutions use book value, regulatory capital, clean-surplus,
+  ROE/COE, payout and institution operating metrics; ordinary FCFF/WACC DCF is
+  disabled.
+- Pipeline biopharma uses asset/indication rights, event probabilities,
+  licensing economics, rNPV/SOTP and financing-aware runway.
+- Cyclical/resource companies use normalized price/volume/cost, finite reserve
+  or capacity economics, mid-cycle valuation and peak-cycle diagnostics.
+- Multi-segment companies reconcile non-overlapping segment economics before
+  SOTP.
+
+## Three-scenario model
+
+Create exactly `stress`, `base`, and `improvement`. Do not use Bull/Base/Bear
+aliases. All three scenarios must contain the same driver and output rows so
+the differences are auditable.
+
+For each scenario record:
+
+- driver overrides and their origins;
+- forecast financials and reconciliations;
+- selected, limited, blocked and disabled valuation methods;
+- method formulas, conditional ranges and diagnostics;
+- assumptions, missing inputs and invalidation conditions.
+
+Set `probability_mode = conditional_only` unless complete PIT-valid probability
+calibration exists. Under `conditional_only`, show no probability-weighted
+value. Under `evidence_weighted`, all three probabilities must exist, cite the
+same partition/sample identity, and sum exactly to one. Never assign a default
+base probability.
+
+## Dynamic valuation projection
+
+The workbook projects only methods selected by
+`valuation/valuation-method-router.md`. It does not require a DCF tab for every
+company.
+
+| Method family | Include when | Key checks |
+|---|---|---|
+| Ordinary FCFF/WACC DCF | Router returns allowed or documented caution | Explicit FCF forecast, WACC components, `WACC > g`, terminal-value diagnostic and complete equity bridge |
+| Relative valuation | At least three source-compatible peers survive | Period, accounting, currency/unit and denominator compatibility |
+| Historical band | PIT-valid history has enough comparable observations | Regime/cycle break and denominator quality |
+| Financial institution | Typed institution inputs exist | Book/regulatory capital, clean surplus, ROE/COE and payout reconcile |
+| Biopharma rNPV/SOTP | Typed asset/event/rights/runway inputs exist | Event probabilities, rights counted once and financing dilution |
+| Cyclical/NAV/mid-cycle | Normalized or finite-life inputs exist | No peak-price perpetuity; reserve/capacity/cost identity |
+| Multi-segment SOTP | Segment economics are non-overlapping | Segment-to-consolidated bridge and double-count prevention |
+
+If an input is missing, limit or block only the dependent method. A bounded-
+estimate method may publish a conditional range with `limited` status. Missing
+official critical inputs still prohibit a formal target, rating or unqualified
+valuation conclusion.
+
+## ValuationSimulationDecision projection
+
+Always include the decision object, whether or not Monte Carlo runs.
+
+Run only with:
+
+- at least one deterministic valuation anchor;
+- material uncertain drivers with bounded calibrated distributions;
+- dependency calibration or a versioned explicit override;
+- dimensional valuation formula and hard constraints;
+- RNG identity, seed, sample/batch budget, convergence and invalid-path gates.
+
+When run, project distributions, dependency matrix, seed, budget, convergence,
+invalid-path rate, quantiles, tails, contributions and deterministic fallback.
+When prerequisites are missing, show `not_run` and reason codes. When the gate
+does not converge, show `partial` and withhold unstable stochastic quantiles.
+Monte Carlo never fills missing financial facts.
+
+## MarketPathDecision projection
+
+Market paths are separate from intrinsic value and from valuation Monte Carlo.
+Always project the applicability decision.
+
+Run only with PIT-valid adjusted OHLCV, trading-calendar identity, current
+state, A-share execution constraints, transaction costs, RNG identity, seed,
+path budget and enough state-conditioned contiguous historical blocks. Project
+horizon returns, drawdowns and threshold frequencies only when the formal run
+exists. Never create arbitrary GBM drift/volatility inputs.
+
+## Workbook structure
+
+Use the smallest set of tabs that preserves the canonical model. Recommended
+target tabs are:
+
+1. `Audit & Origins` — identities, source refs, origin ledger, estimates,
+   missing inputs and statuses;
+2. `Drivers` — observed and estimated assumptions with bounds/rationale;
+3. `Forecast` — driver build and archetype-appropriate financial outputs;
+4. `Scenarios` — stress/base/improvement with aligned rows;
+5. `Valuation` — selected method calculations and reconciliation;
+6. `Simulation Decision` — Monte Carlo result or `not_run` reasons;
+7. `Market Path Decision` — market-path result or `not_run` reasons;
+8. `Recent Trend` — read-only projection of the canonical assessment;
+9. `Reconciliation` — formula checks and canonical artifact hashes.
+
+Split statements or specialized schedules into additional tabs only when they
+own meaningful calculations. Do not create empty DCF, comps, simulation or
+market-path tabs as compatibility placeholders.
+
+## Formula and display conventions
+
+- Observed inputs: one consistent observed-input style with origin label.
+- Estimated inputs: a distinct editable-assumption style plus bounds and
+  estimator identity.
+- Formulas: formula style; never hardcode canonical calculated outputs.
+- Cross-tab links: separate link style.
+- Missing: `n.m.` plus reason; no numeric value.
+- Units, currency, period and as-of appear in every table header.
+- Negative values use a consistent parenthetical format.
+
+## Projection integrity
+
+The workbook must reconcile to the canonical DecisionView and typed artifacts:
+
+1. Security, as-of and data-snapshot identities match.
+2. Forecast and scenario structures/hashes match.
+3. Method status, formulas and conditional ranges match.
+4. Origin/estimate/missing classifications are preserved.
+5. Statement, cash, revenue, shares and equity-bridge checks pass when
+   applicable.
+6. Probability mode and sum-to-one gate match.
+7. Simulation/path result identities, RNG and seeds match when run.
+8. `not_run`, `partial` and `blocked` remain explicit.
+9. No formula errors, unexplained constants, placeholders or hidden fallback
+   paths remain.
+
+A workbook projection failure blocks XLSX delivery only. It does not create a
+second research result and does not erase a structurally complete canonical
+report. `valid_with_limits` remains structurally complete with method-level
+limits. When required official evidence or selected-method inputs are missing,
+the dependent valuation section is a `data_insufficient_memo` and cannot carry
+a formal valuation conclusion, target, or rating.
+
+## Trade-plan boundary
+
+The workbook may display the canonical recent-trend and `TradePlanDraft`
+handoff read-only. It must not create, confirm, activate, or compose a plan.
+The application-owned `trade_plan.prepare_draft@1` seam accepts only a
+user-readable account alias, security code, plan style, and request time. It
+resolves the canonical report and trend, latest confirmed account snapshot and
+risk policy, and active built-in strategy, then compiles and validates the full
+`TradePlanGraph` and persists the `OPEN` draft. The workbook and Skill never
+supply a caller-authored graph or authority-version pin.
+
+After application authoring returns one `OPEN TradePlanDraft`, it becomes an
+immutable confirmed version only after one explicit user confirmation of the
+exact revision/challenge.

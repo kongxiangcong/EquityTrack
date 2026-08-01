@@ -17,6 +17,7 @@ from trading_platform.domain.research_evaluation import (
     ResearchWorkflowRequest,
     ResearchWorkflowResult,
 )
+from trading_platform.domain.recent_trend import RecentTrendAssessment
 
 
 class WorkflowPersistenceError(ValueError):
@@ -229,14 +230,26 @@ class DecisionViewPayloadQuery:
 
 
 @dataclass(frozen=True)
+class RecentTrendAssessmentQuery:
+    assessment_id: str
+
+
+@dataclass(frozen=True)
 class DecisionViewPayload:
     manifest_id: str
     json_artifact_id: str
     html_artifact_id: str
     pdf_artifact_id: str
+    workbook_artifact_id: str
     json_bytes: bytes
     html_bytes: bytes
     pdf_bytes: bytes
+    workbook_bytes: bytes
+    workbook_media_type: str
+    workbook_schema_version: str
+    workbook_filename: str
+    workbook_status: str
+    workbook_reason_code: str | None
 
 
 @dataclass(frozen=True)
@@ -329,10 +342,18 @@ class CommitEvaluationNode:
     request: ResearchWorkflowRequest
     evaluation_fingerprint: str
     engine_code_identity: str
+    bundle_json_artifact: ArtifactPayload
     research_json_artifact: ArtifactPayload
+    forecast_artifact: ArtifactPayload
+    scenario_valuation_artifact: ArtifactPayload
+    valuation_method_route_artifact: ArtifactPayload
+    valuation_simulation_decision_artifact: ArtifactPayload
+    market_path_decision_artifact: ArtifactPayload
+    recent_trend_assessment_artifact: ArtifactPayload
     decision_json_artifact: ArtifactPayload
     decision_html_artifact: ArtifactPayload
     decision_pdf_artifact: ArtifactPayload
+    decision_workbook_artifact: ArtifactPayload
 
 
 @dataclass(frozen=True)
@@ -454,6 +475,7 @@ LedgerLoadResult: TypeAlias = (
     | tuple[Mapping[str, object], ...]
     | tuple[DurableObject, ...]
     | DecisionViewPayload
+    | RecentTrendAssessment
     | tuple[CheckpointMember, ...]
     | QualificationReceiptReplay
     | EvaluationCheckpointResult
@@ -481,6 +503,7 @@ LedgerQuery: TypeAlias = (
     | ResearchArtifactQuery
     | ResearchPayloadQuery
     | DecisionViewPayloadQuery
+    | RecentTrendAssessmentQuery
     | NonterminalWorkflowQuery
     | ObjectInventoryQuery
     | WorkflowDiagnosticQuery
@@ -577,6 +600,11 @@ class WorkflowLedgerPort(Protocol):
 
     @overload
     def load(self, query: DecisionViewPayloadQuery) -> DecisionViewPayload: ...
+
+    @overload
+    def load(
+        self, query: RecentTrendAssessmentQuery
+    ) -> RecentTrendAssessment: ...
 
     @overload
     def load(self, query: NonterminalWorkflowQuery) -> bool: ...

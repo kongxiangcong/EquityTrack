@@ -10,9 +10,13 @@ from trading_platform.application.workflow_ledger import (
     ManifestQuery,
     ResearchArtifactQuery,
     ResearchPayloadQuery,
+    RecentTrendAssessmentQuery,
     SnapshotEvidence,
     SnapshotEvidenceQuery,
     WorkflowHistoryQuery,
+    WorkflowRunQuery,
+    WorkspaceWorkflowEvidence,
+    WorkspaceWorkflowQuery,
     WorkflowDiagnosticQuery,
     WorkflowLedgerPort,
 )
@@ -22,6 +26,7 @@ from trading_platform.domain.workflow import (
     ResearchArtifactView,
     WorkflowHistory,
 )
+from trading_platform.domain.recent_trend import RecentTrendAssessment
 
 
 class WorkflowInspection:
@@ -53,6 +58,19 @@ class ResearchArchive:
 
     def decision_view(self, workflow_run_id: str) -> DecisionViewPayload:
         return self._ledger.load(DecisionViewPayloadQuery(workflow_run_id))
+
+    def get(self, assessment_id: str) -> RecentTrendAssessment:
+        return self._ledger.load(
+            RecentTrendAssessmentQuery(assessment_id)
+        )
+
+    def workspace(self, security_id: str) -> WorkspaceWorkflowEvidence:
+        return self._ledger.load(WorkspaceWorkflowQuery(security_id))
+
+    def request_payload(self, workflow_run_id: str) -> bytes:
+        return self._ledger.load(
+            WorkflowRunQuery(workflow_run_id)
+        ).request_payload
 
 
 class ForecastReview:

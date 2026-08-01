@@ -329,6 +329,28 @@ class ForecastActualQuery:
         return "forecast_actual"
 
 
+@dataclass(frozen=True)
+class ResearchComponentInputQuery:
+    invocation_id: str
+    security_id: str
+    as_of_date: str
+    component_dataset: str
+    dataset_cursor: str | None
+    scope_id: str
+    network_authorized: bool
+
+    def __post_init__(self) -> None:
+        if self.component_dataset not in {
+            "research_model_input",
+            "market_path_policy",
+        }:
+            raise ValueError("RESEARCH_COMPONENT_DATASET_INVALID")
+
+    @property
+    def dataset(self) -> str:
+        return self.component_dataset
+
+
 TypedDatasetQuery = (
     TradingCalendarQuery
     | DailyOhlcvQuery
@@ -336,6 +358,7 @@ TypedDatasetQuery = (
     | OfficialFilingQuery
     | FinancialStatementQuery
     | ForecastActualQuery
+    | ResearchComponentInputQuery
 )
 
 
@@ -401,6 +424,16 @@ class QueryPolicy:
             )
         if dataset == "forecast_actual":
             return ForecastActualQuery(request.invocation_id, request.security_id, request.requested_date, cursor, request.security_id, request.network_authorized)
+        if dataset in {"research_model_input", "market_path_policy"}:
+            return ResearchComponentInputQuery(
+                request.invocation_id,
+                request.security_id,
+                request.requested_date,
+                dataset,
+                cursor,
+                request.security_id,
+                request.network_authorized,
+            )
         raise ValueError("QUERY_DATASET_UNDECLARED")
 
 

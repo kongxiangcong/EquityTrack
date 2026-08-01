@@ -105,6 +105,8 @@ For version 2, declared or uncovered critical fields limit only the capabilities
 
 Integrity failures remain global failures: invalid identity or time metadata, malformed numeric evidence, broken raw hashes when supplied, unresolved source conflicts, or provenance classification conflicts return `passed: false` and fail closed.
 
+`valid_with_limits` authorizes the structurally complete research package, not a formal valuation conclusion. When a required official fact or selected-method input remains missing, the dependent valuation section is a `data_insufficient_memo` with the exact gap, disabled-method reason, and next data requirement; other valid sections remain present.
+
 ## Executable Validation
 
 Run the validator before method execution and before publishing any research report:

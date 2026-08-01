@@ -1,6 +1,6 @@
 # Company Overview Module Specification / 公司概览模块规范
 
-**Related**: `references/analysis-brief-template.md` §III (Company Overview — Business Model / Management / Ownership) and `references/research-document-template.md` §III (same section with expanded word counts for equity reports).
+**Related**: `../output/report-layout.md` — Business and industry section.
 
 ---
 

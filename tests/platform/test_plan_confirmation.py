@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from decimal import Decimal
 import sqlite3
@@ -14,28 +15,58 @@ from tests.platform.test_account_snapshots import _ready_root
 from tests.platform.test_estimated_account_state import _confirmed
 from trading_platform.application import (
     ConfirmTradePlanVersion,
-    CreateTradePlanDraft,
     GetActiveTradePlan,
     IssuePlanConfirmationChallenge,
     PlanCommandActor,
     RejectTradePlanDraft,
-    ReviseTradePlanDraft,
-    open_trade_plan,
+)
+from trading_platform.application.bootstrap import _store
+from trading_platform.application.trade_plan_authoring import (
+    TradePlanTasks,
+    _OpenTradePlanDrafts,
+    _UpsertOpenTradePlanDraft,
 )
 from trading_platform.domain.approvals import ActivationIntent
+from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.domain.account_snapshots import AccountSnapshotVersion
 from trading_platform.domain.plans import (
     CoreFloor,
     CoreSleeve,
     PlanValidationError,
     TradePlanMasterId,
-    build_plan_version,
+    build_trade_plan_draft_graph,
     build_trade_plan_draft,
 )
 
 
 USER = PlanCommandActor("user:local", "skill", "agent:codex")
 AGENT = PlanCommandActor("agent:codex", "skill", "agent:codex")
+
+
+@contextmanager
+def _open_trade_plan_test_seams(data_root):
+    with _store(data_root) as store:
+        repository = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
+        )
+        yield (
+            TradePlanTasks(repository),
+            _OpenTradePlanDrafts(repository),
+        )
+
+
+def _upsert_draft(drafts, draft, invocation_id: str):
+    return drafts.upsert(
+        _UpsertOpenTradePlanDraft(
+            invocation_id=invocation_id,
+            account_id=draft.account_id,
+            security_id=draft.security_id,
+            proposed_graph=draft.proposed_graph,
+            parameters=draft.parameters,
+            updated_at=draft.updated_at,
+            actor=USER,
+        )
+    )
 
 
 def _authority_root(tmp_path):
@@ -109,7 +140,7 @@ def _graph(
     supersedes: str | None = None,
     purpose: str = "confirmation",
 ):
-    return build_plan_version(
+    return build_trade_plan_draft_graph(
         plan_version_id=version_id,
         plan_id=plan_id,
         version_no=version_no,
@@ -138,8 +169,6 @@ def _graph(
         rules=(),
         evidence_references=(),
         adjusted_price_evidence=(),
-        confirmed_at="1970-01-01T00:00:00+00:00",
-        user_approval_receipt_id="pending-user-approval",
     )
 
 
@@ -175,14 +204,12 @@ def _draft(
     )
 
 
-def _create_and_challenge(tasks, draft, suffix: str, intent):
-    created = tasks.execute(
-        CreateTradePlanDraft(f"create:{suffix}", draft, USER)
-    )
+def _create_and_challenge(tasks, drafts, draft, suffix: str, intent):
+    created = _upsert_draft(drafts, draft, f"create:{suffix}")
     challenge = tasks.execute(
         IssuePlanConfirmationChallenge(
             invocation_id=f"challenge:{suffix}",
-            draft_id=draft.draft_id,
+            draft_id=created.draft_id,
             expected_revision=created.revision,
             activation_intent=intent,
             issued_at="2026-07-27T01:05:00+08:00",
@@ -212,9 +239,10 @@ def test_agent_denied_and_stale_or_mismatched_challenge_rejected(
     tmp_path,
 ) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, drafts):
         draft, challenge = _create_and_challenge(
             tasks,
+            drafts,
             _draft(snapshot_id, suffix="denial"),
             "denial",
             ActivationIntent.CONFIRM_AND_ACTIVATE,
@@ -282,11 +310,11 @@ def test_agent_denied_and_stale_or_mismatched_challenge_rejected(
             version_id=draft.proposed_graph.version.plan_version_id,
             purpose="revised",
         )
-        revised = tasks.execute(
-            ReviseTradePlanDraft(
+        revised = drafts.upsert(
+            _UpsertOpenTradePlanDraft(
                 invocation_id="revise:denial",
-                draft_id=draft.draft_id,
-                expected_revision=draft.revision,
+                account_id=draft.account_id,
+                security_id=draft.security_id,
                 proposed_graph=revised_graph,
                 parameters={"purpose": "revised"},
                 updated_at="2026-07-27T01:20:00+08:00",
@@ -341,17 +369,34 @@ def test_confirm_and_enable_emits_events_and_receipt_atomically(
     tmp_path,
 ) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
-        _, challenge = _create_and_challenge(
+    with _open_trade_plan_test_seams(data_root) as (tasks, drafts):
+        draft, challenge = _create_and_challenge(
             tasks,
+            drafts,
             _draft(snapshot_id, suffix="atomic"),
             "atomic",
             ActivationIntent.CONFIRM_AND_ACTIVATE,
+        )
+        assert draft.proposed_graph.schema_version == "TradePlanDraftGraph@1"
+        assert (
+            draft.proposed_graph.version.schema_version
+            == "ProposedTradePlanVersion@1"
+        )
+        assert not hasattr(draft.proposed_graph.version, "confirmed_at")
+        assert not hasattr(
+            draft.proposed_graph.version, "user_approval_receipt_id"
         )
         result = _confirm(tasks, challenge, "atomic")
         replay = _confirm(tasks, challenge, "atomic")
         assert replay == result
         assert result.active_plan is not None
+        assert result.graph.schema_version == "TradePlanGraph@1"
+        assert result.graph.version.confirmed_at == (
+            "2026-07-27T01:10:00+08:00"
+        )
+        assert result.graph.version.user_approval_receipt_id == (
+            result.receipt.approval_receipt_id
+        )
         assert result.active_plan.version == result.graph.version
         assert result.receipt.approved_graph_seal_hash == (
             result.graph.version.graph_seal_hash
@@ -427,9 +472,10 @@ def test_confirmation_failure_rolls_back_receipt_events_and_graph(
     tmp_path,
 ) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, drafts):
         draft, challenge = _create_and_challenge(
             tasks,
+            drafts,
             _draft(snapshot_id, suffix="rollback"),
             "rollback",
             ActivationIntent.CONFIRM_AND_ACTIVATE,
@@ -441,7 +487,7 @@ def test_confirmation_failure_rolls_back_receipt_events_and_graph(
         "WHEN NEW.event_type='PlanActivated' "
         "BEGIN SELECT RAISE(ABORT,'INJECTED_CONFIRMATION_FAILURE'); END"
     )
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, drafts):
         with pytest.raises(
             PlanValidationError,
             match="PLAN_CONFIRMATION_STORAGE_CONFLICT",
@@ -479,9 +525,10 @@ def test_confirm_only_and_rejected_draft_leave_active_slot_unchanged(
     tmp_path,
 ) -> None:
     data_root, snapshot_id = _authority_root(tmp_path)
-    with open_trade_plan(data_root) as tasks:
+    with _open_trade_plan_test_seams(data_root) as (tasks, drafts):
         _, first_challenge = _create_and_challenge(
             tasks,
+            drafts,
             _draft(snapshot_id, suffix="active"),
             "active",
             ActivationIntent.CONFIRM_AND_ACTIVATE,
@@ -499,6 +546,7 @@ def test_confirm_only_and_rejected_draft_leave_active_slot_unchanged(
         )
         _, second_challenge = _create_and_challenge(
             tasks,
+            drafts,
             second_draft,
             "confirm-only",
             ActivationIntent.CONFIRM_ONLY,
@@ -516,10 +564,8 @@ def test_confirm_only_and_rejected_draft_leave_active_slot_unchanged(
             supersedes=second.graph.version.plan_version_id,
             purpose="rejected",
         )
-        created = tasks.execute(
-            CreateTradePlanDraft(
-                "create:rejected", rejected_draft, USER
-            )
+        created = _upsert_draft(
+            drafts, rejected_draft, "create:rejected"
         )
         rejected = tasks.execute(
             RejectTradePlanDraft(

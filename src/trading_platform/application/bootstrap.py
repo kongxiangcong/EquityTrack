@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +23,9 @@ from trading_platform.persistence.account_snapshots import (
 )
 from trading_platform.persistence.market import SQLiteMarketRepository
 from trading_platform.persistence.plans import SQLiteTradePlanRepository
+from trading_platform.persistence.risk_policies import (
+    SQLitePortfolioRiskPolicyRepository,
+)
 from trading_platform.persistence.presence import RuntimePresence
 from trading_platform.persistence.workspace import (
     WorkspaceUpdateAuthorizationService,
@@ -36,14 +40,18 @@ from trading_platform.verification import (
     ProjectVerification,
     SubprocessVerificationExecutor,
 )
+from trading_platform.application.research_workbook import (
+    ResearchWorkbookProjector,
+)
+from trading_platform.valuation_workbook import ValuationWorkbookAdapter
 
 from .cli_tasks import DataSynchronization
 from .health import Health
 from .watchlist import Watchlist
 from .research_tasks import ResearchArchive, WorkflowInspection
+from .research_publication import ResearchPublication
 from .workflow_ledger import QualificationReceiptQuery, WorkflowLedgerPort
 from .web_tasks import (
-    ChartAnnotations,
     ChartWorkspace,
     UpdateAuthorizations,
 )
@@ -51,7 +59,13 @@ from .browser_acceptance import BrowserAcceptanceFixture, load_browser_fixture
 from .account_snapshots import AccountSnapshotCommands, AccountSnapshotQueries
 from .account_state import AccountStateQueries
 from .strategy_catalog import StrategyQueries
-from .trade_plan_authoring import TradePlanTasks
+from .risk_policies import PortfolioRiskPolicies
+from .trade_plan_authoring import (
+    TradePlanTasks,
+    _OpenTradePlanDrafts,
+)
+from .plan_compiler import TradePlanCompiler
+from .plan_drafting import TradePlanDrafting
 from .commands import ApplicationCommandDispatcher
 from .manual_portfolio_review import ManualPortfolioReview
 from .decision_tasks import DecisionTasks
@@ -77,6 +91,9 @@ from trading_platform.persistence.discipline_reviews import (
 from trading_platform.persistence.plan_impacts import (
     SQLitePlanImpactRepository,
 )
+from trading_platform.persistence.research_publication import (
+    FilesystemResearchPublicationRepository,
+)
 from trading_platform.persistence.read_models import (
     SQLiteReadModelProjection,
 )
@@ -87,6 +104,20 @@ from trading_platform.domain.discipline_reviews import (
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _research_workbook_projector(
+    repo_root: Path,
+) -> ResearchWorkbookProjector | None:
+    node = os.environ.get("CODEX_ARTIFACT_NODE")
+    node_modules = os.environ.get("CODEX_ARTIFACT_NODE_MODULES")
+    if not node or not node_modules:
+        return None
+    return ValuationWorkbookAdapter(
+        node_executable=Path(node),
+        node_modules=Path(node_modules),
+        builder_script=repo_root / "scripts" / "render_valuation_xlsx.mjs",
+    )
 
 
 def _ledger(store: PlatformStore) -> WorkflowLedgerPort:
@@ -103,14 +134,27 @@ def _store(
             "PLATFORM_NOT_BOOTSTRAPPED",
             "Run the canonical bootstrap maintenance task first.",
         )
-    store = PlatformStore(data_root, migrations_root or _repo_root() / "migrations")
+    resolved_migrations = migrations_root or _repo_root() / "migrations"
+    store = PlatformStore(data_root, resolved_migrations)
     try:
         files, applied = store.migrations.validate()
         if len(files) != len(applied):
-            raise OperationError(
-                "PLATFORM_MIGRATION_REQUIRED",
-                "Run the canonical migrate maintenance task first.",
-            )
+            store.close()
+            migrated = PlatformOperations(
+                data_root, resolved_migrations
+            ).migrate()
+            if migrated.get("status") != "passed":
+                raise OperationError(
+                    "PLATFORM_MIGRATION_FAILED",
+                    ",".join(migrated.get("errors", ())),
+                )
+            store = PlatformStore(data_root, resolved_migrations)
+            files, applied = store.migrations.validate()
+            if len(files) != len(applied):
+                raise OperationError(
+                    "PLATFORM_MIGRATION_INCOMPLETE",
+                    "The safe lifecycle migration did not reach the current schema.",
+                )
         yield store
     finally:
         store.close()
@@ -221,6 +265,7 @@ def open_research_workflow(
             _ledger(store),
             _repo_root(),
             fault_injector,
+            _research_workbook_projector(_repo_root()),
         )
 
 
@@ -241,28 +286,17 @@ def open_research_archive(
 
 
 @contextmanager
-def open_chart_workspace(
+def open_research_publication(
     data_root: Path, migrations_root: Path | None = None
-) -> Iterator[ChartWorkspace]:
+) -> Iterator[ResearchPublication]:
     with _store(data_root, migrations_root) as store:
-        yield ChartService(store.connection, store.writer_lock)
-
-
-@contextmanager
-def open_chart_annotations(
-    data_root: Path, migrations_root: Path | None = None
-) -> Iterator[ChartAnnotations]:
-    with _store(data_root, migrations_root) as store:
-        yield ChartService(store.connection, store.writer_lock)
-
-
-@contextmanager
-def open_trade_plan(
-    data_root: Path, migrations_root: Path | None = None
-) -> Iterator[TradePlanTasks]:
-    with _store(data_root, migrations_root) as store:
-        yield TradePlanTasks(
-            SQLiteTradePlanRepository(store.connection, store.writer_lock)
+        yield ResearchPublication(
+            _ledger(store),
+            ChartService(store.connection, store.writer_lock),
+            store.watchlist,
+            FilesystemResearchPublicationRepository(
+                store.data_root, store.writer_lock
+            ),
         )
 
 
@@ -271,14 +305,46 @@ def open_application_commands(
     data_root: Path, migrations_root: Path | None = None
 ) -> Iterator[ApplicationCommandDispatcher]:
     with _store(data_root, migrations_root) as store:
+        ledger = _ledger(store)
+        archive = ResearchArchive(ledger)
         journal_repository = SQLiteDecisionJournalRepository(
             store.connection, store.writer_lock
         )
         journal = DecisionJournal(journal_repository)
-        trade_plans = TradePlanTasks(
-            SQLiteTradePlanRepository(
+        account_snapshots = AccountSnapshotCommands(
+            SQLiteAccountSnapshotRepository(
+                store.connection, store.writer_lock
+            ),
+            AccountSnapshotService(),
+        )
+        account_snapshot_queries = AccountSnapshotQueries(
+            SQLiteAccountSnapshotProjection(store.connection)
+        )
+        risk_policies = PortfolioRiskPolicies(
+            SQLitePortfolioRiskPolicyRepository(
                 store.connection, store.writer_lock
             )
+        )
+        plan_repository = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
+        )
+        trade_plans = TradePlanTasks(plan_repository)
+        open_drafts = _OpenTradePlanDrafts(plan_repository)
+        plan_compiler = TradePlanCompiler(
+            research=archive,
+            recent_trends=archive,
+            accounts=account_snapshot_queries,
+            risk_policies=risk_policies,
+            strategies=StrategyQueries(
+                SQLiteStrategyRepository(store.connection)
+            ),
+            drafts=open_drafts,
+        )
+        plan_drafting = TradePlanDrafting(
+            archive=archive,
+            accounts=account_snapshot_queries,
+            watchlist=store.watchlist,
+            compiler=plan_compiler,
         )
         manual_reviews = ManualPortfolioReview(
             SQLiteManualPortfolioReviewRepository(
@@ -288,36 +354,37 @@ def open_application_commands(
                 SQLiteAccountSnapshotProjection(store.connection),
                 journal_repository,
             ),
-            _ledger(store),
+            ledger,
         )
         yield ApplicationCommandDispatcher(
-            AccountSnapshotCommands(
-                SQLiteAccountSnapshotRepository(
-                    store.connection, store.writer_lock
-                ),
-                AccountSnapshotService(),
-            ),
-            trade_plans,
-            manual_reviews,
-            DecisionTasks(
+            account_snapshots=account_snapshots,
+            risk_policies=risk_policies,
+            trade_plans=trade_plans,
+            plan_drafting=plan_drafting,
+            manual_reviews=manual_reviews,
+            decision_tasks=DecisionTasks(
                 SQLiteDecisionTaskRepository(
                     store.connection, store.writer_lock
                 ),
                 journal_repository,
             ),
-            journal,
-            DisciplineReviews(
+            decision_journal=journal,
+            discipline_reviews=DisciplineReviews(
                 SQLiteDisciplineReviewRepository(
                     store.connection, store.writer_lock
                 ),
                 DisciplineReviewService(),
             ),
-            PlanImpacts(
+            plan_impacts=PlanImpacts(
                 SQLitePlanImpactRepository(
                     store.connection, store.writer_lock
                 ),
                 manual_reviews,
                 trade_plans,
+                open_drafts,
+            ),
+            chart_workspace=ChartService(
+                store.connection, store.writer_lock
             ),
         )
 
@@ -414,17 +481,18 @@ def open_plan_impacts(
             ),
             _ledger(store),
         )
-        plan_tasks = TradePlanTasks(
-            SQLiteTradePlanRepository(
-                store.connection, store.writer_lock
-            )
+        plan_repository = SQLiteTradePlanRepository(
+            store.connection, store.writer_lock
         )
+        plan_tasks = TradePlanTasks(plan_repository)
+        open_drafts = _OpenTradePlanDrafts(plan_repository)
         yield PlanImpacts(
             SQLitePlanImpactRepository(
                 store.connection, store.writer_lock
             ),
             manual_reviews,
             plan_tasks,
+            open_drafts,
         )
 
 
@@ -444,7 +512,8 @@ def open_read_models(
                     ),
                 ),
                 _ledger(store),
-            )
+            ),
+            ChartService(store.connection, store.writer_lock),
         )
 
 
@@ -480,6 +549,9 @@ def open_browser_acceptance_fixture(
             ResearchWorkflow(
                 ledger,
                 repo_root,
+                workbook_projector=(
+                    _research_workbook_projector(repo_root)
+                ),
             ),
         )
 
@@ -609,8 +681,6 @@ __all__ = [
     "open_account_acceptance",
     "open_account_history",
     "open_acceptance_evidence",
-    "open_chart_annotations",
-    "open_chart_workspace",
     "open_browser_acceptance_fixture",
     "open_data_synchronization",
     "open_import_preview",
@@ -627,7 +697,6 @@ __all__ = [
     "open_research_archive",
     "open_research_workflow",
     "open_watchlist",
-    "open_trade_plan",
     "open_update_authorizations",
     "open_server_runtime",
     "open_workflow_runtime",

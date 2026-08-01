@@ -1,490 +1,338 @@
-# Output Schema: Interface Contract Between Analysis and Presentation Layers
+# Research Decision Output Projection
 
-> Historical source-run reference only. Formal platform JSON/HTML/XLSX outputs derive
-> from `ResearchDecisionView@2`; standalone validator result paths are not
-> runtime authorities.
+> Active projection reference, not a second runtime schema. The formal
+> presentation contract is `ResearchDecisionView@2`; do not create a standalone
+> brief, validator-owned result, or parallel renderer contract.
 
-This document defines the structured data contract that the analysis engine (Phase 0-3) produces and the presentation layer (Phase 4-5) consumes. Both `tear-sheet` and `equity-report` skills rely on this schema.
+## Wired canonical boundary
 
----
+The formal research route persists one lineage-checked bundle containing typed
+Forecast, ScenarioValuation, valuation-method routing,
+ValuationSimulationDecision, MarketPathDecision, and RecentTrendAssessment. It
+projects the same DecisionView to JSON, HTML, PDF, and one typed workbook slot.
+`trade_plan.prepare_draft@1` is the separate application-owned report-to-plan
+seam. It accepts only a user-readable account alias, security code, plan style,
+and request time. The application selects current research, trend, account,
+risk, and strategy authorities; callers never submit authority identities,
+quantities, or a `TradePlanGraph`.
 
-## Overview
+Consumers inspect the persisted manifest and each component's typed status. A
+method that cannot run is `limited`, `not_run`, or `blocked`; its output must
+not be inferred from the existence of standalone code.
 
-```
-Phase 0-3 (Analysis Engine)  →  Output Schema  →  Phase 4-5 (Presentation Layer)
-                                     ↑
-                              This document defines
-                              the interface contract
-```
+## Canonical pipeline
 
-The analysis engine produces a structured intermediate object (written to `{company}_{ticker}_analysis_brief.md`). The presentation layer reads this object and formats it into the final report (HTML → PDF).
-
-**Neither layer should bypass this contract.** The analysis engine must populate all required fields; the presentation layer must not re-derive analysis conclusions.
-
----
-
-## Schema Definition
-
-### Section I: Metadata
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `company_name` | string | Yes | Full company name (Chinese + English if applicable) |
-| `ticker` | string | Yes | Stock code with exchange suffix (e.g., `600519.SH`, `AAPL`) |
-| `market` | enum | Yes | `A-share` / `HK` / `US` |
-| `report_language` | enum | Yes | `zh-CN` / `en` |
-| `report_date` | date | Yes | Report generation date |
-| `latest_trading_date` | date | Yes | Most recent trading date with data |
-| `latest_financial_report` | string | Yes | e.g., "2024 Annual Report" / "Q3 2025" |
-| `next_earnings_date` | date | Recommended | Estimated next earnings release |
-| `benchmark_index` | string | Yes | Benchmark index code (e.g., `000001.SH`) |
-| `benchmark_name` | string | Yes | Benchmark index name (e.g., "Shanghai Composite / 上证指数") |
-| `output_level` | enum | Yes | `tear-sheet` / `equity-report` |
-| `user_requested_rating` | boolean | Yes | Default `false`; rating language allowed only when true and all gates pass |
-| `source_manifest_path` | string | Yes | Path to the source manifest JSON artifact |
-| `source_manifest_validation_result_path` | string | Yes | Path to the validation JSON emitted by `scripts/source_manifest_validator.py` |
-| `source_manifest_validation_result` | object | Yes | Executable validation result; see shape below |
-| `decision_view_manifest_id` | string | Yes | Canonical immutable manifest for JSON and HTML decision views |
-| `workbook_projection_status` | enum | L2 Yes | `not_requested` / `passed` / `failed` / `runtime_unavailable` |
-| `workbook_blocked_reason` | array | Conditional | Required when workbook projection fails or its runtime is unavailable |
-| `source_manifest_status` | enum | Yes | `sufficient` / `insufficient` / `draft` |
-| `data_quality_grade` | enum | Yes | `High` / `Medium` / `Low` / `Insufficient` |
-| `valuation_method_router_result` | object | Yes | Selected/caution/disabled methods and missing data |
-| `data_insufficient_memo_required` | boolean | Yes | True when critical data or method gates fail |
-
-`source_manifest_status`, `model_validation_status`, `data_insufficient_memo_required`, and `report_generation_allowed` must mirror the validation result JSON files. Presentation and modeling layers must not infer these fields from narrative text.
-
-`source_manifest_validation_result` shape:
-
-```
-{
-  "path": string,
-  "validator": "source_manifest_validator",
-  "validator_version": number,
-  "passed": boolean,
-  "source_manifest_status": "sufficient" | "insufficient" | "draft" | "invalid",
-  "data_insufficient_memo_required": boolean,
-  "summary": {
-    "sources_total": number,
-    "official_sources_total": number,
-    "critical_fields_required": number,
-    "critical_fields_source_covered": number,
-    "critical_fields_explicitly_missing": number,
-    "official_financial_fields_covered": number,
-    "hash_checks": number,
-    "errors": number,
-    "warnings": number
-  },
-  "issues": [
-    { "severity": "error" | "warning", "code": string, "message": string, "path": string }
-  ]
-}
+```text
+Tushare-compatible Frozen DataSnapshot
+  -> ResearchInputOrigin classification
+  -> BoundedEstimate
+  -> Forecast
+  -> stress / base / improvement ScenarioValuation
+  -> ValuationSimulationDecision
+  -> MarketPathDecision
+  -> CompleteResearchReport
+  -> RecentTrendAssessment
+  -> OPEN TradePlanDraft
+  -> one explicit user confirmation
 ```
 
-### Section II: Core Investment Narrative
+## Canonical status vocabulary
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `core_narrative` | string (3-5 sentences) | Yes | Connects: industry trend → company advantage → financial performance → valuation judgment → key risk |
-| `main_title` | string (8-15 chars) | Yes | One-sentence core judgment for report header |
-| `sub_title` | string (15-25 chars) | Yes | Supplementary explanation for report header |
-| `core_viewpoint` | string (3-4 sentences) | Yes | ①Company position ②Financial highlights ③Valuation judgment ④Main risks |
+### Wiring status
 
-### Section III: Six-Dimension Analysis (六维分析)
+`wired`
 
-Each dimension follows this structure:
+Every component in the canonical pipeline has one formal production seam.
+Runtime applicability and evidence limits belong to the component status, not
+to a second wiring path.
 
-```
-{
-  "dimension_id": "H1" | "H2" | "H3" | "H4" | "H5" | "H6",
-  "dimension_name": string,
-  "conclusion": string,
-  "key_data_support": string[],
-  "so_what": string,
-  "anomalies": string[] | null,       // H3 (earnings quality) specific
-  "information_class": "verified" | "partially_verified" | "unverified"  // Internal only, never shown in report
-}
-```
+### Research input origin
 
-| Dimension | Name | Maps to Report Module |
-|-----------|------|-----------------------|
-| H1 | Competitive Landscape (竞争格局) | Caption title, 公司概览, Investment Thesis Table Row 1 |
-| H2 | Growth Drivers (增长驱动) | Investment Logic (short-term catalysts), Investment Thesis Table Row 2 |
-| H3 | Earnings Quality (盈利质量) | Financial Analysis (盈利质量信号), Investment Thesis Table Row 3, Risk Disclosure |
-| H4 | Valuation & Expectations (估值与预期) | Valuation module, Investment Thesis Table Row 4 |
-| H5 | Geopolitics/Policy (地缘/政策) | Risk Disclosure, Catalyst Calendar |
-| H6 | Technology/Product Cycle (技术/产品周期) | Industry Analysis, Supply Chain |
+`observed_official | observed_structured | derived | estimated | missing`
 
-### Section IV: Investment Logic
+- Tushare-compatible data is `observed_structured`, with its actual gateway
+  identity preserved.
+- `estimated` always points to a `BoundedEstimate`.
+- `missing` is not zero.
 
-```
-{
-  "short_term": {
-    "bull_factors": [
-      {
-        "description": string,
-        "data_support": string,
-        "inflection_condition": string,
-        "pricing_level": string
-      }
-    ],  // 2-3 items
-    "bear_factors": [
-      {
-        "description": string,
-        "risk_level": "High" | "Medium" | "Low",
-        "trigger_condition": string
-      }
-    ],  // 1-2 items (mandatory ≥1)
-    "capital_market_structure": {
-      "description": string,
-      "data_support": string
-    }
-  },
-  "long_term": {
-    "bull_factors": [...],    // 2-4 items
-    "bear_factors": [...]     // 1-2 items (mandatory ≥1)
-  }
-}
-```
+### Method status
 
-### Section V: Investment Thesis Comprehensive Analysis Table (投资论点综合分析表)
+`ready | limited | caution | blocked | disabled`
 
-4 rows × 6 columns, strictly structured:
+### Decision status
 
-| Row | Dimension | Bull Arguments | Bear Arguments | Key Assumptions | Turning Point Signal | Judgment |
-|-----|-----------|----------------|----------------|-----------------|---------------------|----------|
-| 1 | Competitive Landscape (H1) | | | | | |
-| 2 | Growth Drivers (H2) | | | | | |
-| 3 | Earnings Quality (H3) | | | | | |
-| 4 | Valuation & Expectations (H4) | | | | | |
+`ready | partial | not_run | blocked`
 
-### Section VI: Company Overview Data
+### Report disposition
 
-```
-{
-  "background": {
-    "founding": string,        // Founder, year, location, listing history
-    "management": string,      // Key management assessment (see analysis-brief-template.md §III Management & Governance)
-    "ownership": string        // Equity structure, controlling shareholder, institutional holders
-  },
-  "business_model": {
-    "value_proposition": string,  // What they do, for whom, how they make money
-    "moat": string,               // Core competitive advantage (see analysis-brief-template.md §II.2.1 Competitive Moat — 6 types: brand / switching cost / network / scale / technology / policy)
-    "cost_structure": string      // Key cost drivers
-  },
-  "recent_developments": {
-    "summary": string,
-    "key_financials": string,
-    "announcements": string
-  },
-  "business_segments": [
-    {
-      "segment_name": string,
-      "revenue": number,
-      "revenue_pct": number,
-      "yoy_growth": number,
-      "gross_margin": number
-    }
-  ]
-}
+`completed | completed_with_limits | blocked`
+
+`source_manifest_status = valid_with_limits` maps to
+`completed_with_limits`. Missing required official evidence or selected-method
+inputs puts the dependent valuation section in `data_insufficient_memo`
+disposition and withholds formal conclusions; the remaining research structure
+stays present. `blocked` is reserved for global identity, PIT, rights,
+provenance, reproducibility, or calculation-integrity failure.
+
+### Valuation-view status
+
+`ready | limited | unavailable | blocked`
+
+This is the aggregate valuation view. Individual methods continue to use the
+method-status vocabulary above.
+
+### Data-quality grade
+
+`A | B | C | D`
+
+The grade summarizes evidence quality under the canonical runtime policy.
+`limits` independently records the concrete coverage, estimation, method, or
+projection constraints that affect interpretation. Do not encode limits as a
+second grade, infer limits solely from the grade, or retain
+another named grade scale.
+
+## Required canonical projection
+
+The canonical DecisionView contains the following sections. This is a field
+requirement of the active presentation model, not an independently versioned
+JSON schema.
+
+```yaml
+identity:
+  security_id:
+  as_of:
+  data_snapshot_id:
+  research_run_id:
+  workflow_run_id:
+  model_identity:
+  policy_identity:
+  code_identity:
+
+wiring:
+  forecast: wired
+  scenario_valuation: wired
+  valuation_simulation: wired
+  market_path: wired
+  xlsx_projection: wired
+  recent_trend: wired
+  trade_plan_draft: wired
+
+report:
+  disposition: completed | completed_with_limits | blocked
+  source_manifest_status: sufficient | valid_with_limits
+  data_quality_grade: A | B | C | D
+  limits: []
+  valuation_view:
+  risk_reward_summary:
+  key_uncertainties: []
+  what_would_change_the_view: []
+
+origin_ledger: []
+bounded_estimates: []
+forecast: {}
+scenario_valuation: {}
+valuation_simulation_decision: {}
+market_path_decision: {}
+recent_trend_assessment: {}
+trade_plan_handoff: {}
+audit: {}
+boundary: {}
 ```
 
-### Section VII: Financial Data
+Every top-level target section must be present. When a stage does not run, its
+object carries status and reason codes; it is not omitted or set to an
+ambiguous empty value.
 
-```
-{
-  "source_manifest_validation_result": { ... },
-  "source_manifest_status": "sufficient" | "insufficient" | "draft",
-  "model_validation_result": { ... } | null,
-  "model_validation_status": "not_run" | "passed" | "failed" | "not_available",
-  "model_blocked_reason": [] | [{ "code": string, "message": string, "path": string }],
-  "report_generation_allowed": boolean,
-  "data_insufficient_memo_required": boolean,
-  "income_statement": { ... },       // Revenue, net income, EPS, margins (3Y historical + 2Y forecast)
-  "balance_sheet_highlights": { ... },
-  "cash_flow_highlights": { ... },
-  "earnings_quality_signals": string[],  // Anomaly checks: OCF/NI ratio, DSO/DIO/DPO trends, non-recurring items, accounting policy vs peers (see analysis-brief-template.md §V / research-document-template.md §II.2.3)
-  "key_ratios": {
-    "profitability": { "gross_margin", "net_margin", "roe", ... },
-    "growth": { "revenue_yoy", "net_income_yoy", ... },
-    "solvency": { "debt_ratio", "current_ratio", ... },
-    "cash_flow": { "ocf", "fcf", "ocf_to_net_income", ... }
-  }
-}
+## Origin entry
+
+```yaml
+field_name:
+subject_id:
+period:
+as_of:
+value:
+unit:
+currency:
+origin: observed_official | observed_structured | derived | estimated | missing
+source_refs: []
+available_at:
+derived_from: []
+estimate_id:
+missing_reason:
 ```
 
-Each financial field must use the following shape:
+Rules:
 
-```
-{
-  "value": number | null,
-  "source_id": string | "missing",
-  "currency": string,
-  "unit": string,
-  "reporting_period": string,
-  "accounting_standard": string,
-  "retrieved_at": string,
-  "restated": boolean,
-  "missing_reason": string | null
-}
-```
+1. `observed_official` and `observed_structured` require source identity and
+   PIT timestamps.
+2. `derived` requires named operands and a formula identity.
+3. `estimated` requires `estimate_id` and no claim of official coverage.
+4. `missing` requires `missing_reason` and has no numeric value.
+5. Presentation must preserve origin; it may not collapse all non-missing
+   values into “fact”.
 
-### Section VIII: Valuation Data
+## Bounded estimate
 
-All valuation output starts with method routing. L2 does not imply DCF.
-
-```
-{
-  "industry_classification": string,
-  "lifecycle": string,
-  "method_router_result": {
-    "selected_methods": [
-      { "method": string, "role": "primary" | "secondary" | "cross_check", "reason": string }
-    ],
-    "caution_methods": [
-      { "method": string, "reason": string, "required_checks": string[] }
-    ],
-    "disabled_methods": [
-      { "method": string, "reason": string }
-    ],
-    "required_data": string[],
-    "missing_data": string[]
-  },
-  "dcf_applicability": {
-    "status": "not_selected" | "allowed" | "caution" | "disabled",
-    "reason": string,
-    "required_source_ids": string[],
-    "missing_data": string[]
-  },
-  "source_manifest_status": "sufficient" | "insufficient" | "draft",
-  "source_manifest_validation_result": { ... },
-  "model_validation_result": { ... } | null,
-  "model_validation_status": "not_run" | "passed" | "failed" | "not_available",
-  "model_blocked_reason": [] | [{ "code": string, "message": string, "path": string }],
-  "report_generation_allowed": boolean,
-  "data_insufficient_memo_required": boolean
-}
+```yaml
+estimate_id:
+field_name:
+point:
+lower_bound:
+upper_bound:
+unit:
+currency:
+period:
+as_of:
+estimator_identity:
+estimate_policy_identity:
+calibration_window:
+calibration_sample_identity:
+source_refs: []
+confidence: high | medium | low
+rationale:
+invalidation_condition:
 ```
 
-**Level 1 (Tear Sheet):**
-```
-{
-  "valuation_table": {
-    // PE/PB/PS/EV-EBITDA for 3Y historical + 2Y forecast
-  },
-  "consensus_expectations": {
-    "coverage_count": number,
-    "eps_forecast": number,
-    "revenue_forecast": number,
-    "revision_trend": string,
-    "peg": number
-  },
-  "comparable_companies": [
-    { "name", "ticker", "market_cap", "pe", "pb", "ps", ... }
-  ],
-  "industry_average": { "pe", "pb", "ps", ... },
-  "premium_discount_analysis": string,
-  "valuation_view": string,
-  "risk_reward_summary": string
-}
-```
+Bounds must be ordered and finite. The point must lie within the bounds. A
+bounded estimate may support a conditional/limited method result but cannot
+upgrade source authority or independently authorize a formal rating or target.
 
-**Level 2 (Equity Report) — extends Level 1 with:**
-```
-{
-  "dcf": null | {
-    "wacc": number,
-    "terminal_growth": number,
-    "fcf_projections": [...],
-    "terminal_value": number,
-    "enterprise_value": number,
-    "equity_value_per_share": number,
-    "sensitivity_matrix": { ... }
-  },
-  "rnpv_assets": null | [...],
-  "financial_firm_equity_model": null | { ... },
-  "nav_or_sotp": null | { ... },
-  "historical_band": {
-    "pe_band": { "high", "low", "median", "current_percentile" },
-    "pb_band": { ... }
-  },
-  "sotp": { ... },  // Sum-of-the-parts if applicable
-  "valuation_synthesis": string  // Cross-method comparison narrative
-}
+## Forecast and ScenarioValuation
+
+Forecast records its horizon, drivers, origin mix, formulas, statement
+reconciliations, limitations and artifact identity.
+
+ScenarioValuation contains exactly `stress`, `base`, and `improvement` over the
+same driver structure:
+
+```yaml
+probability_mode: conditional_only | evidence_weighted
+scenarios:
+  - role: stress | base | improvement
+    driver_overrides: []
+    forecast_summary: {}
+    methods: []
+weighted_method_ranges: []
 ```
 
-`dcf` must be `null` unless `dcf_applicability.status` is `allowed` or documented `caution`.
+With `conditional_only`, probability and weighted ranges are absent. With
+`evidence_weighted`, all three probabilities require PIT-valid calibration and
+sum exactly to one. Bull/Base/Bear aliases and default probabilities are not
+allowed.
 
-### Section VIII-a: Data Insufficient Memo
+Each method result records role, status, applicability, observed/derived/
+estimated/missing inputs, formula identity, conditional range, diagnostics and
+conclusion permission (`formal | conditional_only | none`).
 
-When `data_insufficient_memo_required = true`, the presentation layer must render this memo instead of a valuation conclusion:
+## ValuationSimulationDecision
 
-```
-{
-  "memo_type": "data_insufficient_memo",
-  "missing_critical_data": [
-    { "field": string, "required_for": string, "missing_reason": string }
-  ],
-  "unavailable_tools": string[],
-  "disabled_methods": [
-    { "method": string, "reason": string }
-  ],
-  "allowed_output": ["research_notes", "source_gap_table", "next_data_requirements"],
-  "prohibited_output": ["rating", "target_price", "buy_sell_advice", "probability_weighted_target"]
-}
-```
+The object always exists:
 
-### Section VIII-b: Model Blocked Memo
-
-When `model_validation_status = failed` or `report_generation_allowed = false`, the presentation layer must render this memo instead of a full valuation report:
-
-```
-{
-  "memo_type": "model_blocked_memo",
-  "model_validation_result": { ... },
-  "model_blocked_reason": [
-    { "code": string, "message": string, "path": string }
-  ],
-  "missing_critical_data": [
-    { "field": string, "required_for": string, "missing_reason": string }
-  ],
-  "disabled_methods": [
-    { "method": string, "reason": string }
-  ],
-  "allowed_output": ["blocked_reason", "source_gap_table", "next_data_requirements"],
-  "prohibited_output": ["rating", "target_price", "buy_sell_advice", "probability_weighted_target", "dcf_derived_value"]
-}
+```yaml
+status: ready | partial | not_run | blocked
+reason_codes: []
+deterministic_fallback: {}
+simulation_result:
+  model_identity:
+  policy_identity:
+  distributions: []
+  dependency_model:
+  constraints:
+  rng_identity:
+  seed:
+  sample_budget:
+  completed_samples:
+  converged:
+  invalid_path_rate:
+  quantiles:
+  tails:
 ```
 
-### Section IX: Catalyst Calendar
+`simulation_result` exists only when an actual formal simulation ran. A
+non-converged result is `partial` and must withhold unstable quantiles.
+`not_run` preserves the deterministic three-scenario fallback.
 
-```
-[
-  {
-    "date": date,
-    "event": string,
-    "importance": "High" | "Medium" | "Low",
-    "impact_analysis": string,
-    "market_expectation": string,
-    "source": string
-  }
-]
-// Minimum 4 events, must include next earnings, ≥2 High importance
-```
+## MarketPathDecision
 
-### Section X: Scenario Analysis
+The object always exists and is separate from intrinsic value:
 
-```
-{
-  "probability_basis": "historical_frequency" | "market_implied" | "consensus_distribution" | "clinical_pos" | "commodity_curve" | "user_defined" | "not_quantified",
-  "optimistic": { "probability", "assumptions", "revenue", "net_income", "target_pe", "implied_market_cap" },
-  "base_case": { ... },
-  "pessimistic": { ... }
-}
-```
-
-If `probability_basis = not_quantified`, omit probability-weighted target/value.
-
-### Section XIV: Final Research View
-
-Default final output:
-
-```
-{
-  "valuation_view": string,
-  "risk_reward_summary": string,
-  "data_quality_grade": "High" | "Medium" | "Low" | "Insufficient",
-  "key_uncertainties": string[],
-  "what_would_change_the_view": string[],
-  "rating": null | {
-    "value": "BUY" | "HOLD" | "SELL",
-    "user_requested_rating": true,
-    "non_investment_advice_boundary": string
-  }
-}
+```yaml
+status: ready | partial | not_run | blocked
+reason_codes: []
+interpretation: traded_price_uncertainty_only
+market_path_result:
+  market_data_snapshot_identity:
+  adjustment_mode:
+  trading_calendar_identity:
+  state_model_identity:
+  constraints:
+  transaction_costs:
+  rng_identity:
+  seed:
+  path_budget:
+  horizon_return_quantiles:
+  maximum_drawdown_quantiles:
+  threshold_frequencies:
 ```
 
-`rating` must be `null` unless `user_requested_rating = true` and all critical source/method gates pass.
+Do not substitute arbitrary GBM or describe market paths as target prices,
+intrinsic value, or trading instructions.
 
-### Section XI: Risk List
+## CompleteResearchReport
 
-```
-[
-  { "risk_type": string, "description": string, "impact": "High"|"Medium"|"Low", "probability": "High"|"Medium"|"Low" }
-]
-```
+The report is structurally complete when it contains identity/wiring, decision
+summary, origin ledger, bounded estimates/missing inputs, business/industry,
+Forecast, three-scenario valuation, both simulation decisions, recent trend,
+risks/monitoring, audit, financial boundary and trade-plan handoff.
 
-### Section XII: Industry & Supply Chain
+A limited or blocked method remains visible in its section. A missing chart,
+workbook, simulation, or official fact limits only the dependent projection or
+method. Do not replace the report with a memo for `valid_with_limits`.
 
-```
-{
-  "industry_overview": string,
-  "market_concentration": string,      // CR3/CR5
-  "pricing_power": string,
-  "entry_barriers": string,
-  "competitive_trend": string,
-  "supply_chain": {
-    "upstream": [...],
-    "midstream": [...],
-    "downstream": [...],
-    "end_users": [...]
-  }
-}
-```
+## RecentTrendAssessment and trade-plan handoff
 
-### Section XIII: Stock Price & Trading Data
+Recent trend records the frozen observation window, adjustment convention,
+benchmark, deterministic indicators, trend state, uncertainty and invalidation
+conditions. It is neither a valuation nor a simulated path.
 
-```
-{
-  "stock_csv_path": string,        // Path to 52-week stock price CSV
-  "benchmark_csv_path": string,    // Path to benchmark index CSV
-  "current_price": number,
-  "52w_high": number,
-  "52w_low": number,
-  "market_cap": number,
-  "pe_ttm": number,
-  "pb": number,
-  "daily_volume": number,
-  "turnover_rate": number,
-  "beta": number,
-  "dividend_yield": number
-}
+The handoff is returned only by `trade_plan.prepare_draft@1`. The Skill,
+renderer, and workbook must not compose or submit a `TradePlanGraph`.
+
+```yaml
+trade_plan_handoff:
+  status: open | not_created | blocked
+  reason_codes: []
+  trade_plan_draft_id:
+  revision:
+  content_hash:
+  confirmation_challenge_id:
+  confirmation_required: true
 ```
 
----
+An `open` draft is not active. Present its readable final revision and diff,
+then obtain one explicit user confirmation. Exact revision/challenge binding
+remains an internal safety mechanism. A revised draft invalidates the old
+challenge.
 
-## Consumption Rules
+The wired drafting seam accepts a user-readable account alias, security code,
+plan style, and request time. It resolves the latest complete research and bound
+trend plus the confirmed account, risk policy, and active built-in strategy,
+compiles and validates the graph, and persists one `OPEN` draft. A missing or
+stale authority returns a typed `not_created` or `blocked` reason; callers never
+supply a graph or pin an authority version.
 
-### For `tear-sheet` skill (Level 1):
-- Consumes all sections
-- Valuation uses Level 1 only
-- All modules condensed into 3-5 page dual-box layout
-- Content is bullet-focused, maximum information density
+## Projection and validation invariants
 
-### For `equity-report` skill L2 (Full Version):
-- Consumes all sections
-- Valuation uses method-routed Level 2; DCF appears only when `dcf_applicability.status` is `allowed` or documented `caution`
-- Task 1 → Task 2 (Excel model) → Task 3
-- Modules expand into full paragraphs with deeper analysis
-- ≥25 pages, flexible layout
-
-### For `equity-report` skill L1 (Streamlined Version):
-- Consumes all sections EXCEPT §XII (Preliminary DCF inputs are replaced with comps data)
-- Valuation uses Level 1 only (Comparable companies + consensus + scenario table)
-- Task 1 → Task 3 directly (no Task 2 Excel model)
-- §XII of the research document must contain: valuation method router result, ≥3 comparable companies with full financial metrics when applicable, sourced consensus estimates when available, and scenario assumptions
-- ≥25 pages, flexible layout
-- DCF, Historical Band, and Sensitivity Matrix modules are SKIPPED in Task 3
-
-### Validation Rules:
-1. `core_narrative` must not be empty
-2. All 6 dimensions of six-dimension analysis must have conclusions
-3. Investment thesis table must have exactly 4 rows
-4. Both short-term and long-term investment logic must have ≥1 bear factor
-5. Catalyst calendar must have ≥4 events including next earnings
-6. All financial data must have source attribution
-7. No fabricated/placeholder data allowed
-8. Every critical number must have `source_id` or `missing`
-9. `dcf` must be null when DCF applicability is disabled
-10. `rating` must be null unless `user_requested_rating = true`
-11. If `data_insufficient_memo_required = true`, presentation must not render rating, target price, or buy/sell advice
+1. JSON, HTML/PDF and XLSX project the same canonical content.
+2. Only persisted manifest members may be reported as produced.
+3. XLSX recomputes formulas but cannot become a second valuation authority.
+4. Every numeric field has an origin; every estimate has bounds and identity.
+5. Every required section has a status, including `not_run` decisions.
+6. Unknown is never zero and placeholders are prohibited.
+7. Missing official critical inputs prohibit a formal target, rating or
+   unqualified valuation conclusion, not the complete report structure.
+8. Rating remains absent unless explicitly requested and every applicable
+   source/method gate passes.
+9. BUY/HOLD/SELL language, Chinese equivalents, target-price conclusions,
+   personalized action advice and probability-weighted targets are prohibited
+   by default.

@@ -13,6 +13,9 @@ from trading_platform.application.workflow_ledger import (
     ResearchEvaluationRecord,
     WorkflowPersistenceError,
 )
+from trading_platform.domain.research_bundle import (
+    verify_research_evaluation_bundle,
+)
 from trading_platform.domain.workflow import ReferenceDisposition
 from trading_platform.identity import canonical_hash
 from trading_platform.persistence.locking import DataRootWriterLock
@@ -38,9 +41,133 @@ class _ResearchArtifactCommit:
     def commit(
         self, command: CommitEvaluationNode
     ) -> EvaluationCheckpointResult:
+        try:
+            bundle_payload = json.loads(
+                command.bundle_json_artifact.payload.decode("utf-8")
+            )
+            research_payload = json.loads(
+                command.research_json_artifact.payload.decode("utf-8")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WorkflowPersistenceError(
+                "RESEARCH_EVALUATION_PAYLOAD_INVALID",
+                "commit_checkpoint",
+                command.workflow_run_id,
+            ) from error
+        if (
+            not isinstance(bundle_payload, Mapping)
+            or not isinstance(research_payload, Mapping)
+            or command.bundle_json_artifact.media_type
+            != "application/json"
+            or command.bundle_json_artifact.schema_version
+            != "ResearchEvaluationBundle@1"
+            or command.research_json_artifact.media_type
+            != "application/json"
+        ):
+            raise WorkflowPersistenceError(
+                "RESEARCH_EVALUATION_PAYLOAD_INVALID",
+                "commit_checkpoint",
+                command.workflow_run_id,
+            )
+
+        snapshot = self._connection.execute(
+            "SELECT source_policy_identity FROM data_snapshot "
+            "WHERE data_snapshot_id=?",
+            (command.request.data_snapshot_id,),
+        ).fetchone()
+        snapshot_members = self._connection.execute(
+            "SELECT normalized_version_id FROM data_snapshot_member "
+            "WHERE data_snapshot_id=? ORDER BY member_order",
+            (command.request.data_snapshot_id,),
+        ).fetchall()
+        if snapshot is None or not snapshot_members:
+            raise WorkflowPersistenceError(
+                "RESEARCH_EVALUATION_SNAPSHOT_INVALID",
+                "commit_checkpoint",
+                command.request.data_snapshot_id,
+            )
+        try:
+            verified = verify_research_evaluation_bundle(
+                bundle_payload,
+                expected_data_snapshot_id=command.request.data_snapshot_id,
+                expected_source_policy_identity=str(snapshot[0]),
+                expected_snapshot_member_ids=tuple(
+                    str(row[0]) for row in snapshot_members
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise WorkflowPersistenceError(
+                "RESEARCH_EVALUATION_PAYLOAD_INVALID",
+                "commit_checkpoint",
+                command.workflow_run_id,
+            ) from error
+        if verified.research_run != research_payload:
+            raise WorkflowPersistenceError(
+                "RESEARCH_EVALUATION_PAYLOAD_INVALID",
+                "commit_checkpoint",
+                command.workflow_run_id,
+            )
+
+        component_artifacts = {
+            "forecast": command.forecast_artifact,
+            "scenario_valuation": command.scenario_valuation_artifact,
+            "valuation_method_route": command.valuation_method_route_artifact,
+            "valuation_simulation_decision": (
+                command.valuation_simulation_decision_artifact
+            ),
+            "market_path_decision": command.market_path_decision_artifact,
+            "recent_trend_assessment": (
+                command.recent_trend_assessment_artifact
+            ),
+        }
+        for component_name, artifact in component_artifacts.items():
+            try:
+                component_payload = json.loads(
+                    artifact.payload.decode("utf-8")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise WorkflowPersistenceError(
+                    "RESEARCH_COMPONENT_BUNDLE_INVALID",
+                    "commit_checkpoint",
+                    component_name,
+                ) from error
+            if (
+                not isinstance(component_payload, Mapping)
+                or component_payload
+                != verified.components[component_name]
+                or artifact.media_type != "application/json"
+                or artifact.schema_version != "ResearchComponentResult@1"
+            ):
+                raise WorkflowPersistenceError(
+                    "RESEARCH_COMPONENT_BUNDLE_INVALID",
+                    "commit_checkpoint",
+                    component_name,
+                )
+
         published = {
+            "research_bundle_json": self._publish_durable(
+                command.bundle_json_artifact.payload
+            ),
             "research_json": self._publish_durable(
                 command.research_json_artifact.payload
+            ),
+            "forecast": self._publish_durable(
+                command.forecast_artifact.payload
+            ),
+            "scenario_valuation": self._publish_durable(
+                command.scenario_valuation_artifact.payload
+            ),
+            "valuation_method_route": self._publish_durable(
+                command.valuation_method_route_artifact.payload
+            ),
+            "valuation_simulation_decision": self._publish_durable(
+                command.valuation_simulation_decision_artifact.payload
+            ),
+            "market_path_decision": self._publish_durable(
+                command.market_path_decision_artifact.payload
+            ),
+            "recent_trend_assessment": self._publish_durable(
+                command.recent_trend_assessment_artifact.payload
             ),
             "decision_view_json": self._publish_durable(
                 command.decision_json_artifact.payload
@@ -51,16 +178,10 @@ class _ResearchArtifactCommit:
             "decision_view_pdf": self._publish_durable(
                 command.decision_pdf_artifact.payload
             ),
+            "decision_view_workbook": self._publish_durable(
+                command.decision_workbook_artifact.payload
+            ),
         }
-        research_payload = json.loads(
-            command.research_json_artifact.payload.decode("utf-8")
-        )
-        if not isinstance(research_payload, Mapping):
-            raise WorkflowPersistenceError(
-                "RESEARCH_EVALUATION_PAYLOAD_INVALID",
-                "commit_checkpoint",
-                command.workflow_run_id,
-            )
         plan_json = json.dumps(
             command.request.evaluation_plan.canonical_content,
             ensure_ascii=False,
@@ -113,10 +234,45 @@ class _ResearchArtifactCommit:
                         plan_id,
                     )
                 artifacts = {
+                    "research_bundle_json": self._register_artifact(
+                        published["research_bundle_json"],
+                        command.bundle_json_artifact.media_type,
+                        command.bundle_json_artifact.schema_version,
+                    ),
                     "research_json": self._register_artifact(
                         published["research_json"],
                         command.research_json_artifact.media_type,
                         command.research_json_artifact.schema_version,
+                    ),
+                    "forecast": self._register_artifact(
+                        published["forecast"],
+                        command.forecast_artifact.media_type,
+                        command.forecast_artifact.schema_version,
+                    ),
+                    "scenario_valuation": self._register_artifact(
+                        published["scenario_valuation"],
+                        command.scenario_valuation_artifact.media_type,
+                        command.scenario_valuation_artifact.schema_version,
+                    ),
+                    "valuation_method_route": self._register_artifact(
+                        published["valuation_method_route"],
+                        command.valuation_method_route_artifact.media_type,
+                        command.valuation_method_route_artifact.schema_version,
+                    ),
+                    "valuation_simulation_decision": self._register_artifact(
+                        published["valuation_simulation_decision"],
+                        command.valuation_simulation_decision_artifact.media_type,
+                        command.valuation_simulation_decision_artifact.schema_version,
+                    ),
+                    "market_path_decision": self._register_artifact(
+                        published["market_path_decision"],
+                        command.market_path_decision_artifact.media_type,
+                        command.market_path_decision_artifact.schema_version,
+                    ),
+                    "recent_trend_assessment": self._register_artifact(
+                        published["recent_trend_assessment"],
+                        command.recent_trend_assessment_artifact.media_type,
+                        command.recent_trend_assessment_artifact.schema_version,
                     ),
                     "decision_view_json": self._register_artifact(
                         published["decision_view_json"],
@@ -132,6 +288,11 @@ class _ResearchArtifactCommit:
                         published["decision_view_pdf"],
                         command.decision_pdf_artifact.media_type,
                         command.decision_pdf_artifact.schema_version,
+                    ),
+                    "decision_view_workbook": self._register_artifact(
+                        published["decision_view_workbook"],
+                        command.decision_workbook_artifact.media_type,
+                        command.decision_workbook_artifact.schema_version,
                     ),
                 }
                 existing = self._connection.execute(
@@ -165,7 +326,7 @@ class _ResearchArtifactCommit:
                         command.request.evaluation_plan.horizon.as_of
                     ),
                     status=str(research_payload.get("status", "blocked")),
-                    canonical_json_artifact_id=artifacts["research_json"],
+                    canonical_json_artifact_id=artifacts["research_bundle_json"],
                 )
                 if existing is None:
                     self._connection.execute(
@@ -190,7 +351,7 @@ class _ResearchArtifactCommit:
                         record.research_run_id
                         != str(research_payload.get("run_id", ""))
                         or record.canonical_json_artifact_id
-                        != artifacts["research_json"]
+                        != artifacts["research_bundle_json"]
                         or record.evaluation_plan_id != plan_id
                         or record.data_snapshot_id
                         != command.request.data_snapshot_id
@@ -217,6 +378,11 @@ class _ResearchArtifactCommit:
                         "decision_view_pdf",
                         "output",
                     ),
+                    (
+                        artifacts["decision_view_workbook"],
+                        "decision_view_workbook",
+                        "output",
+                    ),
                 )
                 decision_identity = [
                     {
@@ -228,7 +394,7 @@ class _ResearchArtifactCommit:
                 ]
                 decision_manifest_id = "manifest_" + canonical_hash(
                     {
-                        "role": "workflow_decision_view@2",
+                        "role": "workflow_decision_view@3",
                         "producer_type": "WorkflowRun",
                         "producer_id": command.workflow_run_id,
                         "members": decision_identity,
@@ -238,7 +404,7 @@ class _ResearchArtifactCommit:
                     "INSERT INTO artifact_manifest VALUES(?,?,?,?,?,?,?)",
                     (
                         decision_manifest_id,
-                        "workflow_decision_view@2",
+                        "workflow_decision_view@3",
                         "WorkflowRun",
                         command.workflow_run_id,
                         canonical_hash(decision_identity),
@@ -252,11 +418,14 @@ class _ResearchArtifactCommit:
                         (decision_manifest_id, index, *member),
                     )
                 members = (
-                    (
-                        artifacts["research_json"],
-                        "research_run_json",
-                        "output",
-                    ),
+                    (artifacts["research_bundle_json"], "research_bundle_json", "output"),
+                    (artifacts["research_json"], "research_run_json", "output"),
+                    (artifacts["forecast"], "forecast", "output"),
+                    (artifacts["scenario_valuation"], "scenario_valuation", "output"),
+                    (artifacts["valuation_method_route"], "valuation_method_route", "output"),
+                    (artifacts["valuation_simulation_decision"], "valuation_simulation_decision", "output"),
+                    (artifacts["market_path_decision"], "market_path_decision", "output"),
+                    (artifacts["recent_trend_assessment"], "recent_trend_assessment", "output"),
                     *decision_members,
                 )
                 identity = [

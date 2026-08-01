@@ -21,10 +21,23 @@ class ReviewOutcome(str, Enum):
     DRAFT_UPDATE_PROPOSED = "DRAFT_UPDATE_PROPOSED"
 
 
+_SESSION_SELECTION = "latest_proven_complete_session"
+_UNIVERSE_ROLE_PRECEDENCE = ("holding", "watchlist")
+
+
 @dataclass(frozen=True)
-class ManualReviewHolding:
+class ProvenCompleteSession:
+    selected_complete_session: str
+    data_snapshot_id: str
+    calendar_identity: str
+    policy_identities: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ManualReviewUniverseMember:
     security_id: str
-    position_identity: str
+    universe_member_identity: str
+    universe_roles: tuple[str, ...]
     active_plan_id: str | None
     plan_version_id: str | None
     plan_evaluation_id: str | None
@@ -50,9 +63,10 @@ class ManualReviewContext:
     account_snapshot_hash: str
     account_snapshot_cutoff: str
     estimated_state_hash: str
+    selected_complete_session: str
     calendar_identity: str
     policy_identities: tuple[str, ...]
-    holdings: tuple[ManualReviewHolding, ...]
+    members: tuple[ManualReviewUniverseMember, ...]
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,7 @@ class ManualPortfolioReviewRun:
     workflow_run_id: str
     account_id: str
     requested_at: str
+    session_selection: str
     selected_complete_session: str
     timezone: str
     window_start_exclusive: str
@@ -70,7 +85,7 @@ class ManualPortfolioReviewRun:
     input_fingerprint: str
     created_at: str
     completed_at: str | None = None
-    schema_version: str = "ManualPortfolioReviewRun@1"
+    schema_version: str = "ManualPortfolioReviewRun@2"
 
     def validate(self) -> None:
         try:
@@ -86,7 +101,8 @@ class ManualPortfolioReviewRun:
         except ValueError as error:
             raise ManualReviewError("MANUAL_REVIEW_TIME_INVALID") from error
         if (
-            self.schema_version != "ManualPortfolioReviewRun@1"
+            self.schema_version != "ManualPortfolioReviewRun@2"
+            or self.session_selection != _SESSION_SELECTION
             or not self.review_run_id
             or not self.workflow_run_id
             or not self.account_id
@@ -124,7 +140,8 @@ class ManualPortfolioReviewItem:
     review_run_id: str
     account_id: str
     security_id: str
-    position_identity: str
+    universe_member_identity: str
+    universe_roles: tuple[str, ...]
     account_snapshot_version_id: str
     account_snapshot_hash: str
     estimated_state_hash: str
@@ -150,7 +167,7 @@ class ManualPortfolioReviewItem:
     plan_change_proposal_ids: tuple[str, ...]
     content_hash: str
     created_at: str
-    schema_version: str = "SecurityReviewItem@1"
+    schema_version: str = "SecurityReviewItem@2"
 
     def validate(self) -> None:
         identity = {
@@ -159,12 +176,19 @@ class ManualPortfolioReviewItem:
             if key != "content_hash"
         }
         if (
-            self.schema_version != "SecurityReviewItem@1"
+            self.schema_version != "SecurityReviewItem@2"
             or not self.review_item_id
             or not self.review_run_id
             or not self.account_id
             or not self.security_id
-            or not self.position_identity
+            or not self.universe_member_identity
+            or not self.universe_roles
+            or self.universe_roles
+            != tuple(
+                role
+                for role in _UNIVERSE_ROLE_PRECEDENCE
+                if role in self.universe_roles
+            )
             or not self.account_snapshot_version_id
             or not self.account_snapshot_hash
             or not self.estimated_state_hash
@@ -277,37 +301,29 @@ def build_review_run(
     workflow_run_id: str,
     account_id: str,
     requested_at: str,
-    selected_complete_session: str,
-    first_window_start_exclusive: str | None,
     prior_successful: ManualPortfolioReviewRun | None,
     context: ManualReviewContext,
 ) -> ManualPortfolioReviewRun:
-    if (
-        prior_successful is None
-        and first_window_start_exclusive is None
-    ):
-        raise ManualReviewError("FIRST_REVIEW_CUTOFF_REQUIRED")
-    if (
-        prior_successful is None
-        and first_window_start_exclusive
-        != context.account_snapshot_cutoff
-    ):
-        raise ManualReviewError("FIRST_REVIEW_CUTOFF_UNPROVEN")
-    start = (
+    if prior_successful is None:
+        start = context.account_snapshot_cutoff
+    elif (
         prior_successful.window_end_inclusive
-        if prior_successful is not None
-        else str(first_window_start_exclusive)
-    )
+        == context.selected_complete_session
+    ):
+        start = prior_successful.window_start_exclusive
+    else:
+        start = prior_successful.window_end_inclusive
     fingerprint = canonical_hash(
         {
             "account_id": account_id,
-            "selected_complete_session": selected_complete_session,
+            "session_selection": _SESSION_SELECTION,
+            "selected_complete_session": context.selected_complete_session,
             "window_start_exclusive": start,
             "account_snapshot_version_id": context.account_snapshot_version_id,
             "estimated_state_hash": context.estimated_state_hash,
             "calendar_identity": context.calendar_identity,
             "policy_identities": context.policy_identities,
-            "holdings": context.holdings,
+            "members": context.members,
         }
     )
     run = ManualPortfolioReviewRun(
@@ -321,10 +337,11 @@ def build_review_run(
         workflow_run_id=workflow_run_id,
         account_id=account_id,
         requested_at=requested_at,
-        selected_complete_session=selected_complete_session,
+        session_selection=_SESSION_SELECTION,
+        selected_complete_session=context.selected_complete_session,
         timezone="Asia/Shanghai",
         window_start_exclusive=start,
-        window_end_inclusive=selected_complete_session,
+        window_end_inclusive=context.selected_complete_session,
         prior_successful_review_run_id=(
             prior_successful.review_run_id
             if prior_successful is not None
@@ -343,23 +360,23 @@ def build_review_items(
     context: ManualReviewContext,
 ) -> tuple[ManualPortfolioReviewItem, ...]:
     items: list[ManualPortfolioReviewItem] = []
-    for holding in context.holdings:
+    for member in context.members:
         outcome = {
             "no_action": ReviewOutcome.NO_CHANGE,
             "manual_review_required": ReviewOutcome.REVIEW_REQUIRED,
             "decision_task": ReviewOutcome.REVIEW_REQUIRED,
             "blocked": ReviewOutcome.REVIEW_REQUIRED,
-        }.get(holding.evaluation_resolution, ReviewOutcome.REVIEW_REQUIRED)
+        }.get(member.evaluation_resolution, ReviewOutcome.REVIEW_REQUIRED)
         if (
-            holding.active_plan_id is not None
-            and holding.evaluation_resolution is None
+            member.active_plan_id is not None
+            and member.evaluation_resolution is None
         ):
             outcome = ReviewOutcome.MONITOR
-        unable = holding.unable_reasons
-        if holding.active_plan_id is None:
+        unable = member.unable_reasons
+        if member.active_plan_id is None:
             unable = tuple(sorted(set(unable + ("ACTIVE_PLAN_MISSING",))))
         elif (
-            holding.evaluation_resolution is None
+            member.evaluation_resolution is None
             and not unable
         ):
             unable = tuple(
@@ -369,28 +386,29 @@ def build_review_items(
             review_item_id="",
             review_run_id=run.review_run_id,
             account_id=run.account_id,
-            security_id=holding.security_id,
-            position_identity=holding.position_identity,
+            security_id=member.security_id,
+            universe_member_identity=member.universe_member_identity,
+            universe_roles=member.universe_roles,
             account_snapshot_version_id=context.account_snapshot_version_id,
             account_snapshot_hash=context.account_snapshot_hash,
             estimated_state_hash=context.estimated_state_hash,
-            active_plan_id=holding.active_plan_id,
-            plan_version_id=holding.plan_version_id,
-            plan_evaluation_id=holding.plan_evaluation_id,
-            evaluation_reason_code=holding.evaluation_reason_code,
-            strategy_version_id=holding.strategy_version_id,
-            sleeve_graph=holding.sleeve_graph,
-            data_snapshot_ids=holding.data_snapshot_ids,
-            research_run_ids=holding.research_run_ids,
-            evidence_ids=holding.evidence_ids,
-            market_snapshot_ids=holding.market_snapshot_ids,
-            hard_rule_evaluations=holding.hard_rule_evaluations,
-            review_rule_routing=holding.review_rule_routing,
-            conflict_resolution=holding.conflict_resolution,
+            active_plan_id=member.active_plan_id,
+            plan_version_id=member.plan_version_id,
+            plan_evaluation_id=member.plan_evaluation_id,
+            evaluation_reason_code=member.evaluation_reason_code,
+            strategy_version_id=member.strategy_version_id,
+            sleeve_graph=member.sleeve_graph,
+            data_snapshot_ids=member.data_snapshot_ids,
+            research_run_ids=member.research_run_ids,
+            evidence_ids=member.evidence_ids,
+            market_snapshot_ids=member.market_snapshot_ids,
+            hard_rule_evaluations=member.hard_rule_evaluations,
+            review_rule_routing=member.review_rule_routing,
+            conflict_resolution=member.conflict_resolution,
             outcome=outcome,
             material_changes=(),
             unable_reasons=unable,
-            blocked_reasons=holding.blocked_reasons,
+            blocked_reasons=member.blocked_reasons,
             decision_task_ids=(),
             plan_impact_assessment_ids=(),
             plan_change_proposal_ids=(),
@@ -400,7 +418,7 @@ def build_review_items(
         item_id = "review_item_" + canonical_hash(
             {
                 "review_run_id": run.review_run_id,
-                "security_id": holding.security_id,
+                "security_id": member.security_id,
             }
         )[:24]
         prepared = replace(base, review_item_id=item_id)
@@ -546,7 +564,8 @@ __all__ = [
     "ManualPortfolioReviewRun",
     "ManualReviewContext",
     "ManualReviewError",
-    "ManualReviewHolding",
+    "ManualReviewUniverseMember",
+    "ProvenCompleteSession",
     "ReviewOutcome",
     "build_review_manifest",
     "build_review_items",

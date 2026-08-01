@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import replace
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
-from trading_platform.domain.account_state import EstimatedAccountState
+from trading_platform.domain.market_time import SHANGHAI_TIMEZONE
+from trading_platform.domain.account_state import (
+    EstimatedAccountState,
+    EstimatedPosition,
+)
 from trading_platform.domain.manual_review import (
     ManualPortfolioReviewCheckpoint,
     ManualPortfolioReviewItem,
@@ -14,7 +19,8 @@ from trading_platform.domain.manual_review import (
     ManualPortfolioReviewRun,
     ManualReviewContext,
     ManualReviewError,
-    ManualReviewHolding,
+    ManualReviewUniverseMember,
+    ProvenCompleteSession,
     ReviewOutcome,
 )
 from trading_platform.domain.plan_impacts import (
@@ -46,6 +52,98 @@ class SQLiteManualPortfolioReviewRepository:
     def _fault(self, boundary: str) -> None:
         if self.fault_injector is not None:
             self.fault_injector(boundary)
+
+    def latest_proven_complete_session(
+        self, requested_at: str
+    ) -> ProvenCompleteSession:
+        try:
+            requested = datetime.fromisoformat(requested_at)
+        except ValueError as error:
+            raise ManualReviewError(
+                "MANUAL_REVIEW_TIME_INVALID"
+            ) from error
+        if requested.tzinfo is None or requested.utcoffset() is None:
+            raise ManualReviewError("MANUAL_REVIEW_TIME_INVALID")
+        local_date = requested.astimezone(SHANGHAI_TIMEZONE).date()
+        rows = self._connection.execute(
+            "SELECT s.effective_session_date "
+            "AS effective_session_date,s.as_of_at AS as_of_at,"
+            "s.last_success_at AS last_success_at,"
+            "s.calendar_version AS calendar_version,"
+            "s.query_policy_identity AS query_policy_identity,"
+            "s.source_policy_identity AS source_policy_identity,"
+            "s.data_snapshot_id AS data_snapshot_id "
+            "FROM data_snapshot s "
+            "JOIN data_snapshot_universe_ref u "
+            "ON u.data_snapshot_id=s.data_snapshot_id "
+            "JOIN market_universe_version v "
+            "ON v.market_universe_version_id="
+            "u.market_universe_version_id "
+            "WHERE s.market_timezone='Asia/Shanghai' "
+            "AND s.snapshot_purpose IN "
+            "('research','workflow','market') "
+            "AND u.market_scope_id='CN_A_SHARE' "
+            "AND v.market_scope_id='CN_A_SHARE' "
+            "AND s.quality_status='pass' "
+            "AND s.freshness_status='valid' "
+            "AND s.coverage_expected>0 "
+            "AND s.coverage_eligible>0 "
+            "AND s.coverage_missing=0 "
+            "AND s.coverage_eligible+s.coverage_excluded="
+            "s.coverage_expected "
+            "AND EXISTS(SELECT 1 FROM market_universe_member m "
+            "WHERE m.market_universe_version_id="
+            "u.market_universe_version_id) "
+            "AND s.freshness_basis="
+            "'effective_complete_session' "
+            "ORDER BY s.effective_session_date DESC,s.as_of_at DESC,"
+            "s.data_snapshot_id DESC"
+        ).fetchall()
+        for row in rows:
+            try:
+                session_date = date.fromisoformat(
+                    row["effective_session_date"]
+                )
+                as_of = datetime.fromisoformat(row["as_of_at"])
+                last_success = datetime.fromisoformat(
+                    row["last_success_at"]
+                )
+            except ValueError as error:
+                raise ManualReviewError(
+                    "PROVEN_COMPLETE_SESSION_TIME_INVALID"
+                ) from error
+            if (
+                as_of.tzinfo is None
+                or as_of.utcoffset() is None
+                or last_success.tzinfo is None
+                or last_success.utcoffset() is None
+            ):
+                raise ManualReviewError(
+                    "PROVEN_COMPLETE_SESSION_TIME_INVALID"
+                )
+            if (
+                session_date <= local_date
+                and as_of <= requested
+                and last_success <= requested
+            ):
+                return ProvenCompleteSession(
+                    selected_complete_session=(
+                        row["effective_session_date"]
+                    ),
+                    data_snapshot_id=row["data_snapshot_id"],
+                    calendar_identity=row["calendar_version"],
+                    policy_identities=tuple(
+                        sorted(
+                            {
+                                row["query_policy_identity"],
+                                row["source_policy_identity"],
+                            }
+                        )
+                    ),
+                )
+        raise ManualReviewError(
+            "LATEST_PROVEN_COMPLETE_SESSION_UNAVAILABLE"
+        )
 
     def latest_success(
         self, account_id: str
@@ -79,23 +177,9 @@ class SQLiteManualPortfolioReviewRepository:
     def context(
         self,
         estimated: EstimatedAccountState,
-        selected_complete_session: str,
+        session: ProvenCompleteSession,
     ) -> ManualReviewContext:
-        session = self._connection.execute(
-            "SELECT calendar_version,query_policy_identity,"
-            "source_policy_identity,data_snapshot_id "
-            "FROM data_snapshot WHERE effective_session_date=? "
-            "AND market_timezone='Asia/Shanghai' "
-            "AND quality_status='pass' "
-            "AND freshness_basis='effective_complete_session' "
-            "ORDER BY as_of_at DESC LIMIT 1",
-            (selected_complete_session,),
-        ).fetchone()
-        if session is None:
-            raise ManualReviewError(
-                "SELECTED_COMPLETE_SESSION_NOT_PROVEN"
-            )
-        holdings: list[ManualReviewHolding] = []
+        positions: dict[str, EstimatedPosition] = {}
         for position in estimated.positions:
             try:
                 quantity = Decimal(position.total_quantity)
@@ -107,8 +191,47 @@ class SQLiteManualPortfolioReviewRepository:
                 raise ManualReviewError(
                     "ESTIMATED_POSITION_QUANTITY_INVALID"
                 )
-            if quantity == 0:
-                continue
+            if quantity > 0:
+                if position.security_id in positions:
+                    raise ManualReviewError(
+                        "ESTIMATED_POSITION_DUPLICATE"
+                    )
+                positions[position.security_id] = position
+        watchlist: dict[str, list[str]] = {}
+        for row in self._connection.execute(
+            "SELECT watchlist_item_id,security_id FROM watchlist_item "
+            "WHERE watchlist_id='watchlist_default' "
+            "ORDER BY security_id,watchlist_item_id"
+        ):
+            watchlist.setdefault(row["security_id"], []).append(
+                row["watchlist_item_id"]
+            )
+        members: list[ManualReviewUniverseMember] = []
+        security_ids = sorted(set(positions) | set(watchlist))
+        for security_id in security_ids:
+            position = positions.get(security_id)
+            roles = tuple(
+                role
+                for role, present in (
+                    ("holding", position is not None),
+                    ("watchlist", security_id in watchlist),
+                )
+                if present
+            )
+            universe_member_identity = canonical_hash(
+                {
+                    "security_id": security_id,
+                    "roles": roles,
+                    "holding_identity": (
+                        canonical_hash(position)
+                        if position is not None
+                        else None
+                    ),
+                    "watchlist_item_ids": tuple(
+                        watchlist.get(security_id, ())
+                    ),
+                }
+            )
             plan = self._connection.execute(
                 "SELECT m.plan_id,m.strategy_version_id,a.plan_version_id "
                 "FROM trade_plan_master m "
@@ -116,7 +239,7 @@ class SQLiteManualPortfolioReviewRepository:
                 "AND a.ended_at IS NULL "
                 "WHERE m.account_id=? AND m.security_id=? "
                 "AND m.lifecycle_status='active'",
-                (estimated.account_id, position.security_id),
+                (estimated.account_id, security_id),
             ).fetchone()
             plan_version_id = (
                 str(plan["plan_version_id"])
@@ -131,7 +254,10 @@ class SQLiteManualPortfolioReviewRepository:
                     self._connection, self._writer_lock
                 ).get_graph(plan_version_id)
             evaluation = (
-                self._evaluation(plan_version_id, selected_complete_session)
+                self._evaluation(
+                    plan_version_id,
+                    session.selected_complete_session,
+                )
                 if plan_version_id is not None
                 else None
             )
@@ -156,7 +282,8 @@ class SQLiteManualPortfolioReviewRepository:
                 tuple(
                     dict(row)
                     for row in self._connection.execute(
-                        "SELECT ref_type,ref_id,resolution_status,content_hash "
+                        "SELECT ref_type,ref_id,resolution_status,"
+                        "content_hash "
                         "FROM trade_plan_evidence_reference "
                         "WHERE plan_version_id=? ORDER BY ref_order",
                         (plan_version_id,),
@@ -165,9 +292,7 @@ class SQLiteManualPortfolioReviewRepository:
                 if plan_version_id is not None
                 else ()
             )
-            data_ids = {
-                str(session["data_snapshot_id"])
-            }
+            data_ids = {session.data_snapshot_id}
             research_ids: set[str] = set()
             evidence_ids: set[str] = set()
             for reference in references:
@@ -185,10 +310,11 @@ class SQLiteManualPortfolioReviewRepository:
                 else ()
             )
             hard, routed = self._rule_evaluations(evaluation)
-            holdings.append(
-                ManualReviewHolding(
-                    security_id=position.security_id,
-                    position_identity=canonical_hash(position),
+            members.append(
+                ManualReviewUniverseMember(
+                    security_id=security_id,
+                    universe_member_identity=universe_member_identity,
+                    universe_roles=roles,
                     active_plan_id=(
                         str(plan["plan_id"]) if plan is not None else None
                     ),
@@ -245,18 +371,12 @@ class SQLiteManualPortfolioReviewRepository:
             account_snapshot_hash=estimated.snapshot_graph_seal_hash,
             account_snapshot_cutoff=cutoff,
             estimated_state_hash=estimated.content_hash,
-            calendar_identity=str(session["calendar_version"]),
-            policy_identities=tuple(
-                sorted(
-                    {
-                        str(session["query_policy_identity"]),
-                        str(session["source_policy_identity"]),
-                    }
-                )
+            selected_complete_session=(
+                session.selected_complete_session
             ),
-            holdings=tuple(
-                sorted(holdings, key=lambda holding: holding.security_id)
-            ),
+            calendar_identity=session.calendar_identity,
+            policy_identities=session.policy_identities,
+            members=tuple(members),
         )
 
     def begin(
@@ -290,8 +410,14 @@ class SQLiteManualPortfolioReviewRepository:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 self._connection.execute(
-                    "INSERT INTO manual_portfolio_review_run VALUES("
-                    "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO manual_portfolio_review_run("
+                    "review_run_id,workflow_run_id,invocation_id,account_id,"
+                    "requested_at,selected_complete_session,timezone,"
+                    "window_start_exclusive,window_end_inclusive,"
+                    "prior_successful_review_run_id,status,input_fingerprint,"
+                    "created_at,completed_at,schema_version,"
+                    "session_selection"
+                    ") VALUES(" + ",".join("?" for _ in range(16)) + ")",
                     (
                         run.review_run_id,
                         run.workflow_run_id,
@@ -308,6 +434,7 @@ class SQLiteManualPortfolioReviewRepository:
                         run.created_at,
                         run.completed_at,
                         run.schema_version,
+                        run.session_selection,
                     ),
                 )
                 self._connection.commit()
@@ -384,7 +511,7 @@ class SQLiteManualPortfolioReviewRepository:
                     "?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         invocation_id,
-                        "manual_portfolio_review.run@1",
+                        "manual_portfolio_review.run@2",
                         request_hash,
                         "ManualPortfolioReviewRun",
                         run.account_id,
@@ -520,7 +647,17 @@ class SQLiteManualPortfolioReviewRepository:
                 )
             result = "unable_to_determine"
         else:
-            result = str(routed.get("result"))
+            result = {
+                "triggered": "fail",
+                "not_triggered": "pass",
+                "unable_to_determine": "unable_to_determine",
+                "not_applicable": "unable_to_determine",
+                "blocked": "unable_to_determine",
+            }.get(str(routed.get("result")))
+            if result is None:
+                raise PlanImpactError(
+                    "PLAN_IMPACT_REVIEW_RULE_NOT_FROZEN"
+                )
         identity = {
             "review_run_id": row["review_run_id"],
             "review_item_id": row["review_item_id"],
@@ -632,15 +769,27 @@ class SQLiteManualPortfolioReviewRepository:
 
     def _insert_item(self, item: ManualPortfolioReviewItem) -> None:
         self._connection.execute(
-            "INSERT INTO manual_portfolio_review_item VALUES("
-            + ",".join("?" for _ in range(31))
-            + ")",
+            "INSERT INTO manual_portfolio_review_item("
+            "review_item_id,review_run_id,account_id,security_id,"
+            "universe_member_identity,account_snapshot_version_id,"
+            "account_snapshot_hash,estimated_state_hash,active_plan_id,"
+            "plan_version_id,plan_evaluation_id,evaluation_reason_code,"
+            "strategy_version_id,sleeve_graph_json,data_snapshot_ids_json,"
+            "research_run_ids_json,evidence_ids_json,"
+            "market_snapshot_ids_json,hard_rule_evaluations_json,"
+            "review_rule_routing_json,conflict_resolution_json,outcome,"
+            "material_changes_json,unable_reasons_json,"
+            "blocked_reasons_json,decision_task_ids_json,"
+            "plan_impact_assessment_ids_json,"
+            "plan_change_proposal_ids_json,content_hash,created_at,"
+            "schema_version,universe_roles_json"
+            ") VALUES(" + ",".join("?" for _ in range(32)) + ")",
             (
                 item.review_item_id,
                 item.review_run_id,
                 item.account_id,
                 item.security_id,
-                item.position_identity,
+                item.universe_member_identity,
                 item.account_snapshot_version_id,
                 item.account_snapshot_hash,
                 item.estimated_state_hash,
@@ -667,6 +816,7 @@ class SQLiteManualPortfolioReviewRepository:
                 item.content_hash,
                 item.created_at,
                 item.schema_version,
+                self._json(item.universe_roles),
             ),
         )
 
@@ -702,6 +852,7 @@ class SQLiteManualPortfolioReviewRepository:
             workflow_run_id=row["workflow_run_id"],
             account_id=row["account_id"],
             requested_at=row["requested_at"],
+            session_selection=row["session_selection"],
             selected_complete_session=row["selected_complete_session"],
             timezone=row["timezone"],
             window_start_exclusive=row["window_start_exclusive"],

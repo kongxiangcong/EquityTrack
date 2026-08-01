@@ -23,9 +23,11 @@ from trading_platform.domain.plans import (
     PlanActivated,
     PlanDraftRejected,
     PlanValidationError,
+    ProposedTradePlanVersion,
     PlanVersionConfirmed,
     TradePlanDraft,
     TradePlanGraph,
+    TradePlanDraftGraph,
     TradePlanMaster,
     TradePlanMasterId,
     TradePlanRule,
@@ -49,11 +51,11 @@ from .locking import DataRootWriterLock
 if TYPE_CHECKING:
     from trading_platform.application.trade_plan_authoring import (
         ConfirmTradePlanVersion,
-        CreateTradePlanDraft,
+        _CreateTradePlanDraft,
         IssuePlanConfirmationChallenge,
         PlanConfirmationResult,
         RejectTradePlanDraft,
-        ReviseTradePlanDraft,
+        _ReviseTradePlanDraft,
     )
 
 class SQLiteTradePlanRepository:
@@ -68,7 +70,7 @@ class SQLiteTradePlanRepository:
         self._writer_lock = writer_lock
 
     def create_draft(
-        self, command: "CreateTradePlanDraft"
+        self, command: "_CreateTradePlanDraft"
     ) -> TradePlanDraft:
         draft = command.draft
         draft.validate()
@@ -141,7 +143,7 @@ class SQLiteTradePlanRepository:
                     self._insert_draft(draft)
                     self._insert_command_receipt(
                         invocation_id=command.invocation_id,
-                        command_name="CreateTradePlanDraft",
+                        command_name="UpsertOpenTradePlanDraft",
                         request_hash=request_hash,
                         result_type="TradePlanDraft",
                         aggregate_id=draft.draft_id,
@@ -156,7 +158,7 @@ class SQLiteTradePlanRepository:
         return self._load_draft(draft.draft_id)
 
     def revise_draft(
-        self, command: "ReviseTradePlanDraft"
+        self, command: "_ReviseTradePlanDraft"
     ) -> TradePlanDraft:
         current = self._load_draft(command.draft_id)
         candidate = self._revised_draft(current, command)
@@ -198,7 +200,7 @@ class SQLiteTradePlanRepository:
                             self._json(candidate.parameters),
                             self._json(candidate.content),
                             self._json(
-                                self._encode_graph(
+                                self._encode_draft_graph(
                                     candidate.proposed_graph
                                 )
                             ),
@@ -218,7 +220,7 @@ class SQLiteTradePlanRepository:
                         )
                     self._insert_command_receipt(
                         invocation_id=command.invocation_id,
-                        command_name="ReviseTradePlanDraft",
+                        command_name="UpsertOpenTradePlanDraft",
                         request_hash=request_hash,
                         result_type="TradePlanDraft",
                         aggregate_id=candidate.draft_id,
@@ -417,13 +419,11 @@ class SQLiteTradePlanRepository:
         receipt = self._build_approval_receipt(
             command, challenge
         )
-        version = replace(
-            draft.proposed_graph.version,
+        graph = draft.proposed_graph.confirm(
             confirmed_at=command.approved_at,
             user_approval_receipt_id=receipt.approval_receipt_id,
         )
-        graph = replace(draft.proposed_graph, version=version)
-        graph.validate()
+        version = graph.version
         with self._writer_lock.acquire(
             f"trade-plan-confirm:{challenge.plan_id}"
         ):
@@ -453,13 +453,16 @@ class SQLiteTradePlanRepository:
                         "WHERE plan_version_id=?",
                         (version.plan_version_id,),
                     )
+                    persisted_graph = self.get_graph(
+                        version.plan_version_id
+                    )
                     self._connection.execute(
                         "UPDATE trade_plan_draft SET status='confirmed',"
                         "updated_at=? WHERE draft_id=? AND status='open'",
                         (command.approved_at, draft.draft_id),
                     )
                     confirmed_event = self._confirmed_event(
-                        graph, receipt, command.approved_at
+                        persisted_graph, receipt, command.approved_at
                     )
                     self._insert_event(
                         confirmed_event.event_id,
@@ -476,7 +479,7 @@ class SQLiteTradePlanRepository:
                     )
                     active = (
                         self._activate_confirmed_version(
-                            graph, receipt, command
+                            persisted_graph, receipt, command
                         )
                         if command.activation_intent
                         is ActivationIntent.CONFIRM_AND_ACTIVATE
@@ -507,7 +510,7 @@ class SQLiteTradePlanRepository:
                     "PLAN_CONFIRMATION_STORAGE_CONFLICT"
                 ) from error
         return PlanConfirmationResult(
-            self.get_graph(version.plan_version_id),
+            persisted_graph,
             receipt,
             active,
         )
@@ -618,6 +621,51 @@ class SQLiteTradePlanRepository:
         graph.validate()
         return graph
 
+    def get_open_draft(
+        self, account_id: str, security_id: str
+    ) -> TradePlanDraft | None:
+        rows = self._connection.execute(
+            "SELECT draft_id FROM trade_plan_draft "
+            "WHERE account_id=? AND security_id=? AND status='open' "
+            "ORDER BY created_at,draft_id",
+            (account_id, security_id),
+        ).fetchall()
+        if len(rows) > 1:
+            raise PlanValidationError(
+                "PLAN_OPEN_DRAFT_OWNERSHIP_CONFLICT"
+            )
+        if not rows:
+            return None
+        return self._load_draft(rows[0]["draft_id"])
+
+    def get_draft_by_invocation(
+        self, invocation_id: str
+    ) -> TradePlanDraft | None:
+        row = self._connection.execute(
+            "SELECT command_name,result_type,aggregate_id,"
+            "revision_or_version_id,created_at "
+            "FROM application_command_receipt WHERE invocation_id=?",
+            (invocation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if (
+            row["command_name"]
+            != "UpsertOpenTradePlanDraft"
+            or row["result_type"] != "TradePlanDraft"
+        ):
+            raise PlanValidationError("INVOCATION_CONFLICT")
+        draft = self._load_draft(row["aggregate_id"])
+        if str(draft.revision) != row["revision_or_version_id"]:
+            raise PlanValidationError("INVOCATION_CONFLICT")
+        replay = replace(
+            draft,
+            status="open",
+            updated_at=str(row["created_at"]),
+        )
+        replay.validate()
+        return replay
+
     def get_active_master(
         self, account_id: str, security_id: str
     ) -> ActiveTradePlan:
@@ -694,7 +742,7 @@ class SQLiteTradePlanRepository:
                 draft.status,
                 self._json(draft.parameters),
                 self._json(draft.content),
-                self._json(self._encode_graph(draft.proposed_graph)),
+                self._json(self._encode_draft_graph(draft.proposed_graph)),
                 draft.proposed_graph.version.graph_seal_hash,
                 draft.content_hash,
                 draft.created_at,
@@ -725,7 +773,7 @@ class SQLiteTradePlanRepository:
             status=row["status"],
             parameters=json.loads(row["parameters_json"]),
             content=json.loads(row["content_json"]),
-            proposed_graph=self._decode_graph(
+            proposed_graph=self._decode_draft_graph(
                 json.loads(row["proposed_graph_json"])
             ),
             content_hash=row["content_hash"],
@@ -746,7 +794,7 @@ class SQLiteTradePlanRepository:
     def _revised_draft(
         self,
         current: TradePlanDraft,
-        command: "ReviseTradePlanDraft",
+        command: "_ReviseTradePlanDraft",
     ) -> TradePlanDraft:
         graph = command.proposed_graph
         graph.validate()
@@ -1526,14 +1574,17 @@ class SQLiteTradePlanRepository:
             )
         for position, reference in enumerate(graph.evidence_references):
             self._connection.execute(
-                "INSERT INTO trade_plan_evidence_reference "
-                "VALUES(?,?,?,?,?,?)",
+                "INSERT INTO trade_plan_evidence_reference("
+                "plan_version_id,ref_order,ref_type,ref_id,"
+                "resolution_status,reference_json,content_hash"
+                ") VALUES(?,?,?,?,?,?,?)",
                 (
                     plan_version_id,
                     position,
                     reference["ref_type"],
                     reference["ref_id"],
                     reference["resolution_status"],
+                    self._json(reference),
                     reference["content_hash"],
                 ),
             )
@@ -1704,12 +1755,30 @@ class SQLiteTradePlanRepository:
 
     @staticmethod
     def _decode_reference(row: sqlite3.Row) -> Mapping[str, object]:
-        return {
-            "ref_type": row["ref_type"],
-            "ref_id": row["ref_id"],
-            "resolution_status": row["resolution_status"],
-            "content_hash": row["content_hash"],
-        }
+        try:
+            reference = json.loads(row["reference_json"])
+        except (json.JSONDecodeError, TypeError) as error:
+            raise PlanValidationError(
+                "PLAN_GRAPH_CHILD_INVALID"
+            ) from error
+        if (
+            not isinstance(reference, dict)
+            or reference.get("ref_type") != row["ref_type"]
+            or reference.get("ref_id") != row["ref_id"]
+            or reference.get("resolution_status")
+            != row["resolution_status"]
+            or reference.get("content_hash") != row["content_hash"]
+            or canonical_hash(
+                {
+                    key: value
+                    for key, value in reference.items()
+                    if key != "content_hash"
+                }
+            )
+            != row["content_hash"]
+        ):
+            raise PlanValidationError("PLAN_GRAPH_CHILD_INVALID")
+        return reference
 
     @staticmethod
     def _decode_adjusted(row: sqlite3.Row) -> Mapping[str, object]:
@@ -1737,13 +1806,14 @@ class SQLiteTradePlanRepository:
         )
 
     @classmethod
-    def _encode_graph(
-        cls, graph: TradePlanGraph
+    def _encode_draft_graph(
+        cls, graph: TradePlanDraftGraph
     ) -> Mapping[str, object]:
         version = graph.version
         return {
             "schema_version": graph.schema_version,
             "version": {
+                "schema_version": version.schema_version,
                 "plan_version_id": version.plan_version_id,
                 "plan_id": version.plan_id,
                 "version_no": version.version_no,
@@ -1777,10 +1847,6 @@ class SQLiteTradePlanRepository:
                 "content": version.content,
                 "content_hash": version.content_hash,
                 "graph_seal_hash": version.graph_seal_hash,
-                "confirmed_at": version.confirmed_at,
-                "user_approval_receipt_id": (
-                    version.user_approval_receipt_id
-                ),
             },
             "sleeves": tuple(
                 {
@@ -1820,13 +1886,21 @@ class SQLiteTradePlanRepository:
         }
 
     @classmethod
-    def _decode_graph(
+    def _decode_draft_graph(
         cls, payload: Mapping[str, object]
-    ) -> TradePlanGraph:
+    ) -> TradePlanDraftGraph:
         raw_version = payload["version"]
-        if not isinstance(raw_version, Mapping):
+        if (
+            payload.get("schema_version") != "TradePlanDraftGraph@1"
+            or not isinstance(raw_version, Mapping)
+            or raw_version.get("schema_version")
+            != "ProposedTradePlanVersion@1"
+            or "confirmed_at" in raw_version
+            or "user_approval_receipt_id" in raw_version
+        ):
             raise PlanValidationError("PLAN_DRAFT_GRAPH_INVALID")
-        version = TradePlanVersion(
+        version = ProposedTradePlanVersion(
+            schema_version=str(raw_version["schema_version"]),
             plan_version_id=str(raw_version["plan_version_id"]),
             plan_id=str(raw_version["plan_id"]),
             version_no=int(raw_version["version_no"]),
@@ -1871,10 +1945,6 @@ class SQLiteTradePlanRepository:
             content=raw_version["content"],
             content_hash=str(raw_version["content_hash"]),
             graph_seal_hash=str(raw_version["graph_seal_hash"]),
-            confirmed_at=str(raw_version["confirmed_at"]),
-            user_approval_receipt_id=str(
-                raw_version["user_approval_receipt_id"]
-            ),
         )
         sleeves = []
         for raw in payload.get("sleeves", ()):
@@ -1983,7 +2053,7 @@ class SQLiteTradePlanRepository:
             )
             for raw in payload.get("rules", ())
         )
-        graph = TradePlanGraph(
+        graph = TradePlanDraftGraph(
             version=version,
             sleeves=tuple(sleeves),
             rules=rules,

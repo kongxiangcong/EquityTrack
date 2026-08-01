@@ -10,9 +10,36 @@ from trading_platform.account import AccountOpeningService
 from trading_platform.account_acceptance import AccountAcceptanceService
 from trading_platform.account_history import AccountHistoryImportService
 from trading_platform.application.health import Health
+from trading_platform.application.account_snapshots import (
+    AccountSnapshotCommands,
+    AccountSnapshotQueries,
+)
 from trading_platform.application.account_state import AccountStateQueries
+from trading_platform.application.commands import (
+    ApplicationCommandDispatcher,
+)
+from trading_platform.application.decision_journal import DecisionJournal
+from trading_platform.application.decision_tasks import DecisionTasks
+from trading_platform.application.discipline_reviews import (
+    DisciplineReviews,
+)
+from trading_platform.application.manual_portfolio_review import (
+    ManualPortfolioReview,
+)
+from trading_platform.application.plan_impacts import PlanImpacts
 from trading_platform.application.read_models import ReadModelService
-from trading_platform.application.trade_plan_authoring import TradePlanTasks
+from trading_platform.application.plan_compiler import (
+    TradePlanCompiler,
+)
+from trading_platform.application.plan_drafting import TradePlanDrafting
+from trading_platform.application.risk_policies import (
+    PortfolioRiskPolicies,
+)
+from trading_platform.application.strategy_catalog import StrategyQueries
+from trading_platform.application.trade_plan_authoring import (
+    TradePlanTasks,
+    _OpenTradePlanDrafts,
+)
 from trading_platform.application.research_tasks import (
     ForecastReview,
     ResearchArchive,
@@ -22,6 +49,9 @@ from trading_platform.application.workflow_ledger import WorkflowLedgerPort
 from trading_platform.chart import ChartService
 from trading_platform.data.repository import DataRepository
 from trading_platform.data.service import DataSyncService
+from trading_platform.domain.account_snapshots import (
+    AccountSnapshotService,
+)
 from trading_platform.domain.data import (
     CompletenessRequirement,
     DataProvider,
@@ -34,12 +64,34 @@ from trading_platform.domain.data import (
     SourceRights,
     SourceRoute,
 )
+from trading_platform.domain.discipline_reviews import (
+    DisciplineReviewService,
+)
 from trading_platform.market import MarketEvaluationService
 from trading_platform.persistence import PlatformStore
-from trading_platform.persistence.market import SQLiteMarketRepository
-from trading_platform.persistence.plans import SQLiteTradePlanRepository
 from trading_platform.persistence.account_snapshots import (
     SQLiteAccountSnapshotProjection,
+    SQLiteAccountSnapshotRepository,
+)
+from trading_platform.persistence.decision_tasks import (
+    SQLiteDecisionTaskRepository,
+)
+from trading_platform.persistence.discipline_reviews import (
+    SQLiteDisciplineReviewRepository,
+)
+from trading_platform.persistence.manual_portfolio_review import (
+    SQLiteManualPortfolioReviewRepository,
+)
+from trading_platform.persistence.market import SQLiteMarketRepository
+from trading_platform.persistence.plan_impacts import (
+    SQLitePlanImpactRepository,
+)
+from trading_platform.persistence.plans import SQLiteTradePlanRepository
+from trading_platform.persistence.risk_policies import (
+    SQLitePortfolioRiskPolicyRepository,
+)
+from trading_platform.persistence.strategies import (
+    SQLiteStrategyRepository,
 )
 from trading_platform.persistence.workspace import (
     WorkspaceUpdateAuthorizationService,
@@ -177,6 +229,7 @@ class PlatformTaskFixture:
         qualified_equivalent_authority=None,
         fixture_rights: Mapping[tuple[str, str], FixtureRights] | None = None,
         workflow_fault_injector=None,
+        workbook_projector=None,
     ) -> None:
         repo_root = Path(__file__).resolve().parents[2]
         self.data_root = data_root.resolve()
@@ -263,6 +316,7 @@ class PlatformTaskFixture:
             ledger,
             repo_root,
             workflow_fault_injector,
+            workbook_projector,
         )
         self.inspection = WorkflowInspection(ledger)
         self.archive = ResearchArchive(ledger)
@@ -270,10 +324,92 @@ class PlatformTaskFixture:
             ledger, research_engine_identity(repo_root)
         )
         self.chart = ChartService(store.connection, store.writer_lock)
+        account_snapshot_projection = SQLiteAccountSnapshotProjection(
+            store.connection
+        )
+        journal_repository = SQLiteDecisionJournalRepository(
+            store.connection, store.writer_lock
+        )
+        account_state_queries = AccountStateQueries(
+            account_snapshot_projection,
+            journal_repository,
+        )
+        self.account_snapshot_commands = AccountSnapshotCommands(
+            SQLiteAccountSnapshotRepository(
+                store.connection, store.writer_lock
+            ),
+            AccountSnapshotService(),
+        )
+        self.account_snapshot_queries = AccountSnapshotQueries(
+            account_snapshot_projection
+        )
+        self.risk_policies = PortfolioRiskPolicies(
+            SQLitePortfolioRiskPolicyRepository(
+                store.connection, store.writer_lock
+            )
+        )
+        self.strategies = StrategyQueries(
+            SQLiteStrategyRepository(store.connection)
+        )
         plan_repository = SQLiteTradePlanRepository(
             store.connection, store.writer_lock
         )
         self.plans = TradePlanTasks(plan_repository)
+        self._open_plan_drafts = _OpenTradePlanDrafts(plan_repository)
+        self.plan_compiler = TradePlanCompiler(
+            research=self.archive,
+            recent_trends=self.archive,
+            accounts=self.account_snapshot_queries,
+            risk_policies=self.risk_policies,
+            strategies=self.strategies,
+            drafts=self._open_plan_drafts,
+        )
+        self.plan_drafting = TradePlanDrafting(
+            archive=self.archive,
+            accounts=self.account_snapshot_queries,
+            watchlist=self.watchlist,
+            compiler=self.plan_compiler,
+        )
+        self.manual_reviews = ManualPortfolioReview(
+            SQLiteManualPortfolioReviewRepository(
+                store.connection, store.writer_lock
+            ),
+            account_state_queries,
+            ledger,
+        )
+        self.decision_tasks = DecisionTasks(
+            SQLiteDecisionTaskRepository(
+                store.connection, store.writer_lock
+            ),
+            journal_repository,
+        )
+        self.decision_journal = DecisionJournal(journal_repository)
+        self.discipline_reviews = DisciplineReviews(
+            SQLiteDisciplineReviewRepository(
+                store.connection, store.writer_lock
+            ),
+            DisciplineReviewService(),
+        )
+        self.plan_impacts = PlanImpacts(
+            SQLitePlanImpactRepository(
+                store.connection, store.writer_lock
+            ),
+            self.manual_reviews,
+            self.plans,
+            self._open_plan_drafts,
+        )
+        self.application_commands = ApplicationCommandDispatcher(
+            account_snapshots=self.account_snapshot_commands,
+            risk_policies=self.risk_policies,
+            trade_plans=self.plans,
+            plan_drafting=self.plan_drafting,
+            manual_reviews=self.manual_reviews,
+            decision_tasks=self.decision_tasks,
+            decision_journal=self.decision_journal,
+            discipline_reviews=self.discipline_reviews,
+            plan_impacts=self.plan_impacts,
+            chart_workspace=self.chart,
+        )
         self.market = MarketEvaluationService(
             SQLiteMarketRepository(store.connection, store.writer_lock),
             plan_repository,
@@ -284,14 +420,10 @@ class PlatformTaskFixture:
         self.read_models = ReadModelService(
             SQLiteReadModelProjection(
                 store.connection,
-                AccountStateQueries(
-                    SQLiteAccountSnapshotProjection(store.connection),
-                    SQLiteDecisionJournalRepository(
-                        store.connection, store.writer_lock
-                    ),
-                ),
+                account_state_queries,
                 ledger,
-            )
+            ),
+            self.chart,
         )
         self.accounts = AccountOpeningService(
             data_root, repo_root, migrations_root or repo_root / "migrations"

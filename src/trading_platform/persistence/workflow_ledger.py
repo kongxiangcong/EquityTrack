@@ -10,6 +10,7 @@ import time
 import uuid
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Mapping
@@ -24,6 +25,10 @@ from trading_platform.domain.workflow import (
     WorkflowDefinition,
 )
 from trading_platform.domain.research_evaluation import ResearchWorkflowResult
+from trading_platform.domain.recent_trend import (
+    RecentTrendAssessment,
+    RecentTrendError,
+)
 from trading_platform.domain.artifact_lineage import (
     ArtifactLineage,
     ArtifactSubmission,
@@ -101,6 +106,7 @@ from trading_platform.application.workflow_ledger import (
     ResearchPayloadQuery,
     DecisionViewPayload,
     DecisionViewPayloadQuery,
+    RecentTrendAssessmentQuery,
     ResearchEvaluationRecordQuery,
     EvaluationCheckpointResult,
     ResearchEvaluationRecord,
@@ -127,6 +133,71 @@ from trading_platform.persistence.research_artifact_commit import (
     _ResearchArtifactCommit,
     _evaluation_record,
 )
+
+
+def _snapshot_member_fields(
+    row: sqlite3.Row,
+    scope_id: str,
+) -> tuple[Mapping[str, object], ...]:
+    for column in ("component_fields_json", "statement_fields_json"):
+        if row[column] is not None:
+            fields = json.loads(row[column])
+            if not isinstance(fields, list) or not all(
+                isinstance(field, Mapping) for field in fields
+            ):
+                raise WorkflowPersistenceError(
+                    "WORKFLOW_SNAPSHOT_EVIDENCE_INVALID",
+                    "load",
+                    str(row["normalized_version_id"]),
+                )
+            return tuple(dict(field) for field in fields)
+
+    if row["close_decimal"] is not None:
+        field: dict[str, object] = {
+            "field_name": "current_price",
+            "subject_id": scope_id,
+            "semantic_role": "current_price",
+            "period": str(row["ohlcv_session_date"]),
+            "value": str(row["close_decimal"]),
+            "unit": "CNY/share",
+            "currency": str(row["ohlcv_currency"]),
+            "extraction_method": "normalized_ohlcv:close",
+            "confidence": "medium",
+            "notes": (
+                "Structured market-data candidate; not official filing "
+                "evidence."
+            ),
+        }
+        if row["adjustment_factor_decimal"] is not None:
+            field.update(
+                {
+                    "adjustment_factor": str(
+                        row["adjustment_factor_decimal"]
+                    ),
+                    "suspended": bool(row["suspended"]),
+                    "limit_state": str(row["limit_state"]),
+                    "corporate_action_identity": row[
+                        "corporate_action_identity"
+                    ],
+                }
+            )
+        return (field,)
+
+    if row["calendar_session_date"] is not None:
+        return (
+            {
+                "field_name": "trading_session",
+                "subject_id": str(row["calendar_market"]),
+                "semantic_role": "trading_session",
+                "period": str(row["calendar_session_date"]),
+                "value": str(row["calendar_is_open"]),
+                "unit": "boolean",
+                "currency": "N/A",
+                "extraction_method": "normalized_trading_calendar",
+                "confidence": "high",
+            },
+        )
+    return ()
 
 
 class WorkflowLedger:
@@ -221,7 +292,8 @@ class WorkflowLedger:
         | WorkflowDiagnosticQuery
         | PersistenceCountsQuery
         | QualificationReceiptQuery
-        | QualificationReceiptReplayQuery,
+        | QualificationReceiptReplayQuery
+        | RecentTrendAssessmentQuery,
     ) -> LedgerLoadResult:
         if isinstance(query, QualificationReceiptQuery):
             return self.__qualification_receipts.load(query)
@@ -322,6 +394,8 @@ class WorkflowLedger:
             return self._research_run_payload(query.research_run_id)
         if isinstance(query, DecisionViewPayloadQuery):
             return self._decision_view_payload(query.workflow_run_id)
+        if isinstance(query, RecentTrendAssessmentQuery):
+            return self._recent_trend_assessment(query.assessment_id)
         if isinstance(query, ResearchRunIdentityQuery):
             identity = self.__connection.execute(
                 "SELECT engine_code_identity FROM research_run_record WHERE research_run_id=?",
@@ -348,7 +422,7 @@ class WorkflowLedger:
             record_row = self.__connection.execute(
                 "SELECT * FROM research_run_record "
                 "WHERE canonical_json_artifact_id=?",
-                (by_role.get("research_run_json"),),
+                (by_role.get("research_bundle_json"),),
             ).fetchone()
             attempt = self.__connection.execute(
                 "SELECT a.workflow_node_attempt_id,a.disposition,"
@@ -369,7 +443,7 @@ class WorkflowLedger:
             decision = self.__connection.execute(
                 "SELECT artifact_manifest_id FROM artifact_manifest "
                 "WHERE producer_type='WorkflowRun' AND producer_id=? "
-                "AND manifest_role='workflow_decision_view@2'",
+                "AND manifest_role='workflow_decision_view@3'",
                 (attempt["workflow_run_id"],),
             ).fetchone()
             if decision is None:
@@ -433,15 +507,30 @@ class WorkflowLedger:
                 "SELECT m.normalized_version_id,r.dataset,p.source_identity,"
                 "p.source_authority,p.real_source_url,p.retrieved_at,"
                 "v.published_at,v.available_at,v.quality_status,"
-                "t.extracted_fields_json,o.session_date,o.close_decimal,"
-                "o.currency "
+                "c.extracted_fields_json AS component_fields_json,"
+                "t.extracted_fields_json AS statement_fields_json,"
+                "o.session_date AS ohlcv_session_date,o.close_decimal,"
+                "o.currency AS ohlcv_currency,"
+                "d.adjustment_factor_decimal,d.suspended,d.limit_state,"
+                "d.corporate_action_identity,"
+                "s.market AS calendar_market,"
+                "s.session_date AS calendar_session_date,"
+                "s.is_open AS calendar_is_open "
                 "FROM data_snapshot_member m "
                 "JOIN normalized_version v USING(normalized_version_id) "
                 "JOIN normalized_record r USING(normalized_record_id) "
                 "JOIN provider_attempt p ON p.attempt_id=v.source_attempt_id "
+                "LEFT JOIN research_component_input_version c "
+                "USING(normalized_version_id) "
                 "LEFT JOIN terminal_financial_statement_version t "
                 "USING(normalized_version_id) "
                 "LEFT JOIN ohlcv_version o USING(normalized_version_id) "
+                "LEFT JOIN market_path_daily_evidence_version d "
+                "USING(normalized_version_id) "
+                "LEFT JOIN market_session_normalized_evidence x "
+                "ON x.normalized_version_id=m.normalized_version_id "
+                "LEFT JOIN market_session_version s "
+                "USING(market_session_version_id) "
                 "WHERE m.data_snapshot_id=? ORDER BY m.member_order",
                 (query.data_snapshot_id,),
             ).fetchall()
@@ -466,34 +555,9 @@ class WorkflowLedger:
                         published_at=str(row["published_at"]),
                         available_at=str(row["available_at"]),
                         quality_status=str(row["quality_status"]),
-                        extracted_fields=(
-                            tuple(json.loads(row["extracted_fields_json"]))
-                            if row["extracted_fields_json"] is not None
-                            else (
-                                (
-                                    {
-                                        "field_name": "current_price",
-                                        "subject_id": str(snapshot["scope_id"]),
-                                        "semantic_role": "current_price",
-                                        "period": str(row["session_date"]),
-                                        "value": str(row["close_decimal"]),
-                                        "unit": "CNY/share",
-                                        "currency": str(row["currency"]),
-                                        "extraction_method": "normalized_ohlcv:close",
-                                        "confidence": "medium",
-                                        "notes": (
-                                            "Structured market-data candidate; "
-                                            "not official filing evidence."
-                                        ),
-                                    },
-                                )
-                                if (
-                                    row["close_decimal"] is not None
-                                    and str(row["session_date"])
-                                    == str(snapshot["effective_session_date"])
-                                )
-                                else ()
-                            )
+                        extracted_fields=_snapshot_member_fields(
+                            row,
+                            str(snapshot["scope_id"]),
                         ),
                     )
                     for row in rows
@@ -986,17 +1050,34 @@ class WorkflowLedger:
                 if row["definition_hash"] != canonical_hash(definition) or row["workflow_id"] != definition.workflow_id or row["workflow_version"] != definition.version:
                     raise ValueError("WORKFLOW_DEFINITION_MISMATCH")
                 now = datetime.now(timezone.utc)
+                if row["status"] not in {"running", "failed"}:
+                    raise ValueError("WORKFLOW_NOT_RESUMABLE")
                 lease_expired = row["lease_expires_at"] is None or datetime.fromisoformat(row["lease_expires_at"]) <= now
-                if row["owner_token"] not in {None, owner_token} and not lease_expired:
+                if (
+                    row["status"] == "running"
+                    and row["owner_token"] not in {None, owner_token}
+                    and not lease_expired
+                ):
                     raise ValueError("WORKFLOW_BUSY")
-                if lease_expired:
+                if lease_expired or row["status"] == "failed":
                     running = self.__connection.execute("SELECT a.workflow_node_attempt_id,n.workflow_node_run_id FROM workflow_node_attempt a JOIN workflow_node_run n USING(workflow_node_run_id) WHERE n.workflow_run_id=? AND a.disposition IS NULL", (workflow_run_id,)).fetchall()
                     for attempt in running:
                         self.__connection.execute("UPDATE workflow_node_attempt SET disposition='abandoned',completed_at=?,retryable=1 WHERE workflow_node_attempt_id=?", (now.isoformat(), attempt["workflow_node_attempt_id"]))
                         self.__connection.execute("UPDATE workflow_node_run SET status='pending',owner_token=NULL,lease_expires_at=NULL,heartbeat_at=? WHERE workflow_node_run_id=? AND status='running'", (now.isoformat(), attempt["workflow_node_run_id"]))
                     self._recovery_event(workflow_run_id, "LEASE_TAKEOVER", owner_token, "EXPIRED_OWNER_ABANDONED", now.isoformat())
-                self.__connection.execute("UPDATE workflow_run SET owner_token=?,lease_expires_at=?,heartbeat_at=? WHERE workflow_run_id=?", (owner_token, (now + timedelta(seconds=lease_seconds)).isoformat(), now.isoformat(), workflow_run_id))
-                self._transition(workflow_run_id, "running", "running", "LEASE_ACQUIRED", now.isoformat())
+                prior_status = str(row["status"])
+                self.__connection.execute("UPDATE workflow_run SET status='running',completed_at=NULL,owner_token=?,lease_expires_at=?,heartbeat_at=? WHERE workflow_run_id=?", (owner_token, (now + timedelta(seconds=lease_seconds)).isoformat(), now.isoformat(), workflow_run_id))
+                self._transition(
+                    workflow_run_id,
+                    prior_status,
+                    "running",
+                    (
+                        "WORKFLOW_RESUMED"
+                        if prior_status == "failed"
+                        else "LEASE_ACQUIRED"
+                    ),
+                    now.isoformat(),
+                )
                 self.__connection.commit()
         except PersistenceError as error:
             if error.code == "RUNTIME_BUSY":
@@ -1594,17 +1675,25 @@ class WorkflowLedger:
                 "RESEARCH_RUN_JSON_INVALID",
                 "Canonical research JSON is not valid JSON.",
             ) from error
+        nested = (
+            decoded.get("research_run")
+            if isinstance(decoded, Mapping)
+            and decoded.get("schema_version")
+            == "ResearchEvaluationBundle@1"
+            else None
+        )
         source_identity = (
-            isinstance(decoded, Mapping)
-            and decoded.get("run_id") == research_run_id
-            and decoded.get("schema_version") == row["engine_schema_version"]
+            isinstance(nested, Mapping)
+            and nested.get("run_id") == research_run_id
+            and nested.get("schema_version")
+            == row["engine_schema_version"]
         )
         if not source_identity:
             raise PersistenceError(
                 "RESEARCH_RUN_JSON_IDENTITY_MISMATCH",
-                "Canonical research JSON identity does not match its database record.",
+                "Canonical research bundle does not contain the exact research run.",
             )
-        return decoded
+        return nested
 
     def _decision_view_payload(self, workflow_run_id: str) -> DecisionViewPayload:
         rows = tuple(
@@ -1620,7 +1709,7 @@ class WorkflowLedger:
                 "JOIN object_blob o ON o.sha256=a.object_sha256 "
                 "WHERE r.workflow_run_id=? "
                 "AND r.ref_role='decision_view_manifest' "
-                "AND f.manifest_role='workflow_decision_view@2' "
+                "AND f.manifest_role='workflow_decision_view@3' "
                 "ORDER BY m.member_order",
                 (workflow_run_id,),
             )
@@ -1642,16 +1731,35 @@ class WorkflowLedger:
                 "ResearchDecisionPdf@1",
             ),
         )
-        if len(rows) != 3 or any(
+        workbook_contracts = {
             (
-                row["member_order"] != index
-                or row["member_role"] != role
-                or row["media_type"] != media
-                or row["schema_version"] != schema
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet",
+                "ResearchDecisionWorkbook@1",
+            ),
+            (
+                "application/json",
+                "ResearchWorkbookProjection@1",
+            ),
+        }
+        if (
+            len(rows) != 4
+            or any(
+                (
+                    row["member_order"] != index
+                    or row["member_role"] != role
+                    or row["media_type"] != media
+                    or row["schema_version"] != schema
+                )
+                for index, (row, (role, media, schema)) in enumerate(
+                    zip(rows[:3], expected)
+                )
             )
-            for index, (row, (role, media, schema)) in enumerate(
-                zip(rows, expected)
-            )
+            or rows[3]["member_order"] != 3
+            or rows[3]["member_role"] != "decision_view_workbook"
+            or (
+                rows[3]["media_type"], rows[3]["schema_version"]
+            ) not in workbook_contracts
         ):
             raise PersistenceError(
                 "RESEARCH_DECISION_VIEW_INCOMPLETE",
@@ -1670,15 +1778,169 @@ class WorkflowLedger:
                     "Decision view artifact failed content verification.",
                 )
             payloads.append(payload)
+        workbook_ready = (
+            rows[3]["schema_version"]
+            == "ResearchDecisionWorkbook@1"
+        )
+        workbook_reason_code = None
+        if not workbook_ready:
+            limitation = json.loads(payloads[3])
+            if (
+                not isinstance(limitation, Mapping)
+                or limitation.get("schema_version")
+                != "ResearchWorkbookProjection@1"
+                or limitation.get("status") != "limited"
+                or not limitation.get("reason_code")
+                or limitation.get("produced_filename")
+                != "research-workbook-limitation.json"
+            ):
+                raise PersistenceError(
+                    "RESEARCH_WORKBOOK_LIMITATION_INVALID",
+                    "Workbook limitation artifact failed typed validation.",
+                )
+            workbook_reason_code = str(limitation["reason_code"])
         return DecisionViewPayload(
             manifest_id=str(rows[0]["manifest_id"]),
             json_artifact_id=str(rows[0]["artifact_id"]),
             html_artifact_id=str(rows[1]["artifact_id"]),
             pdf_artifact_id=str(rows[2]["artifact_id"]),
+            workbook_artifact_id=str(rows[3]["artifact_id"]),
             json_bytes=payloads[0],
             html_bytes=payloads[1],
             pdf_bytes=payloads[2],
+            workbook_bytes=payloads[3],
+            workbook_media_type=str(rows[3]["media_type"]),
+            workbook_schema_version=str(rows[3]["schema_version"]),
+            workbook_filename=(
+                "research-decision.xlsx"
+                if workbook_ready
+                else "research-workbook-limitation.json"
+            ),
+            workbook_status="ready" if workbook_ready else "limited",
+            workbook_reason_code=workbook_reason_code,
         )
+
+    def _recent_trend_assessment(
+        self, assessment_id: str
+    ) -> RecentTrendAssessment:
+        if not assessment_id:
+            raise WorkflowPersistenceError(
+                "RECENT_TREND_ASSESSMENT_NOT_FOUND",
+                "recent_trend.load",
+                assessment_id,
+            )
+        rows = tuple(
+            self.__connection.execute(
+                "SELECT DISTINCT a.artifact_id,a.object_sha256,"
+                "o.size_bytes,o.relative_path "
+                "FROM artifact_manifest f "
+                "JOIN artifact_manifest_member m USING(artifact_manifest_id) "
+                "JOIN artifact a USING(artifact_id) "
+                "JOIN object_blob o ON o.sha256=a.object_sha256 "
+                "WHERE f.manifest_role='workflow_final' "
+                "AND m.member_role='recent_trend_assessment' "
+                "AND a.schema_version='ResearchComponentResult@1' "
+                "ORDER BY a.artifact_id"
+            )
+        )
+        matches: list[RecentTrendAssessment] = []
+        wrapper_fields = {
+            "artifact_id", "schema_version", "component", "status",
+            "reason_codes", "content", "source_member_ids",
+        }
+        assessment_fields = {
+            "assessment_id", "schema_version", "security_id",
+            "data_snapshot_id", "as_of_session", "status",
+            "classification", "close", "sma20", "sma60",
+            "sma20_five_sessions_prior", "window_low_20",
+            "observation_count", "price_basis", "evidence_refs",
+            "reason_codes", "content_hash",
+        }
+        for row in rows:
+            path = self.__data_root / str(row["relative_path"])
+            payload = path.read_bytes() if path.is_file() else b""
+            if (
+                len(payload) != int(row["size_bytes"])
+                or hashlib.sha256(payload).hexdigest()
+                != str(row["object_sha256"])
+            ):
+                raise PersistenceError(
+                    "OBJECT_INTEGRITY_FAILED",
+                    "Recent trend artifact failed content verification.",
+                )
+            try:
+                wrapper = json.loads(payload)
+                if (
+                    not isinstance(wrapper, Mapping)
+                    or set(wrapper) != wrapper_fields
+                    or wrapper.get("schema_version")
+                    != "ResearchComponentResult@1"
+                    or wrapper.get("component")
+                    != "recent_trend_assessment"
+                ):
+                    raise ValueError("RECENT_TREND_ARTIFACT_SCHEMA_INVALID")
+                identity = {
+                    name: wrapper[name]
+                    for name in (
+                        "schema_version", "component", "status",
+                        "reason_codes", "content", "source_member_ids",
+                    )
+                }
+                if wrapper.get("artifact_id") != (
+                    "recent_trend_assessment_"
+                    + canonical_hash(identity)[:24]
+                ):
+                    raise ValueError("RECENT_TREND_ARTIFACT_IDENTITY_INVALID")
+                value = wrapper.get("content")
+                if not isinstance(value, Mapping) or set(value) != assessment_fields:
+                    raise ValueError("RECENT_TREND_CONTENT_SCHEMA_INVALID")
+                def decimal_or_none(name: str) -> Decimal | None:
+                    item = value[name]
+                    return None if item is None else Decimal(str(item))
+                assessment = RecentTrendAssessment(
+                    assessment_id=str(value["assessment_id"]),
+                    security_id=str(value["security_id"]),
+                    data_snapshot_id=str(value["data_snapshot_id"]),
+                    as_of_session=str(value["as_of_session"]),
+                    status=str(value["status"]),
+                    classification=(
+                        None if value["classification"] is None
+                        else str(value["classification"])
+                    ),
+                    close=decimal_or_none("close"),
+                    sma20=decimal_or_none("sma20"),
+                    sma60=decimal_or_none("sma60"),
+                    sma20_five_sessions_prior=decimal_or_none(
+                        "sma20_five_sessions_prior"
+                    ),
+                    window_low_20=decimal_or_none("window_low_20"),
+                    observation_count=int(value["observation_count"]),
+                    price_basis=str(value["price_basis"]),
+                    evidence_refs=tuple(str(item) for item in value["evidence_refs"]),
+                    reason_codes=tuple(str(item) for item in value["reason_codes"]),
+                    content_hash=str(value["content_hash"]),
+                    schema_version=str(value["schema_version"]),
+                )
+                assessment.validate()
+                if tuple(wrapper["source_member_ids"]) != assessment.evidence_refs:
+                    raise ValueError("RECENT_TREND_LINEAGE_INVALID")
+            except (
+                InvalidOperation, TypeError, ValueError,
+                json.JSONDecodeError, RecentTrendError,
+            ) as error:
+                raise PersistenceError(
+                    "RECENT_TREND_ARTIFACT_INVALID",
+                    "Recent trend artifact failed typed validation.",
+                ) from error
+            if assessment.assessment_id == assessment_id:
+                matches.append(assessment)
+        if len(matches) != 1:
+            raise WorkflowPersistenceError(
+                "RECENT_TREND_ASSESSMENT_NOT_FOUND",
+                "recent_trend.load",
+                assessment_id,
+            )
+        return matches[0]
 
     def _fail_execution(self, command: FailExecution) -> None:
         completed_at = _now()
@@ -1726,17 +1988,7 @@ class WorkflowLedger:
         workflow_snapshot = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='workflow_snapshot'", (workflow_run_id,)).fetchone()
         final_manifest = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='final_manifest'", (workflow_run_id,)).fetchone()
         decision_manifest = self.__connection.execute("SELECT ref_id FROM workflow_run_ref WHERE workflow_run_id=? AND ref_role='decision_view_manifest'", (workflow_run_id,)).fetchone()
-        presentation_artifacts = {
-            row["member_role"]: row["artifact_id"]
-            for row in self.__connection.execute(
-                "SELECT member_role,artifact_id "
-                "FROM artifact_manifest_member "
-                "WHERE artifact_manifest_id=? "
-                "AND member_role IN "
-                "('decision_view_json','decision_view_html','decision_view_pdf')",
-                (decision_manifest[0],),
-            )
-        }
+        presentation = self._decision_view_payload(workflow_run_id)
         artifact_record_ids = tuple(
             row[0]
             for row in self.__connection.execute(
@@ -1746,19 +1998,75 @@ class WorkflowLedger:
                 (final_manifest[0],),
             )
         )
+        trend_row = self.__connection.execute(
+            "SELECT a.object_sha256,o.size_bytes,o.relative_path "
+            "FROM artifact_manifest_member m "
+            "JOIN artifact a USING(artifact_id) "
+            "JOIN object_blob o ON o.sha256=a.object_sha256 "
+            "WHERE m.artifact_manifest_id=? "
+            "AND m.member_role='recent_trend_assessment' "
+            "AND a.schema_version='ResearchComponentResult@1'",
+            (final_manifest[0],),
+        ).fetchone()
+        if trend_row is None:
+            raise PersistenceError(
+                "RESEARCH_RECENT_TREND_INCOMPLETE",
+                "Final research manifest has no recent trend assessment.",
+            )
+        trend_bytes = (
+            self.__data_root / str(trend_row["relative_path"])
+        ).read_bytes()
+        if (
+            len(trend_bytes) != int(trend_row["size_bytes"])
+            or hashlib.sha256(trend_bytes).hexdigest()
+            != str(trend_row["object_sha256"])
+        ):
+            raise PersistenceError(
+                "OBJECT_INTEGRITY_FAILED",
+                "Recent trend artifact failed content verification.",
+            )
+        trend_wrapper = json.loads(trend_bytes)
+        trend_value = (
+            trend_wrapper.get("content")
+            if isinstance(trend_wrapper, Mapping)
+            and trend_wrapper.get("schema_version")
+            == "ResearchComponentResult@1"
+            and trend_wrapper.get("component")
+            == "recent_trend_assessment"
+            else None
+        )
+        recent_trend_assessment_id = (
+            str(trend_value.get("assessment_id", ""))
+            if isinstance(trend_value, Mapping)
+            else ""
+        )
+        if not recent_trend_assessment_id:
+            raise PersistenceError(
+                "RECENT_TREND_ARTIFACT_INVALID",
+                "Recent trend artifact has no assessment identity.",
+            )
         return ResearchWorkflowResult(
-            workflow_run_id,
-            record["research_run_id"],
-            record["data_snapshot_id"],
-            workflow_snapshot[0] if workflow_snapshot else None,
-            final_manifest[0],
-            ReferenceDisposition(decision["disposition"]),
-            decision["reason_code"],
-            decision["stale_by_days"],
-            presentation_artifacts["decision_view_json"],
-            presentation_artifacts["decision_view_html"],
-            presentation_artifacts["decision_view_pdf"],
-            artifact_record_ids,
+            workflow_run_id=workflow_run_id,
+            research_run_id=str(record["research_run_id"]),
+            research_snapshot_id=str(record["data_snapshot_id"]),
+            workflow_snapshot_id=(
+                str(workflow_snapshot[0]) if workflow_snapshot else None
+            ),
+            final_manifest_id=str(final_manifest[0]),
+            disposition=ReferenceDisposition(decision["disposition"]),
+            reason_code=str(decision["reason_code"]),
+            stale_by_days=int(decision["stale_by_days"]),
+            json_artifact_id=presentation.json_artifact_id,
+            html_artifact_id=presentation.html_artifact_id,
+            pdf_artifact_id=presentation.pdf_artifact_id,
+            artifact_record_ids=artifact_record_ids,
+            recent_trend_assessment_id=recent_trend_assessment_id,
+            workbook_artifact_id=presentation.workbook_artifact_id,
+            workbook_status=presentation.workbook_status,
+            workbook_media_type=presentation.workbook_media_type,
+            workbook_schema_version=presentation.workbook_schema_version,
+            workbook_filename=presentation.workbook_filename,
+            workbook_reason_code=presentation.workbook_reason_code,
         )
 
     def _history(self, workflow_run_id: str) -> WorkflowHistory:
@@ -1914,7 +2222,7 @@ class WorkflowLedger:
                     (
                         "research_json",
                         "Artifact",
-                        member_by_role["research_run_json"],
+                        member_by_role["research_bundle_json"],
                         checkpoint.disposition.value,
                     ),
                     (

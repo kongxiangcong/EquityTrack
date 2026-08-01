@@ -23,7 +23,7 @@ from trading_platform.application.workflow_ledger import (
     ObjectInventoryQuery,
     PersistenceCountsQuery,
 )
-from trading_platform.credentials import CredentialAdapter, EnvironmentCredentialAdapter
+from trading_platform.credentials import CredentialAdapter, LocalCredentialAdapter
 from trading_platform.account_import import personal_source_privacy_errors
 
 
@@ -62,14 +62,14 @@ def _assert_no_reparse_components(path: Path) -> None:
 class PlatformOperations:
     SCHEMA = "PlatformBackup@1"
     MAX_FILES = 100_000
-    MAX_FILE_SIZE = 64 * 1024 * 1024
+    MAX_FILE_SIZE = 128 * 1024 * 1024
     MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
 
     def __init__(self, data_root: Path, migrations_root: Path | None = None, credential_adapter: CredentialAdapter | None = None) -> None:
         self.data_root = data_root.resolve()
         self.repo_root = Path(__file__).resolve().parents[2]
         self.migrations_root = (migrations_root or self.repo_root / "migrations").resolve()
-        self.credential_adapter = credential_adapter or EnvironmentCredentialAdapter()
+        self.credential_adapter = credential_adapter or LocalCredentialAdapter()
 
     def bootstrap(self) -> dict[str, Any]:
         if (self.data_root / "platform.sqlite3").is_file():
@@ -89,7 +89,7 @@ class PlatformOperations:
         try:
             report = store.doctor()
             scopes = []
-            for variable in ("TUSHARE_TOKEN", "OPENAI_API_KEY"):
+            for variable in ("TUSHARE_TOKEN",):
                 value = self.credential_adapter.get(variable)
                 scopes.append({"credential_scope": hashlib.sha256(variable.encode()).hexdigest(), "status": "configured" if value else "missing"})
             identity_files = [Path(__file__).resolve().parents[2] / "pyproject.toml", Path(__file__).resolve().parents[2] / "web/package-lock.json", *sorted(self.migrations_root.glob("*.sql"))]

@@ -79,8 +79,7 @@ class AcceptanceEvidenceService:
         ),
         "migration_and_operations": (
             "tests/platform/test_migration_0015_0017.py",
-            "tests/platform/test_trading_discipline_kernel_e2e.py",
-            "tests/platform/test_trading_discipline_kernel_backup_restore.py",
+            "tests/platform/test_product_e2e.py",
             "tests/platform/test_operations_backup_restore.py",
             "tests/platform/test_workflow_ledger_recovery.py",
             "tests/platform/test_architecture_boundaries.py",
@@ -117,8 +116,8 @@ class AcceptanceEvidenceService:
         ("TDK-AC-025", "workflow_and_journal", "test_accept_or_reject_proposal_has_only_draft_side_effects"),
         ("TDK-AC-026", "contract", "test_new_activation_preserves_old_version_history"),
         ("TDK-AC-027", "presentation", "test_web_and_skill_serialize_identical_application_dtos"),
-        ("TDK-AC-028", "migration_and_operations", "test_restart_replay_is_idempotent"),
-        ("TDK-AC-029", "migration_and_operations", "test_full_chain_rebuilds_after_restore"),
+        ("TDK-AC-028", "migration_and_operations", "test_product_restart_recovery_preserves_canonical_plan"),
+        ("TDK-AC-029", "migration_and_operations", "test_product_backup_restore_preserves_canonical_plan"),
         ("TDK-AC-030", "workflow_and_journal", "test_missing_broker_evidence_is_unverified_not_not_executed"),
         ("TDK-AC-031", "presentation", "test_navigation_home_allowlist_progressive_disclosure_and_accessibility"),
         ("TDK-AC-032", "presentation", "test_unversioned_workspace_and_public_daily_routes_are_absent"),
@@ -184,6 +183,12 @@ class AcceptanceEvidenceService:
                 self.repo_root / "migrations" / "0016_strategy_plan_model_b.sql",
                 self.repo_root / "migrations" / "0017_manual_review_journal.sql",
                 self.repo_root / "migrations" / "0018_terminal_financial_evidence.sql",
+                self.repo_root / "migrations" / "0019_portfolio_risk_policy.sql",
+                self.repo_root / "migrations" / "0020_open_trade_plan_draft_graph.sql",
+                self.repo_root / "migrations" / "0021_research_component_inputs.sql",
+                self.repo_root / "migrations" / "0022_manual_review_universe_v2.sql",
+                self.repo_root / "migrations" / "0023_open_draft_upsert_receipt.sql",
+                self.repo_root / "migrations" / "0024_trade_plan_evidence_payload.sql",
             )
         }
         migration_manifest = evidence_root / "migration-hashes.json"
@@ -191,7 +196,7 @@ class AcceptanceEvidenceService:
             json.dumps(
                 {
                     "schema_version": "KernelMigrationHashEvidence@1",
-                    "expected_versions": [15, 16, 17, 18],
+                    "expected_versions": list(range(15, 25)),
                     "script_sha256": migration_hashes,
                 },
                 sort_keys=True,

@@ -7,8 +7,8 @@ import uuid
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 
+from trading_platform.domain.market_time import supported_market_timezone
 from trading_platform.domain.chart import (
     AnnotationAnchor,
     AnnotationCommand,
@@ -41,6 +41,23 @@ class ChartService:
     ) -> None:
         self.connection = connection
         self.writer_lock = writer_lock
+
+    def get_latest_series(self, security_id: str) -> ChartSeries:
+        row = self.connection.execute(
+            """SELECT s.data_snapshot_id FROM data_snapshot s
+            WHERE s.scope_id=? AND EXISTS(
+              SELECT 1 FROM data_snapshot_member m
+              JOIN ohlcv_version o USING(normalized_version_id)
+              WHERE m.data_snapshot_id=s.data_snapshot_id
+                AND o.security_id=s.scope_id
+            )
+            ORDER BY s.effective_session_date DESC,
+                     s.data_snapshot_id DESC LIMIT 1""",
+            (security_id,),
+        ).fetchone()
+        if row is None:
+            raise AnnotationError("CHART_SNAPSHOT_NOT_FOUND")
+        return self.get_series(security_id, str(row[0]))
 
     def get_series(
         self,
@@ -512,7 +529,9 @@ class ChartService:
             ):
                 raise AnnotationError("ANNOTATION_ANCHOR_INVALID")
             if (
-                timestamp.astimezone(ZoneInfo(snapshot["market_timezone"]))
+                timestamp.astimezone(
+                    supported_market_timezone(snapshot["market_timezone"])
+                )
                 .date()
                 .isoformat()
                 not in sessions

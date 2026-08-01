@@ -44,8 +44,11 @@ class SQLiteMarketRepository:
         if universe_ref is None or universe_ref["market_scope_id"] != command.market_scope_id:
             raise MarketError("MARKET_SNAPSHOT_SCOPE_MISMATCH")
         benchmark = self.connection.execute("SELECT security_id FROM security_identifier WHERE code='000300' AND market='SZSE' AND valid_from<=? AND (valid_to IS NULL OR valid_to>?) ORDER BY valid_from DESC LIMIT 1", (snapshot["effective_session_date"], snapshot["effective_session_date"])).fetchone()
-        if benchmark is None:
-            raise MarketError("MARKET_BENCHMARK_MISSING")
+        benchmark_security_id = (
+            str(benchmark["security_id"])
+            if benchmark is not None
+            else "benchmark_unavailable"
+        )
         universe_row = self.connection.execute("SELECT * FROM market_universe_version WHERE market_universe_version_id=?", (universe_ref["market_universe_version_id"],)).fetchone()
         member_rows = self.connection.execute("SELECT * FROM market_universe_member WHERE market_universe_version_id=? ORDER BY security_id", (universe_ref["market_universe_version_id"],)).fetchall()
         member_identity = [{"security_id": row["security_id"], "listed_from": row["listed_from"], "delisted_after": row["delisted_after"], "st_from": row["st_from"], "st_to": row["st_to"], "source_ref": row["source_ref"]} for row in member_rows]
@@ -57,7 +60,7 @@ class SQLiteMarketRepository:
         bars = tuple(MarketBar(row["security_id"], row["session_date"], Decimal(row["close_decimal"]), Decimal(row["amount_decimal"]) if row["amount_decimal"] is not None else None, row["normalized_version_id"]) for row in rows)
         constraint_rows = self.connection.execute("SELECT * FROM security_market_constraint WHERE data_snapshot_id=? AND session_date=? ORDER BY security_id", (command.data_snapshot_id, snapshot["effective_session_date"])).fetchall()
         constraints = {row["security_id"]: SecurityMarketConstraint(row["security_id"], row["session_date"], bool(row["suspended"]), Decimal(row["limit_up_decimal"]), Decimal(row["limit_down_decimal"]), bool(row["corporate_action_conflict"]), tuple(json.loads(row["evidence_refs_json"]))) for row in constraint_rows}
-        status, components = compute_components(command.security_id, benchmark[0], universe_members, bars, snapshot["effective_session_date"], snapshot["freshness_status"], snapshot["quality_status"], constraints)
+        status, components = compute_components(command.security_id, benchmark_security_id, universe_members, bars, snapshot["effective_session_date"], snapshot["freshness_status"], snapshot["quality_status"], constraints)
         universe_identity = {"market_universe_version_id": universe_ref["market_universe_version_id"], "membership_hash": universe_row["membership_hash"], "source_policy_version": universe_row["source_policy_version"], "members": member_identity}
         fingerprint = canonical_hash({"security_id": command.security_id, "market_scope_id": command.market_scope_id, "requested_date": snapshot["requested_date"], "effective_session_date": snapshot["effective_session_date"], "data_snapshot_id": command.data_snapshot_id, "universe": universe_identity, "market_model_version": command.market_model_version, "freshness_policy_version": command.freshness_policy_version, "code_identity_hash": code_identity_hash, "components": components})
         existing = self._market_snapshot_for_fingerprint(fingerprint)

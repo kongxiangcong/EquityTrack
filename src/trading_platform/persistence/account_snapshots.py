@@ -763,6 +763,22 @@ class SQLiteAccountSnapshotProjection:
             else None
         )
 
+    def resolve_account(self, reference: str) -> str:
+        rows = self._connection.execute(
+            "SELECT account_id FROM account "
+            "WHERE account_id=? OR alias=? ORDER BY account_id",
+            (reference, reference),
+        ).fetchall()
+        identities = tuple(
+            dict.fromkeys(str(row["account_id"]) for row in rows)
+        )
+        if len(identities) != 1:
+            raise AccountSnapshotError(
+                "ACCOUNT_REFERENCE_NOT_FOUND"
+                if not identities
+                else "ACCOUNT_REFERENCE_AMBIGUOUS"
+            )
+        return identities[0]
     def version(self, account_snapshot_version_id: str) -> AccountSnapshotVersion:
         return load_version_record(self._connection, account_snapshot_version_id)
 

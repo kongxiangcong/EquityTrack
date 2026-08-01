@@ -254,7 +254,7 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
                     rows.append({"market": source.get("exchange") or market, "session_date": session_date, "is_open": bool(source.get("is_open")), "calendar_version": "provider-calendar@1", "published_at": session_date, "published_precision": "date", "available_at": _shanghai_start(session_date), "availability_basis": "publisher_timestamp"})
                 elif dataset == "market_universe":
                     listed_from = _iso_date(source.get("list_date"))
-                    rows.append({"market_scope_id": market, "security_id": security_id, "listed_from": listed_from, "source_ref": f"{source_ref}:stock_basic:{source.get('ts_code')}", "published_at": listed_from, "published_precision": "date", "available_at": _shanghai_start(listed_from), "availability_basis": "publisher_timestamp"})
+                    rows.append({"market_scope_id": "CN_A_SHARE" if market in {"SSE", "SZSE", "BSE"} else market, "security_id": security_id, "listed_from": listed_from, "source_ref": f"{source_ref}:stock_basic:{source.get('ts_code')}", "published_at": listed_from, "published_precision": "date", "available_at": _shanghai_start(listed_from), "availability_basis": "publisher_timestamp"})
                 elif dataset in {"income", "balancesheet", "cashflow"}:
                     if security_id is None:
                         raise ValueError("FINANCIAL_STATEMENT_SECURITY_REQUIRED")
@@ -318,6 +318,29 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
             if row["adjustment_mode"] != "none" or high < max(open_, close) or low > min(open_, close) or volume < 0:
                 quality = QualityStatus.QUARANTINE
                 issues.append(("quarantine", "OHLCV_INVALID"))
+            market_path_keys = {
+                "adjustment_factor",
+                "suspended",
+                "limit_state",
+            }
+            present_market_path_keys = market_path_keys.intersection(row)
+            if present_market_path_keys and present_market_path_keys != market_path_keys:
+                raise ValueError("MARKET_PATH_DAILY_EVIDENCE_INCOMPLETE")
+            if present_market_path_keys:
+                try:
+                    factor = _decimal(row, "adjustment_factor")
+                except (InvalidOperation, KeyError) as error:
+                    raise ValueError("MARKET_PATH_ADJUSTMENT_FACTOR_INVALID") from error
+                if (
+                    factor <= 0
+                    or type(row["suspended"]) is not bool
+                    or row["limit_state"] not in {"none", "up", "down"}
+                    or (
+                        row.get("corporate_action_identity") is not None
+                        and not str(row["corporate_action_identity"])
+                    )
+                ):
+                    raise ValueError("MARKET_PATH_DAILY_EVIDENCE_INVALID")
             natural_key = f"{row['security_id']}:{row['session_date']}:none"
             event_at = str(row["session_date"])
         elif dataset == "trade_cal":
@@ -330,6 +353,54 @@ def normalize(dataset: str, payload: bytes, security_id: str | None = None, mark
             if not required.issubset(row): raise ValueError("SCHEMA_DRIFT")
             natural_key = f"{row['market_scope_id']}:{row['security_id']}:{row['listed_from']}"
             event_at = str(row["listed_from"])
+        elif dataset in {"research_model_input", "market_path_policy"}:
+            required = {
+                "component_input_id",
+                "security_id",
+                "published_at",
+                "available_at",
+                "extracted_fields",
+            }
+            if not required.issubset(row) or row["security_id"] != security_id:
+                raise ValueError("RESEARCH_COMPONENT_INPUT_IDENTITY_INVALID")
+            component_input_id = str(row["component_input_id"])
+            fields = row["extracted_fields"]
+            if not component_input_id or not isinstance(fields, list) or not fields:
+                raise ValueError("RESEARCH_COMPONENT_INPUT_FIELDS_MISSING")
+            field_required = {
+                "field_name",
+                "subject_id",
+                "semantic_role",
+                "period",
+                "value",
+                "unit",
+                "currency",
+                "extraction_method",
+                "confidence",
+            }
+            for field in fields:
+                if (
+                    not isinstance(field, dict)
+                    or not field_required.issubset(field)
+                    or any(
+                        field[key] in {None, ""}
+                        for key in field_required - {"value"}
+                    )
+                    or field["value"] is None
+                    or field["confidence"] not in {"low", "medium", "high"}
+                ):
+                    raise ValueError("RESEARCH_COMPONENT_INPUT_FIELD_INVALID")
+            try:
+                if parse_instant(str(row["published_at"])) > parse_instant(
+                    available_at
+                ):
+                    raise ValueError
+            except ValueError as error:
+                raise ValueError("RESEARCH_COMPONENT_INPUT_TIME_INVALID") from error
+            natural_key = (
+                f"{row['security_id']}:{dataset}:{component_input_id}"
+            )
+            event_at = str(row["published_at"])
         elif dataset in {"income", "balancesheet", "cashflow"}:
             required = {
                 "security_id",
