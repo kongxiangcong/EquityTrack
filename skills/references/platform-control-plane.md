@@ -40,9 +40,11 @@ Web 复用相同读取与变更边界，只是可选查看器。Web 不得成为
 
 ## 数据源与凭据
 
-仅接受 `ProviderJob@2`。生产组合固定 provider 目的地和 credential scope；进程环境是显式覆盖，否则从 Windows Credential Manager 的 `tradingSystem/TUSHARE_TOKEN` 读取。不得把凭据值写入文件、命令、日志、数据库、备份或产物。
+取数目标路由一律先查 [数据源映射 Lookup Table](data-source-map.md)：业务运行时只经 Kimi agent-gw 路由（Wind/iFind 结构化 API），禁止直连供应商 endpoint 与任何旁路。
 
-Tushare-compatible 数据保留 `structured_aggregator` 身份，不视为官方披露。同步和资格检查共享 raw -> normalize -> quality/PIT -> persist 路径。真实源不可用时可以使用合格缓存或隔离 fixture 验证，但不能把 fixture、跳过或 timeout 报成真实同步通过。
+仅接受 `ProviderJob@2`。生产组合固定 provider 目的地和 credential scope；进程环境是显式覆盖，否则从批准的本地 credential seam 读取。不得把凭据值写入文件、命令、日志、数据库、备份或产物。
+
+聚合数据保留 `structured_aggregator` 身份，不视为官方披露。同步和资格检查共享 raw -> normalize -> quality/PIT -> persist 路径。真实源不可用时可以使用合格缓存或隔离 fixture 验证，但不能把 fixture、跳过或 timeout 报成真实同步通过。
 
 ## 研究和计划
 

@@ -1,7 +1,7 @@
 {
   "fixture_pack_id": "yihua-002897-20260710-derived-facts@1",
   "captured_at": "2026-07-12T04:27:47.8408380Z",
-  "source_identity": "preconfigured_tushare_compatible_non_official",
+  "source_identity": "derived_fact_fixture_non_official",
   "source_authority": "structured_aggregator",
   "safe_capture_sha256": "ed5e784c2f4f335b430783f1e5160add4e1df086559748a679f30b95df758e11",
   "datasets": ["daily", "trade_cal", "stock_basic"],
@@ -22,7 +22,7 @@
       "payload_sha256": "1ee9990736b47d2b0d0ea4895cd5bfaf3b39cfcfe3cd80a533572d84aded98a6",
       "classification": "real_derived_facts",
       "source_request": {"api_name": "trade_cal", "exchange": "SZSE", "start_date": "20260710", "end_date": "20260711"},
-      "source_evidence": ["safe_capture_sha256", "https://tushare.pro/document/2?doc_id=26"],
+      "source_evidence": ["safe_capture_sha256", "skills/references/data-source-map.md"],
       "availability_policy": "documented_calendar_and_weekend_rule@1",
       "rights": {"local_storage_allowed": true, "deterministic_replay_allowed": true, "repository_redistribution_allowed": true, "packaged_distribution_allowed": true}
     },
@@ -42,7 +42,7 @@
       "payload_sha256": "15ce2173e7baa236d3f9c8cad88b9443c0929f95f9ada0783769a3370f9c3efb",
       "classification": "real_derived_ohlcv_plus_future_sentinel",
       "source_request": {"api_name": "daily", "ts_code": "002897.SZ", "trade_date": "20260710"},
-      "source_evidence": ["safe_capture_sha256", "https://tushare.pro/document/1?doc_id=27"],
+      "source_evidence": ["safe_capture_sha256", "skills/references/data-source-map.md"],
       "availability_policy": "documented_market_close_plus_provider_delay@1",
       "rights": {"local_storage_allowed": true, "deterministic_replay_allowed": true, "repository_redistribution_allowed": true, "packaged_distribution_allowed": true}
     }

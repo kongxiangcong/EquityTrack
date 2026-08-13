@@ -226,7 +226,7 @@ def _authoring(
         subject_id=security_id,
         as_of="2026-03-04",
         model_identity="research-model@1",
-        policy_identity="ResearchEvaluationPolicy@2",
+        policy_identity="ResearchEvaluationPolicy@3",
         status="completed" if complete_report else "completed_with_limits",
         valuation_view=(
             {"status": "ready", "formal_per_share_valuation": True}

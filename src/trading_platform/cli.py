@@ -16,6 +16,8 @@ from trading_platform.application import (
     open_account_current_export,
     open_account_acceptance,
     open_account_history,
+    open_account_snapshot_queries,
+    open_account_state_queries,
     open_data_synchronization,
     open_import_preview,
     open_market,
@@ -32,6 +34,7 @@ from trading_platform.application import (
     open_workflow_inspection,
     open_workflow_runtime,
     HealthQuery,
+    GetEstimatedAccountState,
     ResumeWorkflowCommand,
     StartResearchWorkflow,
     ApplicationCommandEnvelopeV1,
@@ -91,6 +94,9 @@ def _parser() -> argparse.ArgumentParser:
     evaluation_show = sub.add_parser("evaluation-show")
     evaluation_show.add_argument("--data-root", type=Path, required=True)
     evaluation_show.add_argument("--evaluation-id", required=True)
+    account_show = sub.add_parser("account-show")
+    account_show.add_argument("--data-root", type=Path, required=True)
+    account_show.add_argument("--account", default="kong")
     for name in ("sync",):
         command = sub.add_parser(name)
         command.add_argument("--data-root", type=Path, required=True)
@@ -202,6 +208,26 @@ def main(argv: list[str] | None = None) -> int:
         elif operation == "watchlist-list":
             with open_watchlist(args.data_root) as watchlist:
                 result = {"items": [asdict(item) for item in watchlist.list()]}
+        elif operation == "account-show":
+            with (
+                open_account_snapshot_queries(args.data_root) as snapshot_queries,
+                open_account_state_queries(args.data_root) as state_queries,
+                open_watchlist(args.data_root) as watchlist,
+            ):
+                account_id = snapshot_queries.resolve(args.account)
+                state = state_queries.get(GetEstimatedAccountState(account_id))
+                references = {item.security_id: item for item in watchlist.list()}
+            state_payload = asdict(state)
+            for position in state_payload["positions"]:
+                reference = references.get(position["security_id"])
+                if reference is not None:
+                    position["market"] = reference.market
+                    position["code"] = reference.code
+            result = {
+                "account_reference": args.account,
+                "resolved_account_id": account_id,
+                "estimated_account_state": state_payload,
+            }
         elif operation in {
             "market-show",
             "evaluation-show",

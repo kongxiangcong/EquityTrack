@@ -1075,6 +1075,7 @@ def test_official_provider_qualification_commits_identity_bound_pdf_receipt(
                 "not_applicable",
                 provider.transport_identity,
                 "test_loopback",
+                decoded.source_policy,
             )
 
     policy = canonical_official_source_policy(

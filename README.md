@@ -17,6 +17,45 @@
 
 当前范围不包括真实自动下单、券商订单生命周期、收益承诺和业务运行时大语言模型调用。
 
+## 系统能力总览
+
+| 能力域 | 已实现能力 |
+| --- | --- |
+| 账户与持仓 | 用户声明账户快照（手工数值、截图或自然语言先形成草稿，经你确认后成为不可变版本）；同花顺等券商导出的预检、确认、历史导入与幂等增量更新；由快照与已确认执行记录推导的估算账户状态；组合风险政策 |
+| 观察池 | 版本化观察项的持久化、恢复与列出 |
+| 公司研究 | 时点一致数据冻结、输入来源五态分类、有界估算、可证伪预测、stress/base/improvement 三情景估值、估值方法适用性路由、蒙特卡洛与市场路径适用性决定、近期走势评估；同一 `ResearchDecisionView@2` 投影为 JSON、HTML、PDF 与工作簿槽位 |
+| K 线与标注 | 本地 K 线工作区；锚定证券与时间/价格坐标、编辑留痕的版本化图表标注 |
+| 交易计划 | Model B 密封计划图、core/grid 持仓袖套、AST v2 计划规则与冲突政策、一次性确认挑战、计划影响评估与变更提案 |
+| 今日复核 | 手动组合复核运行（自动选择最近已证明完整交易日）、跨复核持续存在的决策任务、行动日志与用户申报执行记录（可追加修正、保持未核验状态） |
+| 周期复盘 | 周度或自定义周期的纪律复盘草稿与不可变版本，月度视图聚合已确认版本 |
+| 市场状态 | 不可变市场快照与计划评估（触发、未触发、受阻或无法判断及原因） |
+| 本地网页 | 只读决策工作台：组合、持仓、复核、研究索引、账户快照编辑器与 K 线工作区六个读取模型 |
+| 运维与复现 | 初始化、健康检查、诊断、只向前迁移、授权同步、失败恢复、历史回看、归档、备份恢复、验收证据与统一测试入口 |
+
+## 当前进度
+
+以下状态以 git 历史、工单状态与验收矩阵为准。
+
+已完成的里程碑：
+
+1. **股票投研 MVP**：`equity_research` 确定性核心（证据、财务、预测、情景估值、市场路径、模拟与输出政策）。
+2. **第一条纵向切片**：规格阶段 13/13、实施阶段 16/16 工单全部 resolved，覆盖受保护运行时、观察项、PIT 数据快照、研究运行复用、K 线标注、计划版本确认、市场快照与计划评估、故障恢复、工作区与历史回看、Windows 运维与备份恢复、验收证据、同花顺导入和个人账户初始化。
+3. **外部能力采纳**：收敛为 A 股-only 架构；结构化行情经 Tushare-compatible 网关，官方披露限 CNINFO/SZSE。
+4. **代码结构深化**：8/8 工单 resolved，完成预测与情景估值模块分区、类型化研究读取视图和应用接口收缩。
+5. **交易纪律内核**：17 个工单全部 resolved，35 条验收标准（TDK-AC-001 至 TDK-AC-035）闭合，交付账户快照版本、估算账户状态、策略目录、密封计划图、袖套、AST v2、确认挑战、手动组合复核、决策任务、执行记录、纪律复盘、版本化读取模型和生产网页。
+6. **本地 Skill 成为唯一产品入口**：六类自然语言任务统一账户查看、今日更新、周期复盘、股票研究、计划创建与计划更新。
+
+进行中：
+
+- **组合感知的每周交易纪律闭环**（wayfinder，`.scratch/portfolio-aware-weekly-discipline/`）：13 个工单中 6 个已 resolved（决策旅程审计、用户声明快照合同、收盘后评估窗口、风险政策护栏、市场机制数据资格、持仓研究就绪门）；7 个开放（工作区原型、计划编制与指标目录、每日评估与每周复盘、隐私与运维、真实旅程验收 seam、Spec 综合与对抗审计）。
+
+明确未就绪或超出范围：
+
+- SSE、BSE 与公司 IR 官方披露接入仍不可用，不能视为 ready；
+- 策略验证与回测能力当前不可用，显式选择时只记录非阻断的 `requested_unavailable`；
+- 市场机制 v2 因逐 session PIT 成分数据资格受阻；
+- 不含真实下单、盘中触发、后台自动调度和收益承诺；交付范围为 A 股。
+
 ## 系统框架
 
 ![个人投研与交易纪律平台学术架构图](docs/assets/project-framework.png)
@@ -163,7 +202,26 @@ Set-Location ..
 
 账户快照确认后，再确认组合风险政策。缺少这两项确认事实时，计划生成会失败关闭，而不是采用隐含默认值。
 
-### 5. 使用六类自然语言任务
+### 5. 默认账户与账户信息查询规范路径
+
+**默认账户**：alias `kong`（内部身份 `account_kong`，基准币种 CNY），数据根 `E:\trading-data\kong`。对话和作业中未指明账户时一律按此默认账户处理；不要向用户索取内部账户 ID，按 alias 解析即可。
+
+**唯一事实来源**：本地数据根内最新已确认账户快照，加上快照之后用户已明确确认的执行记录。任何入口（对话、网页、脚本、测试）都不得直接对 `platform.sqlite3` 发 SQL 读取账户事实；账户状态与持仓的唯一规范读取 seam 是应用层接口：
+
+- `open_account_state_queries(data_root)` → `AccountStateQueries.get(GetEstimatedAccountState(account_id))` / `list_current()`：净值、现金、持仓数量/成本/市值、数据质量与无法计算项；
+- `open_read_models(data_root)` → `ReadModelService.portfolio(account_id, generated_at)` / `holding(account_id, security_id, generated_at)`：组合工作台与单持仓视图，内部证券身份由证券主数据投影为交易所代码。
+
+按入口的规范查询路径：
+
+| 入口 | 规范路径 |
+|---|---|
+| Agent 对话（首选） | 按 [`skills/SKILL.md`](skills/SKILL.md) 任务 A“查看当前账户”执行，细节见 [`skills/tasks/account-status.md`](skills/tasks/account-status.md)；返回截至日期与口径、净值、现金、持仓市值、总仓位、现金比例、逐持仓数量/市值/仓位/成本口径收益及数据质量。只有已确认快照而无更新行情时，明确标注为快照口径。 |
+| 本地网页（只读工作台） | `serve --data-root E:\trading-data\kong --account-id account_kong ...` 后，GET `/api/read-models/portfolio@1`（净值、现金、总仓位、持仓与观察池）和 `/api/read-models/holding@1?security_id=...`（单持仓）。网页只读，不是任何任务的完成条件。 |
+| 命令行 | `account-show --data-root <root> [--account kong]`：`--account` 接受 alias 或内部账户 ID，默认 `kong`，经上述应用接口解析并返回估计账户状态，持仓附 `market`/`code` 交易所代码投影；`account-current-export-draft-show` 只覆盖初始化草稿存储。 |
+
+**更新类操作**（增、改）不属于查询路径，统一走确认流程，后续实现不得绕开：券商导出初始化 `account-current-export-draft`、历史导入 `account-history-import`，以及应用命令信封 `account_snapshot.register_account@2` / `create_draft@1` / `update_draft@1` / `confirm@1`。账户记录为不可变事实，设计上**没有删除操作**；纠错通过新草稿加用户确认完成，不做原地修改。
+
+### 6. 使用六类自然语言任务
 
 普通用户无需启动网页或手写命令。直接按 [`skills/SKILL.md`](skills/SKILL.md) 提出以下任一任务：查看当前账户、更新今天状态、本周或指定周期复盘、研究一只股票并生成图表报告、创建交易计划、更新交易计划。
 
@@ -420,25 +478,46 @@ flowchart LR
 
 ## 维护者命令
 
-以下是唯一稳定维护入口；普通用户应让 Codex 调用：
+以下是唯一稳定维护入口；普通用户应让 Codex 调用（安装后也可使用等价的 `trading-platform` 控制台命令）：
 
 ```powershell
+# 数据根生命周期与诊断
 python -m trading_platform.cli bootstrap --data-root <root>
 python -m trading_platform.cli health --data-root <root>
-python -m trading_platform.cli doctor --data-root <root>
+python -m trading_platform.cli doctor --data-root <root> [--job-file <job.json>]
 python -m trading_platform.cli migrate --data-root <root>
+
+# 数据同步、研究与资格化
 python -m trading_platform.cli sync --data-root <root> --job-file <job.json>
 python -m trading_platform.cli research --data-root <root> --request-file <request.json>
 python -m trading_platform.cli provider-qualify --data-root <root> --job-file <job.json>
+
+# 运行恢复、历史与读取
 python -m trading_platform.cli resume --data-root <root> --workflow-run-id <id> --owner-token <token>
 python -m trading_platform.cli history --data-root <root> --workflow-run-id <id>
 python -m trading_platform.cli archive --data-root <root> --kind manifest --id <id>
+python -m trading_platform.cli watchlist-list --data-root <root>
+python -m trading_platform.cli market-show --data-root <root> --market-snapshot-id <id>
+python -m trading_platform.cli evaluation-show --data-root <root> --evaluation-id <id>
+python -m trading_platform.cli account-show --data-root <root> [--account kong]
+
+# 本地网页、备份与恢复
 python -m trading_platform.cli serve --data-root <root> --web-root web/dist --account-id <id> --security-id <id>
 python -m trading_platform.cli backup --data-root <root> --archive <outside-root.zip>
 python -m trading_platform.cli restore --archive <backup.zip> --target-root <new-root>
 python -m trading_platform.cli switch-restored-root --restored-root <new-root> --pointer-file <active-root.json>
+
+# 券商导出预检、账户初始化与历史导入
+python -m trading_platform.cli import-preview --source <export.xls> --account-alias <alias> --base-currency CNY
+python -m trading_platform.cli account-current-export-draft --data-root <root> --source <export.xls> --account-alias <alias> --base-currency CNY --selected-as-of <date> --private-root <dir> --trading-session <date> --invocation-id <id>
+python -m trading_platform.cli account-current-export-draft-show --data-root <root> --account-id <id>
+python -m trading_platform.cli account-history-import --data-root <root> --account-id <id> --source <export.xls> --private-root <dir> --invocation-id <id>
+python -m trading_platform.cli account-acceptance --data-root <root> --account-id <id> --suite-artifact <artifact.json>
+
+# 验证与盘点
 python -m trading_platform.cli test --repo-root .
 python -m trading_platform.cli inventory --repo-root .
+python -m trading_platform.cli acceptance --data-root <root> --fixture-manifest <manifest.json>
 ```
 
 正式业务变更只经过共享分派器：
@@ -474,19 +553,36 @@ python -X utf8 -m pytest -q tests/test_skill_entrypoint.py tests/platform/test_s
 ## 项目结构
 
 ```text
-src/equity_research/       证据、预测、情景估值和确定性计算
-src/trading_platform/      领域、应用任务、持久化、命令行与本地网页
-migrations/                只向前的一次性 SQLite 迁移
-skills/SKILL.md            唯一 Codex/Skill 控制面入口
+src/equity_research/       确定性投研核心：证据、财务、预测、情景估值、市场路径、模拟与输出政策
+src/trading_platform/      平台主体
+  application/             任务级应用接口、命令分派、计划编制、复核复盘与读取模型
+  domain/                  账户、计划、规则、复盘、市场与工作流的领域不变量
+  persistence/             SQLite 事务状态、迁移与读取模型持久化
+  data/                    数据源适配、官方披露获取与标准化
+  research/                研究分析计划、有界估算与研究评估
+  workflows/               研究工作流状态机
+  identity/                规范身份与代码身份
+  cli.py / web_server.py   维护命令行与本地网页适配器
+migrations/                只向前的一次性 SQLite 迁移（当前 0001 至 0024）
+skills/SKILL.md            唯一 Codex/Skill 控制面入口（六类任务）
+skills/tasks/              账户状态、周期复盘、股票研究、交易计划的任务细则
+skills/references/         来源清单、输出投影、财务模型与控制面边界
+skills/valuation/          估值方法路由、行业估值矩阵与条件 DCF 规则
 examples/platform/         版本化数据源作业示例
-tests/                     领域、应用、适配器、网页与验收测试
-web/                       本地决策工作台及 web/dist
+examples/duofuduo-002407/  真实标的研究示例与产物
+examples/yihua-002897/
+tests/                     领域、应用、适配器、网页与验收测试（93 个测试文件）
+web/                       本地决策工作台及已提交的生产构建 web/dist
+docs/                      架构、调研、验收与审计文档
+CONTEXT.md                 领域词汇表与概念边界
 ```
 
 长期目标和不可违反约束以 [`docs/prompts/trading_platform_codex_prompt_optimized.md`](docs/prompts/trading_platform_codex_prompt_optimized.md) 与 [`AGENTS.md`](AGENTS.md) 为准。进一步阅读：
 
+- [`CONTEXT.md`](CONTEXT.md)：领域词汇表，统一账户、研究、计划、复盘等概念边界
 - [`docs/architecture/target-architecture.md`](docs/architecture/target-architecture.md)
 - [`docs/open-source-research.md`](docs/open-source-research.md)
+- [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)：进度追踪约定，工单与 Spec 位于 `.scratch/<feature>/`
 - [`skills/references/source-manifest.md`](skills/references/source-manifest.md)
 - [`skills/valuation/valuation-method-router.md`](skills/valuation/valuation-method-router.md)
 - [`skills/valuation/dcf-and-sensitivity.md`](skills/valuation/dcf-and-sensitivity.md)

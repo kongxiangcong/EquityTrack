@@ -1,29 +1,28 @@
 from __future__ import annotations
 
-from trading_platform.application.contracts import StartResearchWorkflow
-
-
 import json
 import os
 import re
 import subprocess
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
 
-from trading_platform.valuation_workbook import (
-    ValuationWorkbookAdapter,
-    ValuationWorkbookError,
+from tests.platform.test_research_bundle_decision_projection import (
+    _project,
 )
-from trading_platform.research_view import ResearchDecisionView
 from tests.platform.test_research_workflow import (
     _request,
     _root,
 )
-from tests.platform.test_research_bundle_decision_projection import (
-    _project,
+from trading_platform.application.contracts import StartResearchWorkflow
+from trading_platform.research_view import ResearchDecisionView
+from trading_platform.valuation_workbook import (
+    ValuationWorkbookAdapter,
+    ValuationWorkbookError,
 )
 
 
@@ -108,6 +107,225 @@ def _ready_view() -> ResearchDecisionView:
             method["reconciliation"] = value_range
     return ResearchDecisionView.from_dict(payload)
 
+def _reconciliation_view(
+    *,
+    canonical_equity: str = "110",
+    per_share: str = "10",
+) -> ResearchDecisionView:
+    point = {
+        "basis_value": {"value": "100"},
+        "equity_value": {"value": canonical_equity},
+        "per_share_value": {"value": per_share},
+    }
+    return replace(
+        _ready_view(),
+        scenarios=(
+            {
+                "role": "base",
+                "methods": (
+                    {
+                        "method_id": "fcff_dcf",
+                        "status": "ready",
+                        "conditional_value_range": {"base": point},
+                        "reconciliation": {"base": point},
+                    },
+                ),
+            },
+        ),
+    )
+
+
+
+
+def _inline_cell(reference: str, value: str) -> str:
+    return (
+        f'<c r="{reference}" t="inlineStr"><is><t>{value}</t></is></c>'
+    )
+
+
+def _number_cell(reference: str, value: str) -> str:
+    return f'<c r="{reference}"><v>{value}</v></c>'
+
+
+def _worksheet(*rows: str) -> bytes:
+    content = "".join(rows)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/'
+        f'spreadsheetml/2006/main"><sheetData>{content}</sheetData>'
+        '</worksheet>'
+    ).encode("utf-8")
+
+
+def _row(number: int, *cells: str) -> str:
+    return f'<row r="{number}">{"".join(cells)}</row>'
+
+
+def _write_reconciliation_fixture(
+    path: Path,
+    *,
+    canonical_equity: str = "110",
+    diluted_shares: str = "11",
+) -> None:
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/'
+        'spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships"><sheets>'
+        '<sheet name="Summary" sheetId="1" r:id="rId1"/>'
+        '<sheet name="Canonical Inputs" sheetId="2" r:id="rId2"/>'
+        '<sheet name="Bridge Trace" sheetId="3" r:id="rId3"/>'
+        '</sheets></workbook>'
+    ).encode("utf-8")
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+        '2006/relationships">'
+        '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/>'
+        '<Relationship Id="rId3" Target="worksheets/sheet3.xml"/>'
+        '</Relationships>'
+    ).encode("utf-8")
+    summary = _worksheet(
+        _row(
+            12,
+            _inline_cell("B12", "fcff_dcf"),
+            '<c r="C12"><f>\'Reconciliation\'!J2</f><v>10</v></c>',
+        )
+    )
+    canonical = _worksheet(
+        _row(
+            1,
+            *(
+                _inline_cell(f"{column}1", label)
+                for column, label in zip(
+                    "ABCDEFG",
+                    (
+                        "Scenario Role",
+                        "Scenario Label",
+                        "Method",
+                        "Point",
+                        "Canonical Basis",
+                        "Canonical Equity",
+                        "Canonical Per Share",
+                    ),
+                )
+            ),
+        ),
+        _row(
+            2,
+            _inline_cell("A2", "base"),
+            _inline_cell("B2", "Base"),
+            _inline_cell("C2", "fcff_dcf"),
+            _inline_cell("D2", "base"),
+            _number_cell("E2", "100"),
+            _number_cell("F2", canonical_equity),
+            _number_cell("G2", "10"),
+        ),
+    )
+    bridge = _worksheet(
+        _row(
+            1,
+            *(
+                _inline_cell(f"{column}1", label)
+                for column, label in zip(
+                    "ABCDEFGH",
+                    (
+                        "Scenario Role",
+                        "Method",
+                        "Point",
+                        "Step",
+                        "Operation",
+                        "Amount",
+                        "Evidence Refs",
+                        "Equity Output Step",
+                    ),
+                )
+            ),
+        ),
+        *(
+            _row(
+                row_number,
+                _inline_cell(f"A{row_number}", "base"),
+                _inline_cell(f"B{row_number}", "fcff_dcf"),
+                _inline_cell(f"C{row_number}", "base"),
+                _number_cell(f"D{row_number}", str(step)),
+                _inline_cell(f"E{row_number}", operation),
+                _number_cell(f"F{row_number}", amount),
+                _inline_cell(f"G{row_number}", evidence),
+                _number_cell(f"H{row_number}", equity_output),
+            )
+            for row_number, (step, operation, amount, evidence, equity_output)
+            in enumerate(
+                (
+                    (1, "basis_value", "100", "basis", "0"),
+                    (2, "add_cash", "20", "cash", "0"),
+                    (3, "subtract_debt", "10", "debt", "1"),
+                    (4, "divide_diluted_shares", diluted_shares, "shares", "0"),
+                ),
+                start=2,
+            )
+        ),
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", summary)
+        archive.writestr("xl/worksheets/sheet2.xml", canonical)
+        archive.writestr("xl/worksheets/sheet3.xml", bridge)
+
+
+def test_workbook_recomputes_canonical_equity_bridge_and_per_share(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "decimal-reconciliation.xlsx"
+    _write_reconciliation_fixture(workbook)
+
+    ValuationWorkbookAdapter.validate_export(
+        workbook, expected_view=_reconciliation_view()
+    )
+
+
+def test_workbook_rejects_tampered_canonical_equity(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "tampered-equity.xlsx"
+    _write_reconciliation_fixture(workbook, canonical_equity="111")
+
+    with pytest.raises(
+        ValuationWorkbookError,
+        match="VALUATION_WORKBOOK_EQUITY_RECONCILIATION_FAILED",
+    ):
+        ValuationWorkbookAdapter.validate_export(
+            workbook,
+            expected_view=_reconciliation_view(canonical_equity="111"),
+        )
+
+
+def test_workbook_rejects_tampered_diluted_shares(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "tampered-shares.xlsx"
+    _write_reconciliation_fixture(workbook, diluted_shares="10")
+
+    with pytest.raises(
+        ValuationWorkbookError,
+        match="VALUATION_WORKBOOK_PER_SHARE_RECONCILIATION_FAILED",
+    ):
+        ValuationWorkbookAdapter.validate_export(
+            workbook,
+            expected_view=_reconciliation_view(),
+        )
+
+
+def test_workbook_validator_requires_canonical_decision_view(
+    tmp_path: Path,
+) -> None:
+    workbook = tmp_path / "missing-expected-view.xlsx"
+    _write_reconciliation_fixture(workbook)
+    with pytest.raises(TypeError):
+        ValuationWorkbookAdapter.validate_export(workbook)
+
 
 def test_workbook_adapter_rejects_noncanonical_input(
     tmp_path: Path,
@@ -153,6 +371,18 @@ def test_workbook_reconciles_canonical_valuation_artifact(
         assert _cell_text(
             archive, "xl/worksheets/sheet4.xml", "M2"
         ) == "OK"
+        assert _cell_text(
+            archive, "xl/worksheets/sheet5.xml", "A5"
+        ) == "Research analysis plan"
+        assert _cell_text(
+            archive, "xl/worksheets/sheet5.xml", "B5"
+        ) == "ResearchAnalysisPlan@1"
+        assert _cell_text(
+            archive, "xl/worksheets/sheet5.xml", "E5"
+        ) == "bound"
+        assert _cell_text(
+            archive, "xl/worksheets/sheet6.xml", "A7"
+        ) == "Workbook Projection Status"
 
 
 @pytest.mark.skipif(
@@ -260,8 +490,9 @@ def test_workbook_rejects_hardcoded_summary_output(
         node_modules=Path(os.environ["CODEX_ARTIFACT_NODE_MODULES"]),
         builder_script=ROOT / "scripts" / "render_valuation_xlsx.mjs",
     )
+    view = _ready_view()
     exported = adapter.export(
-        _ready_view(),
+        view,
         tmp_path / "valuation.xlsx",
     )
     tampered = tmp_path / "hardcoded-summary.xlsx"
@@ -287,4 +518,4 @@ def test_workbook_rejects_hardcoded_summary_output(
         ValuationWorkbookError,
         match="VALUATION_WORKBOOK_SUMMARY_FORMULA_CHAIN_BROKEN",
     ):
-        adapter.validate_export(tampered)
+        adapter.validate_export(tampered, expected_view=view)

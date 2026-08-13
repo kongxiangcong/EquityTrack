@@ -150,7 +150,10 @@ def test_concrete_evaluation_uses_only_frozen_evidence_and_degrades_truthfully(
     )
     evidence = root.inspection.snapshot(request.data_snapshot_id)
 
-    result = ResearchEvaluation(ResearchEngine()).evaluate(request, evidence)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    result = evaluator.evaluate(
+        request, evidence, evaluator.prepare(request, evidence)
+    )
 
     assert result.research_run["status"] == "completed_with_limits"
     assert result.research_run["integrity_issues"] == []

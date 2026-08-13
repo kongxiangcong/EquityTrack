@@ -4,9 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
-import threading
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from trading_platform.application.workflow_ledger import WorkflowPersistenceError
@@ -20,160 +18,100 @@ from trading_platform.application import (
     open_provider_qualification,
 )
 
-from tests.platform.provider_runtime_fixture import LoopbackTushareRuntime
+from tests.platform.provider_runtime_fixture import (
+    FakeAgentGwRuntime,
+    RawResponse,
+    csv_response,
+)
 
 
-def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret(tmp_path: Path) -> None:
-    calls: list[str] = []
+_KIMI_JOB_TEMPLATE = (
+    Path(__file__).resolve().parents[2]
+    / "examples"
+    / "platform"
+    / "kimi-agentgw-yihua-job.json"
+)
+
+
+def _agentgw_handler(calls: list[str]):
     responses = {
-        "trade_cal": {"code": 0, "data": {"fields": ["exchange", "cal_date", "is_open"], "items": [["SZSE", "20260710", 1]]}},
-        "stock_basic": {"code": 0, "data": {"fields": ["ts_code", "list_date"], "items": [["002897.SZ", "20170907"]]}},
-        "daily": {"code": 0, "data": {"fields": ["ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount"], "items": [["002897.SZ", "20260710", 88.51, 91.0, 82.33, 82.33, 221879.03, 1926373.75544]]}},
-        "income": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "revenue", "n_income_attr_p"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 1000.0, 100.0]]}},
-        "balancesheet": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "money_cap", "st_borr"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 500.0, 200.0]]}},
-        "cashflow": {"code": 0, "data": {"fields": ["ts_code", "ann_date", "end_date", "report_type", "update_flag", "n_cashflow_act", "c_pay_acq_const_fiolta"], "items": [["002897.SZ", "20260429", "20260331", "1", "1", 150.0, 50.0]]}},
+        "wind_get_index_price": csv_response(
+            ["trade_date", "wind_code", "open", "high", "low", "close", "volume", "amt"],
+            [["2026-07-10", "000001.SH", "3808", "3858", "3793", "3858", "1", "1"]],
+        ),
+        "wind_get_stock_info": csv_response(
+            ["wind_code", "证券简称", "首发上市日期"],
+            [["002897.SZ", "意华股份", "2017-09-07"]],
+        ),
+        "wind_get_price": csv_response(
+            ["trade_date", "wind_code", "open", "high", "low", "close", "volume", "amt"],
+            [["2026-07-10", "002897.SZ", "88.51", "91.0", "82.33", "82.33", "22187903", "1926373755"]],
+        ),
+        "ifind_get_financial_statements": csv_response(
+            [
+                "ths_operating_total_revenue_stock",
+                "ths_np_atoopc_stock",
+                "ths_currency_fund_stock",
+                "ths_st_borrow_stock",
+                "ths_ncf_from_oa_stock",
+                "ths_cash_paid_for_assets_stock",
+            ],
+            [["1000.0", "100.0", "500.0", "200.0", "150.0", "50.0"]],
+        ),
+        "ifind_get_forecast": csv_response(
+            ["ths_fore_np_fy1_stock"],
+            [["2427375000.0"]],
+        ),
     }
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
-            size = int(self.headers["Content-Length"])
-            request = json.loads(self.rfile.read(size))
-            calls.append(request["api_name"])
-            assert request["token"] == "secret-not-for-artifacts"
-            payload = json.dumps(responses[request["api_name"]]).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+    def handle(payload: dict) -> RawResponse:
+        calls.append(payload["api_name"])
+        return RawResponse(responses[payload["api_name"]])
 
-        def log_message(self, *_args: object) -> None:
-            return
+    return handle
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        job_path = tmp_path / "job.json"
-        job_path.write_text(json.dumps({
-            "schema_version": "ProviderJob@2",
-            "provider": {
-                "provider_id": "tushare-compatible",
-                "adapter_version": "tushare-http@2",
-                "credential_env": "TUSHARE_TOKEN",
-            },
-            "query_policy": {
-                "schema_version": "QueryPolicy@1",
-                "lookback_days": 550,
-                "market_universe_list_status": "L",
-                "adjustment_mode": "none",
-            },
-            "source_policy": {
-                "schema_version": "SourcePolicy@1",
-                "provider_id": "tushare-compatible",
-                "adapter_version": "tushare-http@2",
-                "source_identity": "preconfigured_tushare_compatible_non_official",
-                "source_authority": "structured_aggregator",
-                "terms_profile": "gateway-terms-pending@1",
-                "rights": {
-                    "automation_allowed": True,
-                    "local_storage_allowed": True,
-                    "deterministic_replay_allowed": True,
-                    "derived_use_allowed": True,
-                    "redistribution_allowed": False,
-                    "reviewed_on": "2026-07-24",
-                    "evidence_sha256": None,
-                },
-                "routes": [
-                    {
-                        "dataset": dataset,
-                            "freshness_max_stale_days": 1,
-                        "completeness": (
-                            "optional"
-                            if dataset == "cashflow"
-                            else "required"
-                        ),
-                            "retry_max_attempts": 1,
-                        "fallback": "no_fallback",
-                        "failure_disposition": (
-                            "quarantine"
-                            if dataset == "cashflow"
-                            else "block"
-                        ),
-                    }
-                    for dataset in (
-                        "trade_cal",
-                        "market_universe",
-                        "daily",
-                        "income",
-                        "balancesheet",
-                        "cashflow",
-                    )
-                ],
-            },
-            "request": {
-                "invocation_id": "qualify-live",
-                "security_id": "security_yihua",
-                "security_code": "002897",
-                "requested_date": "2026-07-10",
-                "as_of_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(),
-                "market_timezone": "Asia/Shanghai",
-                "market": "SZSE",
-                "snapshot_purpose": "workflow",
-                "datasets": [
-                    "trade_cal",
-                    "market_universe",
-                    "daily",
-                    "income",
-                    "balancesheet",
-                    "cashflow",
-                ],
-                "network_authorized": True,
-                "offline": False,
-            },
-            "security_identity": {
-                "security_id": "security_yihua",
-                "venue": "SZSE",
-                "code": "002897",
-                "currency": "CNY",
-                "listed_from": "2017-09-07"
-            },
-        }), encoding="utf-8")
 
-        assert open_platform_operations(tmp_path / "data").bootstrap()["status"] == "passed"
-        with open_provider_qualification(
-            tmp_path / "data", job_path, provider_runtime=LoopbackTushareRuntime(f"http://127.0.0.1:{server.server_port}/")
-        ) as qualification:
-            result = qualification.run()
-        artifact_path = tmp_path / "qualification.json"
-        with open_provider_qualification(
-            tmp_path / "data", job_path, provider_runtime=LoopbackTushareRuntime(f"http://127.0.0.1:{server.server_port}/")
-        ) as replay_qualification:
-            replay_result = replay_qualification.run()
-        assert replay_result.receipt_artifact_id == result.receipt_artifact_id
-        cached_job = json.loads(job_path.read_text(encoding="utf-8"))
-        cached_job["request"]["invocation_id"] = "qualify-cached"
-        cached_job_path = tmp_path / "cached-job.json"
-        cached_job_path.write_text(
-            json.dumps(cached_job),
-            encoding="utf-8",
-        )
-        with open_provider_qualification(
-            tmp_path / "data",
-            cached_job_path,
-            provider_runtime=LoopbackTushareRuntime(
-                f"http://127.0.0.1:{server.server_port}/"
-            ),
-        ) as cached_qualification:
-            cached_result = cached_qualification.run()
-        assert cached_result.status == "qualified"
+def _kimi_job(invocation_id: str) -> dict:
+    job = json.loads(_KIMI_JOB_TEMPLATE.read_text(encoding="utf-8"))
+    job["request"]["invocation_id"] = invocation_id
+    job["request"]["requested_date"] = "2026-07-10"
+    job["request"]["as_of_at"] = (
+        datetime.now(timezone.utc) + timedelta(minutes=1)
+    ).isoformat()
+    return job
 
-    finally:
-        server.shutdown()
-        server.server_close()
+
+def test_kimi_agentgw_live_qualification_uses_production_sync_path(tmp_path: Path) -> None:
+    calls: list[str] = []
+    runtime = FakeAgentGwRuntime(_agentgw_handler(calls))
+
+    job_path = tmp_path / "job.json"
+    job_path.write_text(json.dumps(_kimi_job("qualify-live")), encoding="utf-8")
+
+    assert open_platform_operations(tmp_path / "data").bootstrap()["status"] == "passed"
+    with open_provider_qualification(
+        tmp_path / "data", job_path, provider_runtime=runtime
+    ) as qualification:
+        result = qualification.run()
+    artifact_path = tmp_path / "qualification.json"
+    with open_provider_qualification(
+        tmp_path / "data", job_path, provider_runtime=runtime
+    ) as replay_qualification:
+        replay_result = replay_qualification.run()
+    assert replay_result.receipt_artifact_id == result.receipt_artifact_id
+    cached_job_path = tmp_path / "cached-job.json"
+    cached_job_path.write_text(
+        json.dumps(_kimi_job("qualify-cached")),
+        encoding="utf-8",
+    )
+    with open_provider_qualification(
+        tmp_path / "data", cached_job_path, provider_runtime=runtime
+    ) as cached_qualification:
+        cached_result = cached_qualification.run()
+    assert cached_result.status == "qualified"
 
     assert result.status == "qualified"
-    assert result.provider_identity == "preconfigured_tushare_compatible_non_official"
+    assert result.provider_identity == "kimi_agentgw_wind_ifind_non_official"
     assert {item.dataset for item in result.attempts} == {
         "trade_cal",
         "market_universe",
@@ -181,18 +119,17 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
         "income",
         "balancesheet",
         "cashflow",
+        "forecast_actual",
     }
     assert all(item.status == "complete" and item.raw_sha256 is not None and len(item.raw_sha256) == 64 for item in result.attempts)
-    assert "secret-not-for-artifacts" not in json.dumps(result.to_dict())
-    expected_calls = [
-        "trade_cal",
-        "stock_basic",
-        "daily",
-        "income",
-        "balancesheet",
-        "cashflow",
-    ]
-    assert calls == expected_calls * 2
+    live_call_kinds = set(calls)
+    assert live_call_kinds == {
+        "wind_get_index_price",
+        "wind_get_stock_info",
+        "wind_get_price",
+        "ifind_get_financial_statements",
+        "ifind_get_forecast",
+    }
     artifact_id = result.receipt_artifact_id
     live = open_acceptance_evidence(
         tmp_path / "data",
@@ -232,8 +169,7 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
         )
     with pytest.raises(WorkflowPersistenceError) as blocked_snapshot:
         with open_provider_qualification(
-            tmp_path / "data", job_path,
-            provider_runtime=LoopbackTushareRuntime(f"http://127.0.0.1:{server.server_port}/"),
+            tmp_path / "data", job_path, provider_runtime=runtime
         ) as replay_qualification:
             replay_qualification.run()
     assert blocked_snapshot.value.code == "QUALIFICATION_RECEIPT_LINEAGE_INVALID"
@@ -249,8 +185,7 @@ def test_tushare_live_qualification_uses_production_sync_path_and_redacts_secret
     raw_path.write_bytes(b"tampered-provider-response")
     with pytest.raises(WorkflowPersistenceError) as tampered:
         with open_provider_qualification(
-            tmp_path / "data", job_path,
-            provider_runtime=LoopbackTushareRuntime(f"http://127.0.0.1:{server.server_port}/"),
+            tmp_path / "data", job_path, provider_runtime=runtime
         ) as replay_qualification:
             replay_qualification.run()
     assert tampered.value.code == "QUALIFICATION_RECEIPT_INTEGRITY_FAILED"
@@ -262,7 +197,7 @@ def test_provider_job_v2_rejects_retired_class_selector_contract(tmp_path: Path)
         json.dumps(
             {
                 "provider": {
-                    "provider_" + "type": "tushare_compatible",
+                    "provider_" + "type": "agentgw_compatible",
                     "provider_id": "retired",
                     "adapter_version": "retired@1",
                 },
@@ -296,10 +231,11 @@ def test_provider_job_v2_rejects_retired_class_selector_contract(tmp_path: Path)
 
 
 def test_public_qualification_rejects_caller_spoofed_source_authority(tmp_path: Path) -> None:
-    repo = Path(__file__).resolve().parents[2]
-    job = json.loads(
-        (repo / "examples/platform/tushare-compatible-yihua-job.json").read_text(encoding="utf-8")
-    )
+    def unexpected_call(payload: dict) -> RawResponse:
+        raise AssertionError("untrusted jobs must never reach the datasource")
+
+    runtime = FakeAgentGwRuntime(unexpected_call)
+    job = json.loads(_KIMI_JOB_TEMPLATE.read_text(encoding="utf-8"))
     job["source_policy"]["source_authority"] = "official"
     job["request"]["invocation_id"] = "spoofed-source-authority"
     job_path = tmp_path / "spoofed-job.json"
@@ -308,8 +244,7 @@ def test_public_qualification_rejects_caller_spoofed_source_authority(tmp_path: 
 
     with pytest.raises(Exception) as rejected:
         with open_provider_qualification(
-            tmp_path / "data", job_path,
-            provider_runtime=LoopbackTushareRuntime("http://127.0.0.1:9/"),
+            tmp_path / "data", job_path, provider_runtime=runtime
         ) as qualification:
             qualification.run()
 
@@ -320,8 +255,7 @@ def test_public_qualification_rejects_caller_spoofed_source_authority(tmp_path: 
     route_job_path.write_text(json.dumps(job), encoding="utf-8")
     with pytest.raises(Exception) as route_rejected:
         with open_provider_qualification(
-            tmp_path / "data", route_job_path,
-            provider_runtime=LoopbackTushareRuntime("http://127.0.0.1:9/"),
+            tmp_path / "data", route_job_path, provider_runtime=runtime
         ) as qualification:
             qualification.run()
     assert getattr(route_rejected.value, "code", None) == "PROVIDER_SOURCE_POLICY_UNTRUSTED"

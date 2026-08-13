@@ -5,6 +5,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from equity_research import ResearchEngine
 
 from tests.platform.application_task_fixture import PlatformTaskFixture
@@ -33,9 +35,12 @@ SEGMENT = "core"
 def test_complete_frozen_model_inputs_run_all_three_financial_engines() -> None:
     request, evidence = _request_and_evidence()
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(
+    evaluator = ResearchEvaluation(ResearchEngine())
+    prepared = evaluator.prepare(request, evidence)
+    bundle = evaluator.evaluate(
         request,
         evidence,
+        prepared,
     )
 
     assert bundle.forecast.status is ResearchComponentStatus.COMPLETE
@@ -136,9 +141,12 @@ def test_non_official_critical_facts_only_block_the_formal_model(
             coverage_missing=0,
         )
 
-        bundle = ResearchEvaluation(ResearchEngine()).evaluate(
+        evaluator = ResearchEvaluation(ResearchEngine())
+        prepared = evaluator.prepare(request, evidence)
+        bundle = evaluator.evaluate(
             request,
             evidence,
+            prepared,
         )
 
         assert bundle.research_run["status"] == "completed_with_limits"
@@ -175,9 +183,12 @@ def test_reserved_company_segment_id_is_rejected_before_engine_dispatch() -> Non
         for member in evidence.member_evidence
     )
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(
+    changed = replace(evidence, member_evidence=members)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    bundle = evaluator.evaluate(
         request,
-        replace(evidence, member_evidence=members),
+        changed,
+        evaluator.prepare(request, changed),
     )
 
     assert bundle.forecast.status is ResearchComponentStatus.BLOCKED
@@ -545,3 +556,165 @@ def _field(
         "extraction_method": "frozen_typed_model_input",
         "confidence": "high",
     }
+
+
+def test_non_model_dataset_cannot_inject_financial_model_fields() -> None:
+    request, evidence = _request_and_evidence()
+    foreign_member = SnapshotMemberEvidence(
+        normalized_version_id="market_path_policy_with_model_field",
+        dataset="market_path_policy",
+        source_identity="confirmed_market_path_policy",
+        source_authority="fixture",
+        real_source_url="https://example.invalid/market-path-policy",
+        retrieved_at=AS_OF + "T08:00:00+00:00",
+        published_at=AS_OF + "T07:00:00+00:00",
+        available_at=AS_OF + "T07:30:00+00:00",
+        quality_status="usable",
+        extracted_fields=(
+            _field(
+                "forecast.archetype",
+                "financial_institution",
+                "identity",
+                "N/A",
+                AS_OF,
+            ),
+        ),
+    )
+    changed = replace(
+        evidence,
+        members={
+            **evidence.members,
+            foreign_member.normalized_version_id: foreign_member.dataset,
+        },
+        member_evidence=(*evidence.member_evidence, foreign_member),
+    )
+
+    evaluator = ResearchEvaluation(ResearchEngine())
+    bundle = evaluator.evaluate(
+        request, changed, evaluator.prepare(request, changed)
+    )
+
+    assert bundle.forecast.status is ResearchComponentStatus.COMPLETE
+    assert bundle.forecast.content["template_id"] == "manufacturing_driver_graph@2"
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason_code"),
+    (
+        (
+            {"model_path": ""},
+            "RESEARCH_MODEL_INPUT_PATH_INVALID",
+        ),
+        (
+            {"model_path": " forecast.archetype"},
+            "RESEARCH_MODEL_INPUT_PATH_INVALID",
+        ),
+        (
+            {"field_name": "forecast.other"},
+            "RESEARCH_MODEL_INPUT_SCHEMA_INVALID",
+        ),
+        (
+            {"subject_id": "security_other"},
+            "RESEARCH_COMPONENT_INPUT_SUBJECT_INVALID",
+        ),
+        (
+            {"semantic_role": "market_path_constraint"},
+            "RESEARCH_MODEL_INPUT_SCHEMA_INVALID",
+        ),
+        ({"period": ""}, "RESEARCH_MODEL_INPUT_SCHEMA_INVALID"),
+        ({"unit": ""}, "RESEARCH_MODEL_INPUT_SCHEMA_INVALID"),
+        ({"currency": ""}, "RESEARCH_MODEL_INPUT_SCHEMA_INVALID"),
+        ({"value": None}, "RESEARCH_MODEL_INPUT_SCHEMA_INVALID"),
+        ({"value": True}, "RESEARCH_MODEL_INPUT_SCHEMA_INVALID"),
+    ),
+)
+def test_malformed_scenario_field_degrades_only_typed_model_outputs(
+    changes: dict[str, object],
+    reason_code: str,
+) -> None:
+    request, evidence = _request_and_evidence()
+    members = tuple(
+        replace(
+            member,
+            extracted_fields=tuple(
+                (
+                    {**field, **changes}
+                    if field.get("model_path") == "forecast.archetype"
+                    else field
+                )
+                for field in member.extracted_fields
+            ),
+        )
+        for member in evidence.member_evidence
+    )
+
+    changed = replace(evidence, member_evidence=members)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    bundle = evaluator.evaluate(
+        request,
+        changed,
+        evaluator.prepare(request, changed),
+    )
+
+    assert bundle.research_run["integrity_issues"] == []
+    assert bundle.scenario_valuation.reason_codes == (reason_code,)
+
+
+def test_malformed_simulation_field_does_not_block_scenario_valuation() -> None:
+    request, evidence = _request_and_evidence()
+    members = tuple(
+        replace(
+            member,
+            extracted_fields=tuple(
+                (
+                    {**field, "unit": ""}
+                    if field.get("model_path") == "simulation.batch_size"
+                    else field
+                )
+                for field in member.extracted_fields
+            ),
+        )
+        for member in evidence.member_evidence
+    )
+
+    changed = replace(evidence, member_evidence=members)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    bundle = evaluator.evaluate(
+        request,
+        changed,
+        evaluator.prepare(request, changed),
+    )
+
+    assert bundle.scenario_valuation.status in {
+        ResearchComponentStatus.COMPLETE,
+        ResearchComponentStatus.LIMITED,
+    }
+    assert bundle.valuation_simulation_decision.reason_codes == (
+        "RESEARCH_MODEL_INPUT_SCHEMA_INVALID",
+    )
+
+
+def test_evaluation_fingerprint_binds_the_compiled_capability_contract() -> None:
+    request, evidence = _request_and_evidence()
+    member = evidence.member_evidence[0]
+    changed_member = replace(
+        member,
+        extracted_fields=tuple(
+            (
+                {**field, "period": "2023FY"}
+                if index == 0
+                else field
+            )
+            for index, field in enumerate(member.extracted_fields)
+        ),
+    )
+    changed = replace(
+        evidence,
+        member_evidence=(changed_member, *evidence.member_evidence[1:]),
+    )
+    evaluator = ResearchEvaluation(ResearchEngine())
+
+    assert (
+        evaluator.prepare(request, evidence).evaluation_fingerprint
+        != evaluator.prepare(request, changed).evaluation_fingerprint
+    )

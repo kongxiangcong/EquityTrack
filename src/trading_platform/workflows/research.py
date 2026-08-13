@@ -65,11 +65,11 @@ from trading_platform.research_view import ResearchDecisionView
 
 _RESEARCH_WORKFLOW = WorkflowDefinition(
     "research-workflow",
-    "5",
+    "6",
     (
         NodeDefinition(
             "evaluate_research",
-            "3",
+            "4",
             "ResearchWorkflowRequest@2",
             "ResearchEvaluationBundle@1",
             (
@@ -370,15 +370,17 @@ class ResearchWorkflow:
         evidence = self.repository.load(
             SnapshotEvidenceQuery(request.data_snapshot_id)
         )
-        evaluation_fingerprint = self.evaluation.fingerprint(
-            request, evidence
-        )
+        prepared = self.evaluation.prepare(request, evidence)
+        analysis_plan = prepared.analysis_plan
+        evaluation_fingerprint = prepared.evaluation_fingerprint
         contract = self._node("evaluate_research")
         node_fingerprint = self._hash(
             {
                 "node": asdict(contract),
                 "evaluation_fingerprint": evaluation_fingerprint,
                 "engine_identity": self.engine_identity,
+                "analysis_plan_identity": analysis_plan.identity,
+                "analysis_plan_compiler": analysis_plan.compiler_identity,
             }
         )
         completed = self.repository.load(
@@ -409,7 +411,9 @@ class ResearchWorkflow:
             with self._supervise_lease(
                 run_id, owner, lease_seconds
             ):
-                produced = self.evaluation.evaluate(request, evidence)
+                produced = self.evaluation.evaluate(
+                    request, evidence, prepared
+                )
             bundle_payload = produced.to_dict()
             research_payload = dict(produced.research_run)
             view = ResearchDecisionViewFactory().build(
@@ -422,6 +426,8 @@ class ResearchWorkflow:
                     member.normalized_version_id
                     for member in evidence.member_evidence
                 ),
+                analysis_plan=analysis_plan.to_dict(),
+                expected_analysis_plan_identity=analysis_plan.identity,
             )
             decision_json = json.dumps(
                 view,

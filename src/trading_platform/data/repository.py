@@ -353,13 +353,11 @@ class DataRepository:
                     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                     self.connection.execute("INSERT OR IGNORE INTO normalized_record VALUES(?,?,?)", (record_id, item.dataset, item.natural_key))
                     existing = self.connection.execute(
-                        "SELECT nv.normalized_version_id "
-                        "FROM normalized_version nv "
-                        "JOIN provider_attempt pa "
-                        "ON pa.attempt_id=nv.source_attempt_id "
-                        "WHERE nv.normalized_record_id=? "
-                        "AND nv.content_hash=? "
-                        "AND pa.source_policy_identity=?",
+                        "SELECT normalized_version_id "
+                        "FROM normalized_version "
+                        "WHERE normalized_record_id=? "
+                        "AND content_hash=? "
+                        "AND source_policy_identity=?",
                         (
                             record_id,
                             content_hash,
@@ -380,8 +378,8 @@ class DataRepository:
                         revision = 1 if previous is None else previous["revision_no"] + 1
                         version_id = f"version_{canonical_hash({'record': record_id, 'content': content_hash, 'source_policy': current_attempt['source_policy_identity']})[:24]}"
                         self.connection.execute(
-                            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (version_id, record_id, revision, content_hash, attempt_id, item.event_at, item.published_at, item.published_precision, item.available_at, item.availability_basis, item.retrieved_at, item.quality.value, previous["normalized_version_id"] if previous else None),
+                            "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (version_id, record_id, revision, content_hash, attempt_id, current_attempt["source_policy_identity"], item.event_at, item.published_at, item.published_precision, item.available_at, item.availability_basis, item.retrieved_at, item.quality.value, previous["normalized_version_id"] if previous else None),
                         )
                         created_count += 1
                         self._persist_typed_payload(version_id, attempt_id, item)

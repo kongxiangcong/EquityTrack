@@ -14,6 +14,8 @@ from trading_platform.domain.research_decision_projection import (
 from trading_platform.domain.workflow import ReferenceDisposition
 from trading_platform.identity import canonical_hash
 
+RESEARCH_EVALUATION_POLICY_IDENTITY = "ResearchEvaluationPolicy@3"
+
 
 class EvaluationPurpose(str, Enum):
     COMPANY_OUTLOOK = "company_outlook"
@@ -462,6 +464,192 @@ def _bundle_valuation_view(
     }
 
 
+_ANALYSIS_PLAN_FIELDS = frozenset(
+    {
+        "plan_identity",
+        "schema_version",
+        "compiler_identity",
+        "evaluation_plan_identity",
+        "data_snapshot_id",
+        "source_policy_identity",
+        "snapshot_member_ids",
+        "capability_binding",
+        "layers",
+        "nodes",
+    }
+)
+_ANALYSIS_NODE_RECEIPT_FIELDS = frozenset(
+    {
+        "node_id",
+        "node_hash",
+        "output_contract",
+        "requirement",
+        "component",
+    }
+)
+
+
+def _verified_analysis_plan(
+    value: Mapping[str, Any],
+    *,
+    request: ResearchWorkflowRequest,
+    source_policy_identity: str,
+    expected_snapshot_member_ids: tuple[str, ...],
+    expected_analysis_plan_identity: str,
+) -> Mapping[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _ANALYSIS_PLAN_FIELDS
+        or value.get("schema_version") != "ResearchAnalysisPlan@1"
+        or value.get("compiler_identity") != "ResearchAnalysisPlanCompiler@1"
+    ):
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_REQUIRED")
+    raw_members = value.get("snapshot_member_ids")
+    if (
+        value.get("data_snapshot_id") != request.data_snapshot_id
+        or value.get("source_policy_identity") != source_policy_identity
+        or value.get("evaluation_plan_identity")
+        != request.evaluation_plan.identity
+        or not isinstance(raw_members, (list, tuple))
+        or tuple(raw_members) != expected_snapshot_member_ids
+    ):
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_CONTEXT_MISMATCH")
+    if value.get("plan_identity") != expected_analysis_plan_identity:
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_IDENTITY_MISMATCH")
+
+    canonical_content = {
+        key: value[key] for key in value if key != "plan_identity"
+    }
+    if value.get("plan_identity") != (
+        "research_analysis_plan_" + canonical_hash(canonical_content)[:24]
+    ):
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_IDENTITY_MISMATCH")
+    nodes = value.get("nodes")
+    capability = value.get("capability_binding")
+    if (
+        not isinstance(nodes, (list, tuple))
+        or not nodes
+        or any(
+            not isinstance(node, Mapping)
+            or not _ANALYSIS_NODE_RECEIPT_FIELDS.issubset(node)
+            for node in nodes
+        )
+        or not isinstance(capability, Mapping)
+        or capability.get("schema_version") != "FrozenCapabilityBinding@1"
+    ):
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_CONTENT_INVALID")
+    node_ids = tuple(str(node["node_id"]) for node in nodes)
+    if (
+        any(not node_id for node_id in node_ids)
+        or len(node_ids) != len(set(node_ids))
+    ):
+        raise ValueError("RESEARCH_ANALYSIS_PLAN_CONTENT_INVALID")
+    return {
+        **dict(value),
+        "snapshot_member_ids": tuple(str(item) for item in raw_members),
+        "capability_binding": dict(capability),
+        "nodes": tuple(dict(node) for node in nodes),
+    }
+
+
+def _analysis_execution_receipt(
+    *,
+    analysis_plan: Mapping[str, Any],
+    research_run: Mapping[str, Any],
+    components: Mapping[str, Mapping[str, Any]],
+    decision_status: str,
+    decision_projection: Mapping[str, Any],
+    model_identity: str,
+    policy_identity: str,
+) -> Mapping[str, Any]:
+    capability = _require_bundle_mapping(
+        analysis_plan["capability_binding"],
+        "RESEARCH_ANALYSIS_PLAN_CONTENT_INVALID",
+    )
+    integrity_reasons = tuple(
+        str(issue["code"])
+        for issue in research_run.get("integrity_issues", ())
+        if isinstance(issue, Mapping) and issue.get("code")
+    )
+    research_status = str(research_run.get("status", "blocked"))
+    research_core_reasons = integrity_reasons
+    if research_status != "completed" and not research_core_reasons:
+        research_core_reasons = (
+            "RESEARCH_CORE_COMPLETED_WITH_LIMITS",
+        )
+    decision_reasons = tuple(
+        dict.fromkeys(
+            str(reason)
+            for component in components.values()
+            if component["status"] != "complete"
+            for reason in component["reason_codes"]
+        )
+    )
+    receipts: list[Mapping[str, Any]] = []
+    for node in analysis_plan["nodes"]:
+        node_id = str(node["node_id"])
+        component_name = node.get("component")
+        if isinstance(component_name, str):
+            actual = components.get(component_name)
+            if actual is None:
+                raise ValueError("RESEARCH_ANALYSIS_PLAN_OUTPUT_MISMATCH")
+            status = str(actual["status"])
+            artifact_id: str | None = str(actual["artifact_id"])
+            reasons = tuple(str(reason) for reason in actual["reason_codes"])
+            output_hash = canonical_hash(actual)
+        elif node_id == "evidence_binding":
+            output_hash = canonical_hash(capability)
+            status = str(capability.get("status", "limited"))
+            artifact_id = str(capability.get("capability_digest", "")) or None
+            reasons = tuple(
+                str(reason) for reason in capability.get("reason_codes", ())
+            )
+        elif node_id == "research_core":
+            status = research_status
+            artifact_id = str(research_run["run_id"])
+            output_hash = canonical_hash(research_run)
+            reasons = research_core_reasons
+        elif node_id == "decision_projection":
+            status = decision_status
+            artifact_id = None
+            output_hash = canonical_hash(decision_projection)
+            reasons = (
+                integrity_reasons
+                if decision_status == "blocked"
+                else decision_reasons
+            )
+            if decision_status != "completed" and not reasons:
+                reasons = (
+                    "RESEARCH_DECISION_COMPLETED_WITH_LIMITS",
+                )
+        else:
+            raise ValueError("RESEARCH_ANALYSIS_PLAN_OUTPUT_MISMATCH")
+        receipts.append(
+            {
+                "node_id": node_id,
+                "node_hash": str(node["node_hash"]),
+                "output_contract": str(node["output_contract"]),
+                "requirement": str(node["requirement"]),
+                "status": status,
+                "artifact_id": artifact_id,
+                "output_hash": output_hash,
+                "reason_codes": reasons,
+            }
+        )
+    content = {
+        "schema_version": "ResearchAnalysisExecutionReceipt@1",
+        "plan_identity": str(analysis_plan["plan_identity"]),
+        "model_identity": model_identity,
+        "policy_identity": policy_identity,
+        "nodes": tuple(receipts),
+    }
+    return {
+        "receipt_id": "research_analysis_execution_"
+        + canonical_hash(content)[:24],
+        **content,
+    }
+
+
 @dataclass(frozen=True)
 class ResearchDecisionViewFactory:
     """Projects the complete evaluation bundle without recomputing meaning."""
@@ -477,6 +665,8 @@ class ResearchDecisionViewFactory:
         model_identity: str,
         source_policy_identity: str,
         expected_snapshot_member_ids: tuple[str, ...],
+        analysis_plan: Mapping[str, Any],
+        expected_analysis_plan_identity: str,
     ) -> Mapping[str, Any]:
         verified = verify_research_evaluation_bundle(
             evaluation_bundle,
@@ -484,7 +674,19 @@ class ResearchDecisionViewFactory:
             expected_source_policy_identity=source_policy_identity,
             expected_snapshot_member_ids=expected_snapshot_member_ids,
         )
+        verified_analysis_plan = _verified_analysis_plan(
+            analysis_plan,
+            request=request,
+            source_policy_identity=source_policy_identity,
+            expected_snapshot_member_ids=expected_snapshot_member_ids,
+            expected_analysis_plan_identity=expected_analysis_plan_identity,
+        )
         origin = verified.origin
+        if (
+            origin.get("research_policy_identity")
+            != RESEARCH_EVALUATION_POLICY_IDENTITY
+        ):
+            raise ValueError("RESEARCH_EVALUATION_POLICY_MISMATCH")
         research_run = verified.research_run
         components = verified.components
         audit = research_run.get("audit")
@@ -494,6 +696,7 @@ class ResearchDecisionViewFactory:
                 "evaluation_plan": request.evaluation_plan.canonical_content,
                 "evaluation_plan_identity": request.evaluation_plan.identity,
                 "source_policy_identity": source_policy_identity,
+                "research_analysis_plan": verified_analysis_plan,
                 "strategy_validation": {
                     "status": request.evaluation_plan.strategy_validation.value,
                     "reason_code": (
@@ -607,6 +810,17 @@ class ResearchDecisionViewFactory:
             name: _component_summary(component)
             for name, component in components.items()
         }
+        audit["analysis_execution_receipt"] = (
+            _analysis_execution_receipt(
+                analysis_plan=verified_analysis_plan,
+                research_run=research_run,
+                components=components,
+                decision_status=decision_status,
+                decision_projection=projection,
+                model_identity=model_identity,
+                policy_identity=str(origin["research_policy_identity"]),
+            )
+        )
         audit.update(audit_projection)
         audit["simulation_decision"] = projection[
             "valuation_simulation"
@@ -669,7 +883,7 @@ class ResearchDecisionViewFactory:
             "subject_id": request.security_id,
             "as_of": request.evaluation_plan.horizon.as_of,
             "model_identity": model_identity,
-            "policy_identity": "ResearchEvaluationPolicy@2",
+            "policy_identity": str(origin["research_policy_identity"]),
             "status": decision_status,
             **projection,
             "audit": audit,

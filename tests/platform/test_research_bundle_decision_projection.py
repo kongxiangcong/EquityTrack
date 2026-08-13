@@ -10,10 +10,17 @@ import pytest
 from pypdf import PdfReader
 
 from tests.platform.test_research_workflow import _request
+from trading_platform.application.workflow_ledger import (
+    SnapshotEvidence,
+    SnapshotMemberEvidence,
+)
 from trading_platform.domain.research_evaluation import (
     ResearchDecisionViewFactory,
 )
 from trading_platform.identity import canonical_hash
+from trading_platform.research.analysis_plan import (
+    ResearchAnalysisPlanCompiler,
+)
 from trading_platform.research_pdf import ResearchDecisionPdf
 from trading_platform.research_presentation import (
     render_research_decision_html,
@@ -29,6 +36,54 @@ COMPONENT_NAMES = (
     "market_path_decision",
     "recent_trend_assessment",
 )
+
+
+def _analysis_plan(request):
+    members = (
+        SnapshotMemberEvidence(
+            normalized_version_id="member_official",
+            dataset="filing",
+            source_identity="official-fixture",
+            source_authority="official",
+            real_source_url="https://example.invalid/official",
+            retrieved_at="2026-07-11T08:00:00+00:00",
+            published_at="2026-07-10T07:00:00+00:00",
+            available_at="2026-07-10T07:30:00+00:00",
+            quality_status="usable",
+        ),
+        SnapshotMemberEvidence(
+            normalized_version_id="member_market",
+            dataset="daily",
+            source_identity="market-fixture",
+            source_authority="structured_aggregator",
+            real_source_url="https://example.invalid/market",
+            retrieved_at="2026-07-11T08:00:00+00:00",
+            published_at="2026-07-10T07:00:00+00:00",
+            available_at="2026-07-10T07:30:00+00:00",
+            quality_status="usable",
+        ),
+    )
+    evidence = SnapshotEvidence(
+        data_snapshot_id=request.data_snapshot_id,
+        scope_id=request.security_id,
+        purpose="research",
+        requested_date=request.requested_date,
+        effective_session_date=request.effective_session_date,
+        as_of_at="2026-07-11T08:30:00+00:00",
+        source_policy_identity="source-policy@test",
+        freshness_status="fresh",
+        members={member.normalized_version_id: member.dataset for member in members},
+        member_evidence=members,
+        quality_status="usable",
+        coverage_expected=2,
+        coverage_eligible=2,
+        coverage_excluded=0,
+        coverage_missing=0,
+    )
+    return ResearchAnalysisPlanCompiler().compile(
+        request=request,
+        evidence=evidence,
+    ).to_dict()
 
 
 def _quantity(value: str, unit: str = "CNY/share") -> Mapping[str, str]:
@@ -202,7 +257,7 @@ def _bundle(*, ready: bool) -> Mapping[str, object]:
             "data_snapshot_id": "snapshot_filing",
             "source_policy_identity": "source-policy@test",
             "snapshot_member_ids": ["member_official", "member_market"],
-            "research_policy_identity": "ResearchEvaluationPolicy@2",
+            "research_policy_identity": "ResearchEvaluationPolicy@3",
             "estimation_policy_identity": "FrozenSnapshotEstimator@1",
         },
         "estimates": (
@@ -367,15 +422,17 @@ def _bundle(*, ready: bool) -> Mapping[str, object]:
 
 
 def _project(*, ready: bool) -> Mapping[str, object]:
+    request = _request(
+        "bundle:ready" if ready else "bundle:degraded"
+    )
+    analysis_plan = _analysis_plan(request)
     return ResearchDecisionViewFactory().build(
         workflow_run_id=(
             "workflow_bundle_ready"
             if ready
             else "workflow_bundle_degraded"
         ),
-        request=_request(
-            "bundle:ready" if ready else "bundle:degraded"
-        ),
+        request=request,
         evaluation_bundle=_identified_bundle(_bundle(ready=ready)),
         model_identity="engine@test",
         source_policy_identity="source-policy@test",
@@ -383,6 +440,8 @@ def _project(*, ready: bool) -> Mapping[str, object]:
             "member_official",
             "member_market",
         ),
+        analysis_plan=analysis_plan,
+        expected_analysis_plan_identity=analysis_plan["plan_identity"],
     )
 
 
@@ -428,9 +487,11 @@ def _bundle_for_valuation_state(
 def test_bundle_projects_only_the_four_canonical_valuation_states(
     expected: str,
 ) -> None:
+    request = _request(f"bundle:{expected}")
+    analysis_plan = _analysis_plan(request)
     projected = ResearchDecisionViewFactory().build(
         workflow_run_id=f"workflow_bundle_{expected}",
-        request=_request(f"bundle:{expected}"),
+        request=request,
         evaluation_bundle=_bundle_for_valuation_state(expected),
         model_identity="engine@test",
         source_policy_identity="source-policy@test",
@@ -438,6 +499,8 @@ def test_bundle_projects_only_the_four_canonical_valuation_states(
             "member_official",
             "member_market",
         ),
+        analysis_plan=analysis_plan,
+        expected_analysis_plan_identity=analysis_plan["plan_identity"],
     )
 
     assert projected["valuation_view"]["status"] == expected
@@ -473,6 +536,34 @@ def test_ready_bundle_projects_exact_components_to_json_html_and_pdf() -> None:
     assert audit["origin"]["origin_id"].startswith("research_origin_")
     assert set(audit["components"]) == set(COMPONENT_NAMES)
     assert audit["components"]["forecast"]["status"] == "complete"
+    plan = projected["audit"]["research_analysis_plan"]
+    receipt = projected["audit"]["analysis_execution_receipt"]
+    executed = {item["node_id"]: item for item in receipt["nodes"]}
+    forecast_component = audit["components"]["forecast"]
+    expected_forecast_component = _identified_bundle(
+        _bundle(ready=True)
+    )["forecast"]
+    assert projected["policy_identity"] == "ResearchEvaluationPolicy@3"
+    assert plan["schema_version"] == "ResearchAnalysisPlan@1"
+    assert receipt["schema_version"] == "ResearchAnalysisExecutionReceipt@1"
+    assert receipt["plan_identity"] == plan["plan_identity"]
+    assert receipt["model_identity"] == "engine@test"
+    assert receipt["policy_identity"] == "ResearchEvaluationPolicy@3"
+    assert set(executed) == {item["node_id"] for item in plan["nodes"]}
+    assert executed["forecast"] == {
+        "node_id": "forecast",
+        "node_hash": next(
+            item["node_hash"]
+            for item in plan["nodes"]
+            if item["node_id"] == "forecast"
+        ),
+        "output_contract": "ResearchComponentResult@1:forecast",
+        "requirement": "required",
+        "status": "complete",
+        "artifact_id": forecast_component["artifact_id"],
+        "output_hash": canonical_hash(expected_forecast_component),
+        "reason_codes": ("FORECAST_COMPLETE",),
+    }
     assert "压力情景" in html
     assert "改善情景" in html
     assert "近期走势" in html

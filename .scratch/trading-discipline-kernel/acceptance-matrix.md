@@ -35,8 +35,8 @@ Every row is closed only by a passing public-interface test plus its required pe
 | TDK-AC-025 | 13 | `tests/platform/test_plan_change_proposals.py::test_accept_or_reject_proposal_has_only_draft_side_effects` | active activation unchanged |
 | TDK-AC-026 | 04, 07 | `tests/platform/test_trade_plan_model_b.py::test_new_activation_preserves_old_version_history` | old graph hash |
 | TDK-AC-027 | 14 | `tests/platform/test_versioned_read_models.py::test_web_and_skill_serialize_identical_application_dtos` | read-model ID + content hash |
-| TDK-AC-028 | 16 | `tests/platform/test_trading_discipline_kernel_e2e.py::test_restart_replay_is_idempotent` | no duplicate identity set |
-| TDK-AC-029 | 16 | `tests/platform/test_trading_discipline_kernel_backup_restore.py::test_full_chain_rebuilds_after_restore` | restored chain manifest |
+| TDK-AC-028 | 16 | `tests/platform/test_product_e2e.py::test_product_restart_recovery_preserves_canonical_plan` | no duplicate identity set |
+| TDK-AC-029 | 16 | `tests/platform/test_product_e2e.py::test_product_backup_restore_preserves_canonical_plan` | restored chain manifest |
 | TDK-AC-030 | 11, 16 | `tests/platform/test_execution_records.py::test_missing_broker_evidence_is_unverified_not_not_executed` | verification state |
 | TDK-AC-031 | 15 | `tests/platform/test_production_web.py::test_navigation_home_allowlist_progressive_disclosure_and_accessibility` | CDP DOM/screenshots |
 | TDK-AC-032 | 15, 16 | `tests/platform/test_production_web.py::test_unversioned_workspace_and_public_daily_routes_are_absent` | route scan + 404 results |
@@ -77,8 +77,8 @@ Every row is closed only by a passing public-interface test plus its required pe
 ### Migration and operations
 
 - `tests/platform/test_migration_0015_0017.py`
-- `tests/platform/test_trading_discipline_kernel_e2e.py`
-- `tests/platform/test_trading_discipline_kernel_backup_restore.py`
+- `tests/platform/test_product_e2e.py`
+- `tests/platform/test_operations_backup_restore.py`
 - existing `tests/platform/test_operations_backup_restore.py`
 - existing `tests/platform/test_workflow_ledger_recovery.py`
 - existing `tests/platform/test_acceptance_evidence.py`

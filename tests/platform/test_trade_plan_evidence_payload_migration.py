@@ -61,7 +61,7 @@ def _downgrade_evidence_table_to_v23(data_root: Path) -> None:
         BEGIN
           SELECT RAISE(ABORT,'TRADE_PLAN_GRAPH_IMMUTABLE');
         END;
-        DELETE FROM schema_migration WHERE version=24;
+        DELETE FROM schema_migration WHERE version>=24;
         """
     )
     connection.commit()
@@ -108,7 +108,7 @@ def test_0024_recovers_approved_enriched_evidence_as_single_payload(
     )
     assert upgraded.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 24
+    ).fetchone()[0] == 25
     with pytest.raises(
         sqlite3.IntegrityError,
         match="TRADE_PLAN_GRAPH_IMMUTABLE",

@@ -4,6 +4,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 import json
 
+import pytest
+
 from tests.platform.application_task_fixture import PlatformTaskFixture
 from tests.platform.test_financial_pipeline_bundle_applicability import (
     _request_and_evidence as complete_model_fixture,
@@ -12,6 +14,7 @@ from trading_platform.application.contracts import (
     SecurityIdentity,
     StartResearchWorkflow,
 )
+from trading_platform.data.normalizer import normalize
 from trading_platform.data.providers import (
     FixtureProvider,
     TushareCompatibleProvider,
@@ -334,3 +337,82 @@ def test_tushare_gateway_rejects_local_component_inputs_before_transport() -> No
     assert calls == []
     assert result.status is FetchStatus.FAILED
     assert result.error_code == "TUSHARE_QUERY_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason_code"),
+    (
+        (
+            lambda field: {**field, "subject_id": "security_other"},
+            "RESEARCH_COMPONENT_INPUT_SUBJECT_INVALID",
+        ),
+        (
+            lambda field: {**field, "model_path": ""},
+            "RESEARCH_MODEL_INPUT_PATH_INVALID",
+        ),
+        (
+            lambda field: {**field, "model_path": f" {field['model_path']}"},
+            "RESEARCH_MODEL_INPUT_PATH_INVALID",
+        ),
+        (
+            lambda field: {**field, "field_name": "forecast.other"},
+            "RESEARCH_MODEL_INPUT_SCHEMA_INVALID",
+        ),
+        (
+            lambda field: {**field, "semantic_role": "market_path_constraint"},
+            "RESEARCH_MODEL_INPUT_SCHEMA_INVALID",
+        ),
+    ),
+)
+def test_research_model_input_normalizer_rejects_non_typed_field_contract(
+    mutate,
+    reason_code: str,
+) -> None:
+    document = json.loads(_payloads()["research_model_input"])
+    document["rows"][0]["extracted_fields"][0] = mutate(
+        document["rows"][0]["extracted_fields"][0]
+    )
+
+    with pytest.raises(ValueError, match=reason_code):
+        normalize(
+            "research_model_input",
+            _json_rows(document["rows"]),
+            security_id=SECURITY_ID,
+        )
+
+
+def test_research_model_input_normalizer_rejects_duplicate_path_in_one_row() -> None:
+    document = json.loads(_payloads()["research_model_input"])
+    document["rows"][0]["extracted_fields"].append(
+        dict(document["rows"][0]["extracted_fields"][0])
+    )
+
+    with pytest.raises(ValueError, match="RESEARCH_MODEL_INPUT_DUPLICATE"):
+        normalize(
+            "research_model_input",
+            _json_rows(document["rows"]),
+            security_id=SECURITY_ID,
+        )
+
+
+def test_market_path_policy_normalizer_only_adds_subject_identity_gate() -> None:
+    payload = _payloads()["market_path_policy"]
+
+    normalized = normalize(
+        "market_path_policy",
+        payload,
+        security_id=SECURITY_ID,
+    )
+
+    assert normalized[0].payload["extracted_fields"][0].get("model_path") is None
+    document = json.loads(payload)
+    document["rows"][0]["extracted_fields"][0]["subject_id"] = "security_other"
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_COMPONENT_INPUT_SUBJECT_INVALID",
+    ):
+        normalize(
+            "market_path_policy",
+            _json_rows(document["rows"]),
+            security_id=SECURITY_ID,
+        )

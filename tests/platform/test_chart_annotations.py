@@ -76,13 +76,14 @@ def _root(path: Path) -> PlatformTaskFixture:
                 ("record_chart", "daily", "security_yihua:2026-07-10"),
             )
             connection.execute(
-                "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     "version_chart",
                     "record_chart",
                     1,
                     "chart-content",
                     "attempt_chart",
+                    TEST_SOURCE_POLICY.identity,
                     "2026-07-10",
                     "2026-07-10T08:00:00+00:00",
                     "timestamp",

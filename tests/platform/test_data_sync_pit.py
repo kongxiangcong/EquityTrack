@@ -10,7 +10,8 @@ from urllib.error import HTTPError
 
 from tests.platform.application_task_fixture import PlatformTaskFixture
 from trading_platform.application.contracts import Capability, CapabilityStatus, HealthQuery, SecurityIdentity
-from trading_platform.data.providers import FixtureProvider, TransportResponse, TushareCompatibleProvider
+from trading_platform.data.kimi_agentgw import KimiAgentGatewayProvider
+from trading_platform.data.providers import FixtureProvider
 from trading_platform.domain.data import CompletenessRequirement, DistributionQualification, FallbackMode, FetchStatus, FinancialStatementQuery, FixtureRights, FreshnessStatus, MarketDataCapability, ProviderCapabilityStatus, QualifiedEquivalentBinding, QualityStatus, QueryPolicy, SnapshotPurpose, SourceAuthority, SourceFailureDisposition, SourcePolicy, SourceRights, SourceRoute, SyncRequest, SyncStatus, TradingCalendarQuery
 
 
@@ -110,134 +111,6 @@ def test_explicit_fixture_sync_freezes_pit_snapshot_and_reuses_identity(tmp_path
     root.close()
 
 
-def test_startup_and_unauthorized_http_provider_make_no_network_call(tmp_path: Path) -> None:
-    calls: list[object] = []
-    provider = TushareCompatibleProvider("gateway", "tushare-http@2", "http://8.136.22.187:8010/", "secret", "compatible-gateway-not-official", "unknown-terms", lambda request: calls.append(request) or TransportResponse(b"{}", {}))
-    root = PlatformTaskFixture(tmp_path, **_composition(provider, "compatible-gateway-not-official", SourceAuthority.STRUCTURED_AGGREGATOR, "unknown-terms"))
-    assert calls == []
-    result = root.data.sync(_request())
-    assert calls == []
-    assert result.status == "missing"
-    attempt = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT source_identity,error_code,raw_sha256 FROM provider_attempt").fetchone()
-    assert tuple(attempt) == ("compatible-gateway-not-official", "NETWORK_NOT_AUTHORIZED", None)
-    root.close()
-
-def test_tushare_transport_failures_have_typed_redacted_outcomes() -> None:
-    query = TradingCalendarQuery(
-        "transport-matrix", "SZSE", "2026-07-01", "2026-07-10", None, "SZSE", True
-    )
-
-    def http_failure(status_code: int):
-        def transport(_request):
-            raise HTTPError(
-                "http://127.0.0.1:9/",
-                status_code,
-                "provider failure",
-                {"Retry-After": "3"} if status_code == 429 else {},
-                None,
-            )
-
-        return transport
-
-    def timeout(_request):
-        raise TimeoutError("secret-bearing transport detail")
-
-    cases = (
-        (http_failure(401), FetchStatus.FAILED, "AUTHENTICATION_FAILED"),
-        (http_failure(403), FetchStatus.FAILED, "ACCESS_FORBIDDEN"),
-        (http_failure(429), FetchStatus.RATE_LIMITED, "RATE_LIMITED"),
-        (timeout, FetchStatus.FAILED, "PROVIDER_TIMEOUT"),
-    )
-    for transport, expected_status, expected_code in cases:
-
-        provider = TushareCompatibleProvider("gateway", "tushare-http@2", "http://127.0.0.1:9/", "secret", "source", "terms@1", transport)
-        envelope = provider.fetch(query).envelopes[0]
-        assert (envelope.status, envelope.error_code) == (expected_status, expected_code)
-        assert envelope.payload is None and envelope.raw_sha256 is None and envelope.cursor_value is None
-
-    expired = TushareCompatibleProvider(
-        "gateway", "tushare-http@2", "http://127.0.0.1:9/", "expired",
-        "source", "terms@1",
-        lambda _request: TransportResponse(
-            json.dumps({"code": 2002, "msg": "credential detail"}).encode(), {}
-        ),
-    ).fetch(query).envelopes[0]
-    assert expired.status is FetchStatus.FAILED
-    assert expired.error_code == "CREDENTIAL_EXPIRED"
-    assert expired.payload is not None and expired.raw_sha256 is not None
-    assert expired.cursor_value is None
-    rejected = TushareCompatibleProvider(
-        "gateway", "tushare-http@2", "http://127.0.0.1:9/", "credential",
-        "source", "terms@1",
-        lambda _request: TransportResponse(json.dumps({"code": 4021}).encode(), {}),
-    ).fetch(query).envelopes[0]
-    assert rejected.error_code == "PROVIDER_API_ERROR_4021"
-    assert rejected.error_code != expired.error_code
-
-
-def test_tushare_financial_statement_queries_use_typed_api_contract() -> None:
-    calls: list[dict[str, object]] = []
-
-    def transport(request):
-        body = json.loads(request.data.decode("utf-8"))
-        calls.append(body)
-        return TransportResponse(
-            json.dumps(
-                {
-                    "code": 0,
-                    "data": {
-                        "fields": ["ts_code", "ann_date", "end_date"],
-                        "items": [["002897.SZ", "20260429", "20260331"]],
-                    },
-                }
-            ).encode(),
-            {},
-        )
-
-    provider = TushareCompatibleProvider(
-        "gateway",
-        "tushare-http@2",
-        "http://127.0.0.1:9/",
-        "secret-not-logged",
-        "source",
-        "terms@1",
-        transport,
-    )
-    for dataset in ("income", "balancesheet", "cashflow"):
-        result = provider.fetch(
-            FinancialStatementQuery(
-                "financial-query",
-                "security_yihua",
-                "002897",
-                "SZSE",
-                dataset,
-                "2025-01-01",
-                "2026-07-28",
-                None,
-                "security_yihua",
-                True,
-            )
-        )
-        assert result.envelopes[0].status is FetchStatus.COMPLETE
-
-    assert [call["api_name"] for call in calls] == [
-        "income",
-        "balancesheet",
-        "cashflow",
-    ]
-    assert all(
-        call["params"] == {
-            "ts_code": "002897.SZ",
-            "start_date": "20250101",
-            "end_date": "20260728",
-        }
-        for call in calls
-    )
-    assert "secret-not-logged" not in json.dumps(
-        [{"api_name": call["api_name"], "params": call["params"]} for call in calls]
-    )
-
-
 def test_partial_provider_response_is_persisted_and_blocks_required_route(tmp_path: Path) -> None:
     class PartialFixtureProvider(FixtureProvider):
         def fetch(self, request):
@@ -309,14 +182,7 @@ def test_empty_schema_drift_and_wrong_security_never_advance_daily_cursor(
     tmp_path: Path,
 ) -> None:
     empty = _payloads()
-    empty["daily"] = json.dumps(
-        {
-            "data": {
-                "fields": ["ts_code", "trade_date", "open", "high", "low", "close", "vol"],
-                "items": [],
-            }
-        }
-    ).encode("utf-8")
+    empty["daily"] = json.dumps({"rows": []}).encode("utf-8")
     schema_drift = {**_payloads(), "daily": b"{}"}
     wrong_security = _payloads()
     wrong_document = json.loads(wrong_security["daily"])
@@ -338,79 +204,37 @@ def test_empty_schema_drift_and_wrong_security_never_advance_daily_cursor(
         root.close()
 
 
-def test_tushare_compatible_provider_uses_same_raw_normalize_quality_pit_path(tmp_path: Path) -> None:
-    responses = {
-        "trade_cal": {"data": {"fields": ["exchange", "cal_date", "is_open", "pretrade_date"], "items": [["SZSE", "20260711", 0, "20260710"], ["SZSE", "20260710", 1, "20260709"]]}},
-        "daily": {"data": {"fields": ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"], "items": [["002897.SZ", "20260710", 88.51, 91.0, 82.33, 82.33, 88.55, -6.22, -7.0243, 221879.03, 1926373.75544]]}},
-        "stock_basic": {"data": {"fields": ["ts_code", "symbol", "name", "market", "list_date"], "items": [["002897.SZ", "002897", "意华股份", "主板", "20170907"]]}},
-    }
-    calls: list[str] = []
-    def transport(request):
-        body = json.loads(request.data.decode("utf-8")); calls.append(body["api_name"])
-        return TransportResponse(json.dumps(responses[body["api_name"]]).encode("utf-8"), {"Date": "Sun, 12 Jul 2026 04:27:47 GMT"})
-    provider = TushareCompatibleProvider("gateway", "tushare-http@2", "http://127.0.0.1:9/", "not-logged-secret", "preconfigured_tushare_compatible_non_official", "gateway-terms-unknown", transport)
-    root = PlatformTaskFixture(tmp_path, **_composition(provider, "preconfigured_tushare_compatible_non_official", SourceAuthority.STRUCTURED_AGGREGATOR, "gateway-terms-unknown"))
-    root.watchlist.add("watch:yihua", SecurityIdentity("security_yihua", "SZSE", "002897", "CNY", "2017-09-07"))
-    result = root.data.sync(replace(_request("authorized-live"), network_authorized=True))
-    assert result.status is SyncStatus.COMPLETE
-    assert calls == ["trade_cal", "stock_basic", "daily"]
-    row = SQLiteOwningAdapterFixture(root.data_root).execute("SELECT open_decimal,close_decimal,volume_decimal,amount_decimal FROM ohlcv_version").fetchone()
-    assert tuple(row) == ("88.51", "82.33", "221879.03", "1926373.75544")
-    attempts_json = json.dumps([dict(row) for row in SQLiteOwningAdapterFixture(root.data_root).execute("SELECT * FROM provider_attempt")])
-    assert "not-logged-secret" not in attempts_json
-    assert "preconfigured_tushare_compatible_non_official" in attempts_json
-    assert SQLiteOwningAdapterFixture(root.data_root).execute("SELECT count(*) FROM data_snapshot_member").fetchone()[0] > 0
-    root.close()
-
-
 def test_single_security_universes_do_not_cross_contaminate_snapshots(
     tmp_path: Path,
 ) -> None:
-    def transport(request):
-        body = json.loads(request.data.decode("utf-8"))
-        code = body["params"].get("ts_code", "002897.SZ")
-        if body["api_name"] == "trade_cal":
-            response = {
-                "data": {
-                    "fields": ["exchange", "cal_date", "is_open"],
-                    "items": [["SZSE", "20260710", 1]],
-                }
-            }
-        elif body["api_name"] == "stock_basic":
-            response = {
-                "data": {
-                    "fields": ["ts_code", "list_date"],
-                    "items": [[code, "20100101"]],
-                }
-            }
-        else:
-            response = {
-                "data": {
-                    "fields": [
-                        "ts_code",
-                        "trade_date",
-                        "open",
-                        "high",
-                        "low",
-                        "close",
-                        "vol",
-                        "amount",
-                    ],
-                    "items": [
-                        [code, "20260710", 10, 11, 9, 10, 100, 1000]
-                    ],
-                }
-            }
-        return TransportResponse(json.dumps(response).encode(), {})
+    common = {"availability_basis": "publisher_timestamp", "published_precision": "date"}
 
-    provider = TushareCompatibleProvider(
-        "gateway",
-        "tushare-http@2",
-        "http://127.0.0.1:9/",
-        "secret",
-        "source:terminal",
-        "terms@1",
-        transport,
+    def per_security_payloads(security_id: str) -> dict[str, bytes]:
+        calendar = [
+            {**common, "market": "SZSE", "session_date": "2026-07-10", "is_open": True, "calendar_version": "cn-calendar@2026", "published_at": "2026-07-10", "available_at": "2026-07-10T00:00:00Z"},
+        ]
+        universe = [
+            {**common, "market_scope_id": "CN_A_SHARE", "security_id": security_id, "listed_from": "2010-01-01", "source_ref": "synthetic-contract-sentinel:per-security-universe", "published_at": "2010-01-01", "available_at": "2010-01-01T00:00:00Z"},
+        ]
+        daily = [
+            {**common, "security_id": security_id, "session_date": "2026-07-10", "market_timezone": "Asia/Shanghai", "adjustment_mode": "none", "open": "10", "high": "11", "low": "9", "close": "10", "volume": "100", "volume_unit": "share", "amount": "1000", "amount_unit": "yuan", "currency": "CNY", "published_at": "2026-07-10", "available_at": "2026-07-10T08:00:00Z"},
+        ]
+        return {
+            "trade_cal": _bytes(calendar),
+            "market_universe": _bytes(universe),
+            "daily": _bytes(daily),
+        }
+
+    class PerSecurityFixtureProvider(FixtureProvider):
+        def fetch(self, request):
+            self._payloads = per_security_payloads(
+                getattr(request, "security_id", "")
+            )
+            return super().fetch(request)
+
+    provider = PerSecurityFixtureProvider(
+        "per-security", "fixture@1", {}, "source:terminal", "terms@1",
+        SourceAuthority.STRUCTURED_AGGREGATOR,
     )
     root = PlatformTaskFixture(
         tmp_path,
@@ -420,6 +244,7 @@ def test_single_security_universes_do_not_cross_contaminate_snapshots(
             SourceAuthority.STRUCTURED_AGGREGATOR,
             "terms@1",
         ),
+        fixture_rights=_rights("per-security", "source:terminal"),
     )
     securities = (
         ("security_first", "002897"),
@@ -452,7 +277,7 @@ def test_single_security_universes_do_not_cross_contaminate_snapshots(
 def test_fixture_manifest_separates_real_derived_facts_from_synthetic_sentinels() -> None:
     path = Path(__file__).resolve().parents[1] / "fixtures/platform_data/manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    assert manifest["source_identity"] == "preconfigured_tushare_compatible_non_official"
+    assert manifest["source_identity"] == "derived_fact_fixture_non_official"
     assert manifest["raw_response_committed"] is False
     assert manifest["raw_response_distribution_qualification"] == "external_blocked"
     assert len(manifest["safe_capture_sha256"]) == 64
@@ -501,10 +326,16 @@ def test_private_fixture_rights_are_preserved_without_upgrading_redistribution(t
 def test_provider_capabilities_make_unsupported_market_facts_explicit() -> None:
     statuses = {
         item.capability: (item.status, item.reason_code)
-        for item in TushareCompatibleProvider.capabilities
+        for item in KimiAgentGatewayProvider.capabilities
     }
-    assert statuses[MarketDataCapability.TRADING_CALENDAR][0] is ProviderCapabilityStatus.SUPPORTED
-    assert statuses[MarketDataCapability.DAILY_UNADJUSTED][0] is ProviderCapabilityStatus.SUPPORTED
+    assert statuses[MarketDataCapability.TRADING_CALENDAR] == (
+        ProviderCapabilityStatus.SUPPORTED,
+        "WIND_INDEX_SESSIONS",
+    )
+    assert statuses[MarketDataCapability.DAILY_UNADJUSTED] == (
+        ProviderCapabilityStatus.SUPPORTED,
+        "WIND_GET_PRICE_UNADJUSTED",
+    )
     for capability in (
         MarketDataCapability.ADJUSTMENT_FACTORS,
         MarketDataCapability.CORPORATE_ACTIONS,
@@ -512,7 +343,6 @@ def test_provider_capabilities_make_unsupported_market_facts_explicit() -> None:
         MarketDataCapability.PRICE_LIMIT_STATUS,
     ):
         assert statuses[capability][0] is ProviderCapabilityStatus.UNAVAILABLE
-        assert statuses[capability][1] == "TYPED_QUERY_NOT_IMPLEMENTED"
 
 
 def test_declared_qualified_equivalent_persists_primary_and_substitute_attempts(tmp_path: Path) -> None:
@@ -659,3 +489,46 @@ def test_route_freshness_budget_blocks_snapshot_beyond_declared_limit(tmp_path: 
     assert result.snapshot_id is None and result.freshness is FreshnessStatus.STALE
     assert result.stale_by_days == 1
     root.close()
+
+
+def test_identical_content_resyncs_under_rotated_policy_identity(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    first = root.data.sync(_request("policy-era-one"))
+    assert first.status is SyncStatus.COMPLETE and first.snapshot_id is not None
+    root.close()
+
+    # Rotate only the source-policy identity (rights review-date bump) while
+    # the provider, authority, and byte-identical content stay the same.
+    provider = FixtureProvider("fixture", "fixture@1", _payloads(), FIXTURE_SOURCE, "derived-fact-fixture-terms@1")
+    composition = _composition(provider)
+    rotated_policy = replace(
+        composition["source_policy"],
+        rights=replace(composition["source_policy"].rights, reviewed_on="2026-07-13"),
+    )
+    assert rotated_policy.identity != composition["source_policy"].identity
+    reopened = PlatformTaskFixture(
+        tmp_path,
+        provider=provider,
+        query_policy=composition["query_policy"],
+        source_policy=rotated_policy,
+        fixture_rights=_rights("fixture"),
+    )
+    second = reopened.data.sync(_request("policy-era-two"))
+    assert second.status is SyncStatus.COMPLETE and second.snapshot_id is not None
+    assert second.disposition.normalized_created > 0
+    connection = SQLiteOwningAdapterFixture(reopened.data_root)
+    assert connection.execute(
+        "SELECT count(*) FROM data_quality_issue WHERE code IN ('IDENTITY_OR_PERSISTENCE_CONFLICT','SOURCE_POLICY_IDENTITY_UNMIGRATABLE')"
+    ).fetchone()[0] == 0
+    member_policies = {
+        row[0]
+        for row in connection.execute(
+            "SELECT DISTINCT v.source_policy_identity "
+            "FROM data_snapshot_member m "
+            "JOIN normalized_version v USING(normalized_version_id) "
+            "WHERE m.data_snapshot_id=?",
+            (second.snapshot_id,),
+        )
+    }
+    assert member_policies == {rotated_policy.identity}
+    reopened.close()

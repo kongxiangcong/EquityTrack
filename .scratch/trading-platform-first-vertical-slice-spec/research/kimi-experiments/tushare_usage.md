@@ -1,21 +1,24 @@
 # Tushare-compatible gateway usage boundary
 
-Status: local environment-backed connection seam
+Status: approved local credential connection seam
 
 The Tushare-compatible gateway used by this repository is not the official
 `tushare.pro` host. Preserve that provider identity in provenance.
 
 ## Credential and endpoint handling
 
-- Production composition reads the credential from `TUSHARE_TOKEN`.
-- The approved adapter owns the fixed gateway destination; callers must not
-  supply or override an endpoint in a job, command, payload, source file, test
-  fixture, artifact, or database row.
+- `TUSHARE_TOKEN` is the logical credential scope. A present process variable
+  is the explicit override; otherwise Windows reads the namespaced Credential
+  Manager target `tradingSystem/TUSHARE_TOKEN`.
+- The approved adapter owns the fixed gateway destination and credential-source
+  precedence; callers must not supply or override either in a job, command,
+  payload, source file, test fixture, artifact, or database row.
 - Never commit, print, log, archive, or render the credential value or private
   endpoint parameters.
 - Do not ask the user to paste the credential into chat or a command line.
 - `ProviderJob@2` contains only `provider_id`, `adapter_version`, and
-  `credential_env`; the credential value remains in the process environment.
+  `credential_env`; the credential value is resolved only in memory and is never
+  persisted by the platform.
 
 ## Qualification boundary
 

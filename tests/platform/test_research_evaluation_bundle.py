@@ -106,9 +106,14 @@ def _evidence() -> SnapshotEvidence:
 
 
 def test_one_evaluation_call_returns_a_complete_structural_bundle() -> None:
-    result = ResearchEvaluation(ResearchEngine()).evaluate(
-        _request(),
-        _evidence(),
+    request = _request()
+    evidence = _evidence()
+    evaluator = ResearchEvaluation(ResearchEngine())
+    prepared = evaluator.prepare(request, evidence)
+    result = evaluator.evaluate(
+        request,
+        evidence,
+        prepared,
     )
 
     payload = result.to_dict()
@@ -159,9 +164,12 @@ def test_one_evaluation_call_returns_a_complete_structural_bundle() -> None:
 
 def test_bundle_identity_replays_from_the_same_frozen_snapshot() -> None:
     evaluator = ResearchEvaluation(ResearchEngine())
+    request = _request()
+    evidence = _evidence()
+    prepared = evaluator.prepare(request, evidence)
 
-    first = evaluator.evaluate(_request(), _evidence())
-    second = evaluator.evaluate(_request(), _evidence())
+    first = evaluator.evaluate(request, evidence, prepared)
+    second = evaluator.evaluate(request, evidence, prepared)
 
     assert first.bundle_id == second.bundle_id
     assert first.to_dict() == second.to_dict()
@@ -223,8 +231,12 @@ def test_partial_snapshot_uses_only_bounded_traceable_estimates() -> None:
         }
     )
 
-    result = ResearchEvaluation(ResearchEngine()).evaluate(
-        _request(), evidence
+    request = _request()
+    evaluator = ResearchEvaluation(ResearchEngine())
+    result = evaluator.evaluate(
+        request,
+        evidence,
+        evaluator.prepare(request, evidence),
     )
 
     assert result.estimates is not None

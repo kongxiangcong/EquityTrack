@@ -1,6 +1,6 @@
 # 00 — Authority baseline and branch cleanup
 
-**Status:** ready-for-agent  
+**Status:** resolved  
 **Type:** task  
 **Mode:** AFK  
 **Blocked by:** none
@@ -43,3 +43,33 @@ No domain, application, migration, Skill, CLI, or Web behavior changes. Do not m
 ## One-way cutover
 
 This ticket names the paths to be removed but retains them until their owning replacement ticket lands. It must not introduce a second authority document, compatibility plan, or alternate command path.
+
+## Claim record
+
+- External seams: Git HEAD/status and authority documents; the canonical
+  application openers; SQLite migration ledger; production Web source/build;
+  focused public-interface suites.
+- Deep-module ownership: this ticket owns evidence capture only. It assigns
+  account truth to ticket 01, estimated state to 02, plan graph/strategy/rules
+  to 03–07, command transport to 08, review journal to 09–13, read projections
+  to 14, Web presentation to 15, and final acceptance to 16.
+- Old-path replacement inventory: account-opening/current-position reads,
+  singular `get_active_for_security`, AST@1, `user_fixture_input`, direct
+  confirmation by plan ID, `DecisionWorkspace`, `/api/workspace`, public
+  `daily`, and Web-specific mutation routes.
+- Superseded artifacts to delete in owner tickets: old account/plan schema
+  readers and private-seam tests; AST@1 fixtures; unversioned workspace DTO and
+  route tests; stale Skill/CLI instructions; retired Web source/build assets;
+  prototype build references; obsolete acceptance mappings and generated
+  bundles.
+
+## Answer
+
+The implementation baseline is recorded in
+[`evidence/00-baseline-manifest.md`](../evidence/00-baseline-manifest.md).
+It binds the reviewed documentation commit and feature branch, an empty
+pre-claim dirty allowlist, authority/migration/Web hashes, canonical symbols,
+schema evidence, focused-suite terminal results, timeout attempts, direct
+SQLite inventory, future migration cohorts, and exact owner-ticket removal
+targets. Ticket 00 changed no runtime behavior and performed no stage, commit,
+push, reset, clean, merge, or user-data operation.

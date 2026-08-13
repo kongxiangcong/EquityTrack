@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 
 from tests.platform.test_research_bundle_decision_projection import (
+    _analysis_plan,
     _bundle,
     _identified_bundle,
 )
@@ -30,9 +31,11 @@ def test_contradictory_raw_valuation_is_confined_to_the_audit_appendix() -> None
     assert isinstance(synthesis, dict)
     synthesis["valuation_view"] = "RAW_VALUATION_MARKER"
 
+    request = _request("bundle:raw-valuation-audit-boundary")
+    analysis_plan = _analysis_plan(request)
     projected = ResearchDecisionViewFactory().build(
         workflow_run_id="workflow_raw_valuation_audit_boundary",
-        request=_request("bundle:raw-valuation-audit-boundary"),
+        request=request,
         evaluation_bundle=_identified_bundle(bundle),
         model_identity="engine@test",
         source_policy_identity="source-policy@test",
@@ -40,6 +43,8 @@ def test_contradictory_raw_valuation_is_confined_to_the_audit_appendix() -> None
             "member_official",
             "member_market",
         ),
+        analysis_plan=analysis_plan,
+        expected_analysis_plan_identity=analysis_plan["plan_identity"],
     )
 
     decision_projection = dict(projected)

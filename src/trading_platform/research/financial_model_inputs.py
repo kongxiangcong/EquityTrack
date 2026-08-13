@@ -48,6 +48,10 @@ from trading_platform.application.workflow_ledger import (
     SnapshotEvidence,
     SnapshotMemberEvidence,
 )
+from trading_platform.domain.research_model_input import (
+    exact_model_path,
+    typed_model_field_failure,
+)
 from trading_platform.domain.research_evaluation import ResearchWorkflowRequest
 from trading_platform.identity import canonical_hash
 
@@ -141,7 +145,7 @@ class _Input:
 class FrozenFinancialModelCompiler:
     """Builds the existing typed engines only from exact frozen model inputs."""
 
-    IDENTITY = "FrozenFinancialModelCompiler@1"
+    IDENTITY = "FrozenFinancialModelCompiler@2"
 
     def compile_scenarios(
         self,
@@ -149,8 +153,17 @@ class FrozenFinancialModelCompiler:
         request: ResearchWorkflowRequest,
         evidence: SnapshotEvidence,
     ) -> FrozenModelCompilation:
-        inputs, duplicate = _model_inputs(evidence)
+        inputs, duplicate, failure_code = _model_inputs(
+            evidence,
+            prefixes=("forecast.", "scenario.", "valuation."),
+        )
         source_ids = _source_ids(inputs)
+        if failure_code is not None:
+            return FrozenModelCompilation(
+                None,
+                (failure_code,),
+                source_ids,
+            )
         if duplicate:
             return FrozenModelCompilation(
                 None,
@@ -291,13 +304,17 @@ class FrozenFinancialModelCompiler:
         scenario_result: DeterministicScenarioResult,
         scenario_artifact_id: str,
     ) -> FrozenSimulationCompilation:
-        inputs, duplicate = _model_inputs(evidence)
-        simulation_inputs = {
-            path: item
-            for path, item in inputs.items()
-            if path.startswith("simulation.")
-        }
+        simulation_inputs, duplicate, failure_code = _model_inputs(
+            evidence,
+            prefixes=("simulation.",),
+        )
         source_ids = _source_ids(simulation_inputs)
+        if failure_code is not None:
+            return FrozenSimulationCompilation(
+                None,
+                (failure_code,),
+                source_ids,
+            )
         if duplicate:
             return FrozenSimulationCompilation(
                 None,
@@ -849,26 +866,42 @@ class FrozenFinancialModelCompiler:
 
 def _model_inputs(
     evidence: SnapshotEvidence,
-) -> tuple[dict[str, _Input], bool]:
+    *,
+    prefixes: tuple[str, ...],
+) -> tuple[dict[str, _Input], bool, str | None]:
     result: dict[str, _Input] = {}
     duplicate = False
+    failure_code: str | None = None
     for member in evidence.member_evidence:
+        if member.dataset != "research_model_input":
+            continue
         for field in member.extracted_fields:
-            path = str(field.get("model_path", "")).strip()
-            if not path:
+            try:
+                path = exact_model_path(field)
+            except ValueError as error:
+                failure_code = failure_code or str(error)
+                continue
+            if not any(path.startswith(prefix) for prefix in prefixes):
+                continue
+            field_failure = typed_model_field_failure(
+                field,
+                expected_subject_id=evidence.scope_id,
+            )
+            if field_failure is not None:
+                failure_code = failure_code or field_failure
                 continue
             if path in result:
                 duplicate = True
                 continue
             result[path] = _Input(
                 path=path,
-                value=field.get("value"),
-                period=str(field.get("period", "")).strip(),
-                unit=str(field.get("unit", "")).strip(),
-                currency=str(field.get("currency", "")).strip(),
+                value=field["value"],
+                period=field["period"],
+                unit=field["unit"],
+                currency=field["currency"],
                 member=member,
             )
-    return result, duplicate
+    return result, duplicate, failure_code
 
 
 def _source_ids(inputs: Mapping[str, _Input]) -> tuple[str, ...]:

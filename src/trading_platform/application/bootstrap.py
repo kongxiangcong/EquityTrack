@@ -34,7 +34,6 @@ from trading_platform.operations import PlatformOperations
 from trading_platform.operations import OperationError
 from trading_platform.provider_config import ProviderRuntimeAdapter, load_sync_job
 from trading_platform.provider_qualification import ProviderQualificationService
-from trading_platform.credentials import CredentialAdapter
 from trading_platform.workflows.research import ResearchWorkflow
 from trading_platform.verification import (
     ProjectVerification,
@@ -198,11 +197,10 @@ def open_data_synchronization(
     data_root: Path,
     job_file: Path,
     *,
-    credential_adapter: CredentialAdapter | None = None,
     migrations_root: Path | None = None,
     provider_runtime: ProviderRuntimeAdapter | None = None,
 ) -> Iterator[DataSynchronization]:
-    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
+    loaded = load_sync_job(job_file, provider_runtime)
     with _store(data_root, migrations_root) as store:
         repository = DataRepository(
             store.connection,
@@ -228,11 +226,10 @@ def open_provider_qualification(
     data_root: Path,
     job_file: Path,
     *,
-    credential_adapter: CredentialAdapter | None = None,
     migrations_root: Path | None = None,
     provider_runtime: ProviderRuntimeAdapter | None = None,
 ) -> Iterator[ProviderQualificationService]:
-    loaded = load_sync_job(job_file, credential_adapter, provider_runtime)
+    loaded = load_sync_job(job_file, provider_runtime)
     with _store(data_root, migrations_root) as store:
         repository = DataRepository(
             store.connection,

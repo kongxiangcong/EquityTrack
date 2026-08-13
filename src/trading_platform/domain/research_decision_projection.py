@@ -163,7 +163,7 @@ def _evidence_origin(item: Mapping[str, Any]) -> str:
     provider_expression = extraction_method.rsplit(":", 1)[-1]
     if "+" in provider_expression or (
         _text(item.get("field_name")) in derived_fields
-        and extraction_method.startswith("tushare_compatible:")
+        and extraction_method.startswith("agentgw:ifind:")
     ):
         return "derived"
     if item.get("official") is True or item.get("source_tier") == "official":

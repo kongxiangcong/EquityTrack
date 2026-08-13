@@ -7,8 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from trading_platform.credentials import CredentialAdapter, LocalCredentialAdapter
-from trading_platform.data.providers import TushareCompatibleProvider
+from trading_platform.data.kimi_agentgw import (
+    KimiAgentGatewayProvider,
+    KimiAgentGwEnvironment,
+)
 from trading_platform.data.official_disclosures import (
     CninfoOfficialDisclosureProvider,
     SzseOfficialDisclosureProvider,
@@ -66,39 +68,48 @@ class ProviderRuntimeBinding:
     transport_identity: str
 
     qualification_profile: str
+    # The canonical policy bound to the provider; persisted provenance always
+    # names this concrete provider.
+    source_policy: SourcePolicy
 
 class ProviderRuntimeAdapter(Protocol):
     def bind(self, decoded: DecodedProviderJob) -> ProviderRuntimeBinding: ...
 
 
-_TUSHARE_PROVIDER_ID = "tushare-compatible"
-_TUSHARE_ADAPTER_VERSION = "tushare-http@2"
-_TUSHARE_SOURCE_IDENTITY = "preconfigured_tushare_compatible_non_official"
-_TUSHARE_TERMS_PROFILE = "gateway-terms-pending@1"
-_TUSHARE_CREDENTIAL_SCOPE = "TUSHARE_TOKEN"
-def canonical_preconfigured_source_policy() -> SourcePolicy:
+_AGENTGW_PROVIDER_ID = "kimi-agentgw"
+_AGENTGW_ADAPTER_VERSION = "agentgw-datasource@1"
+_AGENTGW_SOURCE_IDENTITY = "kimi_agentgw_wind_ifind_non_official"
+_AGENTGW_TERMS_PROFILE = "agentgw-terms-pending@1"
+_AGENTGW_CREDENTIAL_SCOPE = "KIMI_API_KEY"
+
+def _provider_rights() -> SourceRights:
+    return SourceRights(True, True, True, True, False, "2026-08-01")
+
+
+def canonical_kimi_agentgw_source_policy() -> SourcePolicy:
+    """First-priority layer: structured Wind/iFinD data via the Kimi agent-gw."""
     return SourcePolicy(
         "SourcePolicy@1",
-        _TUSHARE_PROVIDER_ID,
-        _TUSHARE_ADAPTER_VERSION,
-        _TUSHARE_SOURCE_IDENTITY,
+        _AGENTGW_PROVIDER_ID,
+        _AGENTGW_ADAPTER_VERSION,
+        _AGENTGW_SOURCE_IDENTITY,
         SourceAuthority.STRUCTURED_AGGREGATOR,
-        _TUSHARE_TERMS_PROFILE,
-        SourceRights(True, True, True, True, False, "2026-07-24"),
+        _AGENTGW_TERMS_PROFILE,
+        _provider_rights(),
         tuple(
             SourceRoute(
                 dataset,
                 1,
                 (
                     CompletenessRequirement.OPTIONAL
-                    if dataset == "cashflow"
+                    if dataset in {"cashflow", "forecast_actual"}
                     else CompletenessRequirement.REQUIRED
                 ),
                 1,
                 FallbackMode.NO_FALLBACK,
                 (
                     SourceFailureDisposition.QUARANTINE
-                    if dataset == "cashflow"
+                    if dataset in {"cashflow", "forecast_actual"}
                     else SourceFailureDisposition.BLOCK
                 ),
             )
@@ -109,61 +120,63 @@ def canonical_preconfigured_source_policy() -> SourcePolicy:
                 "income",
                 "balancesheet",
                 "cashflow",
+                "forecast_actual",
             )
         ),
     )
 
 
-_TUSHARE_ENDPOINT = "http://8.136.22.187:8010/"
-
-
-def validate_preconfigured_source_policy(decoded: DecodedProviderJob) -> None:
-    policy = decoded.source_policy
+def validate_kimi_agentgw_source_policy(decoded: DecodedProviderJob) -> None:
     if (
-        decoded.provider_id != _TUSHARE_PROVIDER_ID
-        or decoded.adapter_version != _TUSHARE_ADAPTER_VERSION
-        or decoded.credential_variable != _TUSHARE_CREDENTIAL_SCOPE
-        or policy.source_identity != _TUSHARE_SOURCE_IDENTITY
-        or policy.source_authority is not SourceAuthority.STRUCTURED_AGGREGATOR
-        or policy.terms_profile != _TUSHARE_TERMS_PROFILE
-        or policy != canonical_preconfigured_source_policy()
+        decoded.provider_id != _AGENTGW_PROVIDER_ID
+        or decoded.adapter_version != _AGENTGW_ADAPTER_VERSION
+        or decoded.credential_variable != _AGENTGW_CREDENTIAL_SCOPE
+        or decoded.source_policy != canonical_kimi_agentgw_source_policy()
     ):
         raise OperationError(
             "PROVIDER_SOURCE_POLICY_UNTRUSTED",
-            "ProviderJob@2 does not match the statically composed source policy.",
+            "ProviderJob@2 does not match the statically composed Kimi agent-gw source policy.",
         )
 
 
-def production_transport_identity() -> str:
-    return canonical_hash({"provider_id": _TUSHARE_PROVIDER_ID, "adapter_version": _TUSHARE_ADAPTER_VERSION, "destination": _TUSHARE_ENDPOINT})
+class PreconfiguredKimiAgentGwRuntime:
+    """Bind the first-priority Kimi agent-gw layer, fail-closed on environment.
 
+    The provider is constructed only when the runtime is a genuine Kimi agent
+    environment (SDK plus resolvable credential). Credentials stay inside the
+    agent-gw SDK; the platform records only the logical scope name.
+    """
 
-class PreconfiguredTushareRuntime:
-    """Own the approved destination, credential scope, and production adapter composition."""
-
-    def __init__(self, credential_adapter: CredentialAdapter | None = None) -> None:
-        self._credentials = credential_adapter or LocalCredentialAdapter()
+    def __init__(self, environment: KimiAgentGwEnvironment | None = None) -> None:
+        self._environment = environment or KimiAgentGwEnvironment()
 
     def bind(self, decoded: DecodedProviderJob) -> ProviderRuntimeBinding:
-        validate_preconfigured_source_policy(decoded)
-        credential = self._credentials.get(decoded.credential_variable)
-        if not credential:
-            raise OperationError("CREDENTIAL_MISSING", "Configured credential scope is missing.")
-        provider = TushareCompatibleProvider(
+        validate_kimi_agentgw_source_policy(decoded)
+        detection = self._environment.detect()
+        if not detection.available:
+            raise OperationError("KIMI_AGENTGW_UNAVAILABLE", detection.reason_code)
+        security_identity = decoded.job.security_identity
+        resolver = (
+            (lambda security_id: (security_identity.code, security_identity.market))
+            if security_identity is not None
+            else None
+        )
+        provider = KimiAgentGatewayProvider(
             decoded.provider_id,
             decoded.adapter_version,
-            _TUSHARE_ENDPOINT,
-            credential,
             decoded.source_policy.source_identity,
             decoded.source_policy.terms_profile,
+            client_factory=self._environment.build_client,
             source_authority=decoded.source_policy.source_authority,
+            forecast_security_resolver=resolver,
         )
         return ProviderRuntimeBinding(
             provider,
             hashlib.sha256(decoded.credential_variable.encode()).hexdigest(),
             decoded.credential_variable,
-            production_transport_identity(),
+            provider.transport_identity,
             "production",
+            decoded.source_policy,
         )
 
 
@@ -206,13 +219,14 @@ class PreconfiguredProviderRuntime:
     """Statically compose the one approved adapter for each provider identity."""
 
     def __init__(
-        self, credential_adapter: CredentialAdapter | None = None
+        self,
+        agentgw_environment: KimiAgentGwEnvironment | None = None,
     ) -> None:
-        self._tushare = PreconfiguredTushareRuntime(credential_adapter)
+        self._kimi = PreconfiguredKimiAgentGwRuntime(agentgw_environment)
 
     def bind(self, decoded: DecodedProviderJob) -> ProviderRuntimeBinding:
-        if decoded.provider_id == _TUSHARE_PROVIDER_ID:
-            return self._tushare.bind(decoded)
+        if decoded.provider_id == _AGENTGW_PROVIDER_ID:
+            return self._kimi.bind(decoded)
         policy = canonical_official_source_policy(decoded.provider_id)
         if (
             decoded.credential_variable != "not_applicable"
@@ -239,6 +253,7 @@ class PreconfiguredProviderRuntime:
             "not_applicable",
             provider.transport_identity,
             "production",
+            policy,
         )
 
 
@@ -421,10 +436,10 @@ def decode_sync_job(job_file: Path) -> DecodedProviderJob:
     )
 
 
-def load_sync_job(job_file: Path, credential_adapter: CredentialAdapter | None = None, provider_runtime: ProviderRuntimeAdapter | None = None) -> LoadedProviderJob:
+def load_sync_job(job_file: Path, provider_runtime: ProviderRuntimeAdapter | None = None) -> LoadedProviderJob:
     decoded = decode_sync_job(job_file)
     binding = (
-        provider_runtime or PreconfiguredProviderRuntime(credential_adapter)
+        provider_runtime or PreconfiguredProviderRuntime()
     ).bind(decoded)
     return LoadedProviderJob(
         decoded.job,
@@ -433,10 +448,10 @@ def load_sync_job(job_file: Path, credential_adapter: CredentialAdapter | None =
         binding.transport_identity,
         decoded.query_policy,
         binding.qualification_profile,
-        decoded.source_policy,
+        binding.source_policy,
         binding.credential_scope_id,
         binding.credential_variable,
     )
 
 
-__all__ = ["DecodedProviderJob", "LoadedProviderJob", "PreconfiguredProviderRuntime", "ProviderJobCodecError", "ProviderRuntimeAdapter", "ProviderRuntimeBinding", "canonical_official_source_policy", "canonical_preconfigured_source_policy", "decode_sync_job", "load_sync_job", "production_transport_identity", "validate_preconfigured_source_policy"]
+__all__ = ["DecodedProviderJob", "LoadedProviderJob", "PreconfiguredKimiAgentGwRuntime", "PreconfiguredProviderRuntime", "ProviderJobCodecError", "ProviderRuntimeAdapter", "ProviderRuntimeBinding", "canonical_kimi_agentgw_source_policy", "canonical_official_source_policy", "decode_sync_job", "load_sync_job", "validate_kimi_agentgw_source_policy"]

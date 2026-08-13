@@ -31,7 +31,7 @@ description: Use the repository-local personal research platform through six nat
 
 示例：“研究 kong 账户里的 002407.SZ，并生成图表和报告。”
 
-自动冻结时点和来源，完成研究、估值适用性、可用建模与 Monte Carlo 门、近期趋势、图表及报告产物。只向用户展示结论、限制和可打开的产物；内部来源、模型和运行细节按需展开。执行细节见 [股票研究](tasks/equity-research.md)。
+自动冻结时点和来源，先绑定数据能力与闭合分析计划，再完成研究、可证伪假设、估值适用性、可用建模与 Monte Carlo 门、近期趋势、图表及报告产物。只向用户展示结论、限制和可打开的产物；内部来源、模型和运行细节按需展开。执行细节见 [股票研究](tasks/equity-research.md)。
 
 ### E. 创建交易计划
 
@@ -77,9 +77,11 @@ description: Use the repository-local personal research platform through six nat
 ## 项目内按需参考
 
 - [内部控制面与应用边界](references/platform-control-plane.md)
+- [数据源映射 Lookup Table](references/data-source-map.md)
 - [来源与证据规则](references/source-manifest.md)
 - [研究输出投影](references/output-schema.md)
 - [财务模型投影](references/financial-model-spec.md)
+- [研究分析计划与能力绑定](references/research-analysis-plan.md)
 - [估值方法路由](valuation/valuation-method-router.md)
 - [行业估值矩阵](valuation/industry-valuation-matrix.md)
 - [条件 DCF 规则](valuation/dcf-and-sensitivity.md)

@@ -174,7 +174,7 @@ def test_0023_rewrites_retired_draft_receipts_to_one_current_identity(
     upgraded.migrate()
     assert upgraded.connection.execute(
         "SELECT max(version) FROM schema_migration"
-    ).fetchone()[0] == 24
+    ).fetchone()[0] == 25
     migrated = {
         row["invocation_id"]: dict(row)
         for row in upgraded.connection.execute(

@@ -250,6 +250,17 @@ if (!artifactRows.length) {
     ],
   );
 }
+const analysisPlan = view.audit?.research_analysis_plan;
+if (analysisPlan?.plan_identity) {
+  artifactRows.push([
+    "Research analysis plan",
+    analysisPlan.schema_version || "",
+    analysisPlan.plan_identity,
+    analysisPlan.capability_binding?.capability_digest || "",
+    analysisPlan.capability_binding?.status || "unknown",
+  ]);
+}
+
 audit.getRange("A1:E1").values = [["Audit Item", "Schema", "Identity / Hash", "Source / Reason", "Status"]];
 if (artifactRows.length) audit.getRangeByIndexes(1, 0, artifactRows.length, 5).values = artifactRows;
 const formulaRows = (view.audit?.formula_identities || []).map((item) => [item]);
@@ -271,7 +282,7 @@ checks.getRange("B4").formulas = [[`=COUNTIF('Reconciliation'!M2:M${methodRows.l
 checks.getRange("D4").formulas = [["=B4-C4"]];
 checks.getRange("F4").formulas = [['=IF(B4=C4,"OK","FAIL")']];
 checks.getRange("F5").formulas = [['=IF(B5=C5,"OK","NOT_READY")']];
-checks.getRange("A7:B7").values = [["Overall Model Status", null]];
+checks.getRange("A7:B7").values = [["Workbook Projection Status", null]];
 checks.getRange("B7").formulas = [['=IF(F5="NOT_READY","NOT_READY",IF(COUNTIF(F2:F4,"FAIL")=0,"OK","FAIL"))']];
 
 const headerStyle = {

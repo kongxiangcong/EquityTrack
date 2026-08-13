@@ -125,6 +125,7 @@ class MigrationRunner:
                     "0015_account_snapshot_version.sql",
                     "0016_strategy_plan_model_b.sql",
                     "0022_manual_review_universe_v2.sql",
+                    "0025_normalized_version_policy_scope.sql",
                 }
             )
             try:
@@ -141,6 +142,8 @@ class MigrationRunner:
                         self._preflight_account_snapshot_0015()
                     elif path.name == "0016_strategy_plan_model_b.sql":
                         self._preflight_strategy_plan_0016()
+                    elif path.name == "0025_normalized_version_policy_scope.sql":
+                        self._preflight_normalized_version_0025()
                 elif path.name == "0017_manual_review_journal.sql":
                     self._preflight_manual_review_0017()
                 elif path.name == "0024_trade_plan_evidence_payload.sql":
@@ -181,7 +184,12 @@ class MigrationRunner:
                                         "ACCOUNT_SNAPSHOT_HISTORY_UNMIGRATABLE"
                                         if path.name
                                         == "0015_account_snapshot_version.sql"
-                                        else "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+                                        else (
+                                            "NORMALIZED_VERSION_HISTORY_UNMIGRATABLE"
+                                            if path.name
+                                            == "0025_normalized_version_policy_scope.sql"
+                                            else "STRATEGY_PLAN_HISTORY_UNMIGRATABLE"
+                                        )
                                     )
                                 )
                             ),
@@ -1280,6 +1288,23 @@ class MigrationRunner:
             raise PersistenceError(
                 "SOURCE_POLICY_IDENTITY_UNMIGRATABLE",
                 "A legacy non-fixture provider attempt has no persisted rights evidence.",
+            )
+
+    def _preflight_normalized_version_0025(self) -> None:
+        duplicate = self.connection.execute(
+            """
+            SELECT v.normalized_record_id,v.content_hash,a.source_policy_identity
+            FROM normalized_version v
+            JOIN provider_attempt a ON a.attempt_id=v.source_attempt_id
+            GROUP BY v.normalized_record_id,v.content_hash,a.source_policy_identity
+            HAVING count(*)>1
+            LIMIT 1
+            """
+        ).fetchone()
+        if duplicate is not None:
+            raise PersistenceError(
+                "NORMALIZED_VERSION_HISTORY_UNMIGRATABLE",
+                "Duplicate (record, content, policy) normalized versions exist.",
             )
 
     def _preflight_research_evaluation_0014(self) -> None:

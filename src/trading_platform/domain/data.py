@@ -153,7 +153,7 @@ class SourceRoute:
             "PROVIDER_HTTP_FAILED",
             "PROVIDER_API_RATE_LIMITED",
             "PROVIDER_API_ENTITLEMENT_UNAVAILABLE",
-            "TUSHARE_QUERY_UNSUPPORTED",
+            "AGENTGW_QUERY_UNSUPPORTED",
             "FIXTURE_DATASET_MISSING",
         }
         if self.fallback is FallbackMode.NO_FALLBACK and (

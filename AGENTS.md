@@ -20,6 +20,12 @@ apply especially to `skills/` and the `equity-researcher` skill.
 - Every capability has one canonical command path, one application path, one persistence path, and one presentation model. Do not add a second CLI, script wrapper, renderer, schema, database access route, or direct-call shortcut for the same behavior.
 - README, Skill instructions, examples, tests, and runtime code must name the same current path. Update or delete stale instructions in the same change that replaces an interface.
 
+### Skill-First Request Handling
+
+- Before designing an approach or exploring code structure to find an entry point, first read `skills/SKILL.md` and its `skills/tasks/` documents to check whether the user's request is already a supported task. If it is, follow the documented task flow — its CLI command, application interface, data-root and default-account (`kong` / `E:\trading-data\kong`) conventions — instead of re-deriving an entry point from the codebase.
+- Only when no skill task covers the request may you investigate the code structure directly. If that investigation establishes a new canonical path or fixes a stale one, write it back into the skill task document and README in the same change, so the next request starts from the skill again.
+- Do not bypass a documented skill task by assembling ad-hoc scripts or direct persistence queries; if the documented path is broken, fix the path, not the routing.
+
 ### No Glue, Bypass, or Compatibility Code
 
 - **Glue code is forbidden.** Do not add a module, class, function, facade method, or script whose only job is to forward arguments, rename fields, repackage a result, mirror another interface, or choose between old and new implementations.
@@ -66,7 +72,7 @@ apply especially to `skills/` and the `equity-researcher` skill.
 
 - Do not fabricate financial data, market data, consensus data, citations, or source metadata.
 - Use Tushare as the primary structured market-data provider for security master, trading calendar, OHLCV, adjustment factors, market cross-sections, and financial/disclosure indexes when configured and entitled. Use Kimi Datasource only as an auxiliary Codex/Skill control-plane source for discovery, candidate data, and cross-checking; do not make Kimi a business-runtime dependency.
-- Before using Tushare, read `.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/tushare_usage.md` and the companion `tushare-vs-kimi-datasource.md`, then use only the approved environment-backed connection seam documented there. Do not require the user to paste or reconfigure a token for that gateway. Do not put or echo credential values or private endpoint parameters in source, Git, user-facing output, artifacts, or logs.
+- Before using Tushare, read `.scratch/trading-platform-first-vertical-slice-spec/research/kimi-experiments/tushare_usage.md` and the companion `tushare-vs-kimi-datasource.md`, then use only the approved local credential connection seam documented there. Do not require the user to paste or reconfigure a token for that gateway. Do not put or echo credential values or private endpoint parameters in source, Git, user-facing output, artifacts, or logs.
 - The Tushare-compatible gateway documented there is not an official `tushare.pro` host. Preserve the actual gateway identity in provenance and do not treat it as an official disclosure authority.
 - Official disclosure is primary for critical financial data:
   - A-share: CNINFO, SSE/SZSE/BSE announcements, company IR reports.

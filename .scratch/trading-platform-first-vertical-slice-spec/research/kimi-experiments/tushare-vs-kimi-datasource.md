@@ -28,7 +28,7 @@ Kimi 只能替代 Tushare 的一小部分人工、单标的、低频查询；不
 
 因此本轮只能证明“这个兼容网关当前可用”，不能把它等同于“Tushare 官方服务已完成生产验收”。生产 adapter 应优先使用 Tushare 官方 endpoint；若继续使用该网关，必须先完成供应商与安全治理。
 
-项目通过环境托管的批准 adapter seam 使用该兼容网关。凭据与 endpoint 边界见 [`tushare_usage.md`](tushare_usage.md)；调用方不接收 endpoint，不要求用户粘贴凭据，也不在源码、Git、报告、artifact 或日志中保存连接参数。
+项目通过批准的本地 credential adapter seam（进程环境变量显式覆盖，未设置时读取 namespaced Windows Credential Manager）使用该兼容网关。凭据与 endpoint 边界见 [`tushare_usage.md`](tushare_usage.md)；调用方不接收 endpoint，不要求用户粘贴凭据，也不在源码、Git、报告、artifact 或日志中保存连接参数。
 
 ## 本轮实测
 

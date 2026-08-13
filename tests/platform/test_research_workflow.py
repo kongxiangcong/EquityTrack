@@ -127,6 +127,45 @@ def test_request_v2_produces_one_canonical_view_manifest_and_no_trade_state(
     assert view["data_snapshot_id"] == "snapshot_filing"
     assert view["valuation_artifact_record_id"] is None
     assert view["status"] == "completed_with_limits"
+    plan = view["audit"]["research_analysis_plan"]
+    receipt = view["audit"]["analysis_execution_receipt"]
+    planned_nodes = {item["node_id"]: item for item in plan["nodes"]}
+    executed_nodes = {item["node_id"]: item for item in receipt["nodes"]}
+    assert plan["schema_version"] == "ResearchAnalysisPlan@1"
+    assert plan["data_snapshot_id"] == view["data_snapshot_id"]
+    assert plan["source_policy_identity"] == view["audit"][
+        "source_policy_identity"
+    ]
+    assert plan["evaluation_plan_identity"] == view["audit"][
+        "evaluation_plan_identity"
+    ]
+    assert receipt["plan_identity"] == plan["plan_identity"]
+    assert set(executed_nodes) == set(planned_nodes)
+    assert all(
+        (
+            executed_nodes[node_id]["node_hash"],
+            executed_nodes[node_id]["output_contract"],
+            executed_nodes[node_id]["requirement"],
+        )
+        == (
+            node["node_hash"],
+            node["output_contract"],
+            node["requirement"],
+        )
+        for node_id, node in planned_nodes.items()
+    )
+    assert executed_nodes["forecast"]["artifact_id"] == view["audit"][
+        "evaluation_bundle"
+    ]["components"]["forecast"]["artifact_id"]
+    assert adapter.execute(
+        "SELECT workflow_version FROM workflow_run WHERE workflow_run_id=?",
+        (result.workflow_run_id,),
+    ).fetchone()[0] == "6"
+    assert adapter.execute(
+        "SELECT node_version FROM workflow_node_run "
+        "WHERE workflow_run_id=? AND node_id='evaluate_research'",
+        (result.workflow_run_id,),
+    ).fetchone()[0] == "4"
     assert before == after
     root.close()
 

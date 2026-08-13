@@ -1,6 +1,6 @@
 # Trading discipline kernel
 
-**Status:** open  
+**Status:** resolved  
 **Mode:** execution-carrying  
 **Authoritative spec:** [trading-discipline-kernel-spec.md](trading-discipline-kernel-spec.md)
 
@@ -51,6 +51,17 @@ flowchart TD
 - Completion evidence is governed by [acceptance-matrix.md](acceptance-matrix.md).
 - Known implementation and external-data risks are governed by [open-risk-register.md](open-risk-register.md).
 - Existing A/B/C prototype business code and build assets are explicitly excluded from the production cutover.
+- Ticket 00 resolved the live authority/branch baseline at
+  `8aa69c9826a11133c39425ff6214052e387c747c` on
+  `codex/trading-discipline-kernel`; see
+  [the baseline manifest](evidence/00-baseline-manifest.md). The pre-claim
+  worktree was clean, current schema ceiling is 14, focused baseline coverage
+  was 85 passed with one release test deselected, and every legacy removal
+  target is assigned to its owning replacement ticket.
+- Tickets 01–16 are resolved. The unique canonical acceptance execution
+  passed all 35 TDK criteria and 168/168 suite tests, plus production CDP,
+  restart/replay, and distinct-root backup/restore. The frozen manifest is
+  [`evidence/acceptance/acceptance-7ce3c3637c07a34dbc80dc53bff0b75442aeb488550ebd4cc3877c0320c19968.json`](evidence/acceptance/acceptance-7ce3c3637c07a34dbc80dc53bff0b75442aeb488550ebd4cc3877c0320c19968.json).
 
 ## Implementation tickets
 

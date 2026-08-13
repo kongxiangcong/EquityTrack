@@ -89,7 +89,7 @@ class PlatformOperations:
         try:
             report = store.doctor()
             scopes = []
-            for variable in ("TUSHARE_TOKEN",):
+            for variable in ("KIMI_API_KEY",):
                 value = self.credential_adapter.get(variable)
                 scopes.append({"credential_scope": hashlib.sha256(variable.encode()).hexdigest(), "status": "configured" if value else "missing"})
             identity_files = [Path(__file__).resolve().parents[2] / "pyproject.toml", Path(__file__).resolve().parents[2] / "web/package-lock.json", *sorted(self.migrations_root.glob("*.sql"))]

@@ -326,3 +326,79 @@ def test_research_inspection_and_archive_cli_cross_named_tasks(tmp_path: Path) -
 
     assert history["status"] in {"succeeded", "succeeded_with_limits"}
     assert manifest["producer_id"] == research["workflow_run_id"]
+
+
+def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "trading_platform.cli", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+
+def test_account_show_cli_resolves_alias_and_projects_security_codes(
+    tmp_path: Path,
+) -> None:
+    from tests.platform.test_account_snapshots import _draft, _ready_root
+    from tests.platform.test_estimated_account_state import _confirmed
+    from trading_platform.application import open_watchlist
+
+    data_root = _ready_root(tmp_path)
+    _confirmed(
+        data_root,
+        _draft(
+            cash_state="known",
+            cash_value="1000",
+            available_state="known",
+            available_value="100",
+        ),
+        create_invocation="cli-account-show:create:1",
+        confirm_invocation="cli-account-show:confirm:1",
+    )
+    with open_watchlist(data_root) as watchlist:
+        watchlist.add(
+            "cli-account-show:watch:1",
+            SecurityIdentity("security_600000", "SHSE", "600000", "CNY", "2026-07-24"),
+        )
+
+    completed = _run_cli(
+        "account-show", "--data-root", str(data_root), "--account", "local"
+    )
+
+    envelope = json.loads(completed.stdout)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert envelope["ok"] is True
+    assert envelope["operation"] == "account-show"
+    result = envelope["result"]
+    assert result["account_reference"] == "local"
+    assert result["resolved_account_id"] == "account_local"
+    state = result["estimated_account_state"]
+    assert state["cash_state"] == "known"
+    assert state["cash_value"] == "1000"
+    assert len(state["positions"]) == 1
+    position = state["positions"][0]
+    assert position["security_id"] == "security_600000"
+    assert position["total_quantity"] == "100"
+    assert position["market"] == "SHSE"
+    assert position["code"] == "600000"
+
+
+def test_account_show_cli_reports_typed_error_for_unknown_account(
+    tmp_path: Path,
+) -> None:
+    from tests.platform.test_account_snapshots import _ready_root
+
+    data_root = _ready_root(tmp_path)
+
+    completed = _run_cli(
+        "account-show", "--data-root", str(data_root), "--account", "missing"
+    )
+
+    envelope = json.loads(completed.stdout)
+    assert completed.returncode == 2
+    assert envelope["ok"] is False
+    assert envelope["operation"] == "account-show"
+    assert envelope["error"]["code"] == "ACCOUNT_REFERENCE_NOT_FOUND"

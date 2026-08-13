@@ -216,7 +216,7 @@ def test_0014_fresh_and_populated_history_cut_over_without_runtime_projection(
         fresh.connection.execute(
             "SELECT max(version) FROM schema_migration"
         ).fetchone()[0]
-        == 24
+        == 25
     )
     with fresh.connection:
         fresh.connection.execute(

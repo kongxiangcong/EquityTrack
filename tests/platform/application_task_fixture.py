@@ -203,7 +203,7 @@ class StorageFaultFixture:
                 ("attempt_market", "market-refresh", "fixture", "fixture@1", "daily", "derived-fixture", "fixture", "urn:test:daily", "{}", "{}", "date", "test-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "rights_test_fixture"),
             )
             self._store.connection.execute("INSERT OR IGNORE INTO normalized_record VALUES(?,?,?)", ("record_market", "daily", "security_yihua:2026-07-10"))
-            self._store.connection.execute("INSERT OR IGNORE INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("daily:2026-07-10", "record_market", 1, "market-content", "attempt_market", "2026-07-10", "2026-07-10", "date", "2026-07-10T09:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
+            self._store.connection.execute("INSERT OR IGNORE INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("daily:2026-07-10", "record_market", 1, "market-content", "attempt_market", TEST_SOURCE_POLICY.identity, "2026-07-10", "2026-07-10", "date", "2026-07-10T09:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
             self._store.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_market_20260710", "daily:2026-07-10", "daily", 0))
 
     def record_official_filing_workflow_snapshot(self) -> None:
@@ -211,7 +211,7 @@ class StorageFaultFixture:
         with self._store.connection:
             self._store.connection.execute("INSERT OR IGNORE INTO provider_attempt VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("attempt_filing", "filing-refresh", "official", "official@1", "financial_statement", "CNINFO", "official", "urn:test:filing", "{}", "{}", "timestamp", "official-terms", "complete", "created", None, "2026-07-10T09:00:00+00:00", None, None, None, "not_applicable", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "rights_test_fixture"))
             self._store.connection.execute("INSERT OR IGNORE INTO normalized_record VALUES(?,?,?)", ("record_filing", "financial_statement", "security_yihua:2026Q2"))
-            self._store.connection.execute("INSERT OR IGNORE INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
+            self._store.connection.execute("INSERT OR IGNORE INTO normalized_version VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("filing:2026Q2", "record_filing", 1, "filing-content", "attempt_filing", TEST_SOURCE_POLICY.identity, "2026-06-30", "2026-07-10T08:00:00+00:00", "timestamp", "2026-07-10T08:00:00+00:00", "publisher_timestamp", "2026-07-10T09:00:00+00:00", "pass", None))
             self._store.connection.execute("INSERT OR IGNORE INTO data_snapshot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("snapshot_filing", "security_yihua", "workflow", "2026-07-11", "2026-07-10", "2026-07-11T00:00:00+00:00", "Asia/Shanghai", "cn-calendar@2026", TEST_QUERY_POLICY.identity, TEST_SOURCE_POLICY.identity, "freshness@1", "filing-members", "valid", "pass", 1, 1, 0, 0, 0, "official filing candidate", "2026-07-11T00:00:00+00:00"))
             self._store.connection.execute("INSERT OR IGNORE INTO data_snapshot_member VALUES(?,?,?,?)", ("snapshot_filing", "filing:2026Q2", "financial_statement", 0))
 

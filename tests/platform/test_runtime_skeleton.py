@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -51,6 +52,7 @@ OWNING_SQLITE_TESTS = {
     "test_discipline_reviews.py",
     "test_external_official_disclosure.py",
     "test_execution_records.py",
+    "test_kimi_agentgw_provider.py",
     "test_market_evaluation.py",
     "test_manual_portfolio_review.py",
     "test_manual_portfolio_review_dispatcher_v2.py",
@@ -253,7 +255,18 @@ def test_platform_imports_only_public_research_package_and_has_no_forbidden_runt
             for symbol in public_symbols
             if symbol != "prompt_identity"
         ]
-        assert not any(token in symbol for token in forbidden_tokens for symbol in public_symbols), path
+        # The Kimi agent-gw datasource seam is the sanctioned vendor-named
+        # layer; "kimi" is allowed only inside agentgw-qualified symbols.
+        def _has_forbidden_token(symbol: str) -> bool:
+            compact = symbol.replace("_", "")
+            agentgw_seam = "agentgw" in compact or "agentgateway" in compact
+            return any(
+                token in symbol
+                for token in forbidden_tokens
+                if token != "kimi" or not agentgw_seam
+            )
+
+        assert not any(_has_forbidden_token(symbol) for symbol in public_symbols), path
         assert not any(token in symbol.replace("_", "") for token in forbidden_execution_symbols for symbol in public_symbols), path
         lowered = source.lower()
         assert not any(f"import {token}" in lowered or f"from {token}" in lowered for token in forbidden_tokens), path
@@ -456,7 +469,7 @@ def test_recorded_regression_ledger_is_executable_and_complete() -> None:
     for suite in baseline["suites"]:
         assert (ROOT / suite).is_file()
     completed = subprocess.run(
-        ["python", "-m", "pytest", "--collect-only", "-q", *baseline["suites"]],
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *baseline["suites"]],
         cwd=ROOT,
         capture_output=True,
         text=True,

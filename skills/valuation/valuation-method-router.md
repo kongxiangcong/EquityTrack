@@ -20,6 +20,9 @@ lifecycle: mature | growth | early | pre_revenue | cyclical | distressed
 profitability: profitable | near_break_even | loss_making
 cash_flow_stability: stable | volatile | negative | not_meaningful
 source_manifest_status: sufficient | valid_with_limits
+analysis_plan_identity:
+capability_binding_status: bound | limited
+capability_reason_codes: []
 origin_coverage:
   observed_official: []
   observed_structured: []
@@ -34,6 +37,13 @@ user_requested_rating: true | false
 The Tushare-compatible gateway belongs to `observed_structured`; it is not an
 official filing source. Every `estimated` input must satisfy the bounded-
 estimate contract below.
+
+Formal model quantities may be consumed only from frozen
+`research_model_input` members whose subject, exact model path/field name,
+`typed_research_model_input` semantic role, period, unit and currency all
+match. A same-named path on another dataset is not a model input. Malformed or
+legacy direct evidence limits the dependent model; it does not authorize a
+fallback reader.
 
 The grade uses the canonical runtime `A | B | C | D` vocabulary. Method/report
 limits remain explicit and independent; the router must not encode them as a
@@ -106,6 +116,26 @@ source-compatible peer or industry distributions, then an explicit user
 assumption. Do not silently invent a scalar, use zero as a placeholder, or let
 an estimate claim official origin. A bounded estimate may support a `limited`
 conditional range; it cannot independently authorize a formal rating or target.
+
+## Assumption challenge review (target migration)
+
+As a research-review discipline, every material judgment used by a selected
+method should record:
+
+- supporting evidence and source refs;
+- counter-evidence;
+- a falsifier or observable invalidation condition;
+- bounded stress/base/improvement values and dimensions;
+- what evidence would change the view.
+
+The current runtime can preserve rationale, bounds and invalidation conditions,
+but it does not yet enforce a complete typed dossier or a release receipt across
+all DecisionViews. Dossier completeness is therefore a review item and target
+migration acceptance, not a current fail-closed router gate. Record missing
+members as review gaps and let the existing source/PIT, official-evidence,
+typed-input, applicability and method-math gates determine runtime permission.
+Neither current nor target handling may silently promote a formal conclusion,
+target or action recommendation.
 
 ## Method rules
 

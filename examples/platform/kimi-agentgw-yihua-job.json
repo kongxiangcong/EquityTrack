@@ -1,9 +1,9 @@
 {
   "schema_version": "ProviderJob@2",
   "provider": {
-    "provider_id": "tushare-compatible",
-    "adapter_version": "tushare-http@2",
-    "credential_env": "TUSHARE_TOKEN"
+    "provider_id": "kimi-agentgw",
+    "adapter_version": "agentgw-datasource@1",
+    "credential_env": "KIMI_API_KEY"
   },
   "query_policy": {
     "schema_version": "QueryPolicy@1",
@@ -13,18 +13,18 @@
   },
   "source_policy": {
     "schema_version": "SourcePolicy@1",
-    "provider_id": "tushare-compatible",
-    "adapter_version": "tushare-http@2",
-    "source_identity": "preconfigured_tushare_compatible_non_official",
+    "provider_id": "kimi-agentgw",
+    "adapter_version": "agentgw-datasource@1",
+    "source_identity": "kimi_agentgw_wind_ifind_non_official",
     "source_authority": "structured_aggregator",
-    "terms_profile": "gateway-terms-pending@1",
+    "terms_profile": "agentgw-terms-pending@1",
     "rights": {
       "automation_allowed": true,
       "local_storage_allowed": true,
       "deterministic_replay_allowed": true,
       "derived_use_allowed": true,
       "redistribution_allowed": false,
-      "reviewed_on": "2026-07-24",
+      "reviewed_on": "2026-08-01",
       "evidence_sha256": null
     },
     "routes": [
@@ -75,6 +75,14 @@
         "retry_max_attempts": 1,
         "fallback": "no_fallback",
         "failure_disposition": "quarantine"
+      },
+      {
+        "dataset": "forecast_actual",
+        "freshness_max_stale_days": 1,
+        "completeness": "optional",
+        "retry_max_attempts": 1,
+        "fallback": "no_fallback",
+        "failure_disposition": "quarantine"
       }
     ]
   },
@@ -87,7 +95,7 @@
     "market_timezone": "Asia/Shanghai",
     "market": "SZSE",
     "snapshot_purpose": "workflow",
-    "datasets": ["trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow"],
+    "datasets": ["trade_cal", "market_universe", "daily", "income", "balancesheet", "cashflow", "forecast_actual"],
     "network_authorized": true,
     "offline": false
   },

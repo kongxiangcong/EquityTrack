@@ -21,7 +21,11 @@ from trading_platform.research import ResearchEvaluation
 def test_component_inputs_remain_traceable_metadata_without_becoming_facts() -> None:
     request, evidence = _request_and_evidence()
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(request, evidence)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    prepared = evaluator.prepare(request, evidence)
+    bundle = evaluator.evaluate(
+        request, evidence, prepared
+    )
 
     expected_member_ids = tuple(
         member.normalized_version_id for member in evidence.member_evidence
@@ -55,6 +59,8 @@ def test_component_inputs_remain_traceable_metadata_without_becoming_facts() -> 
         model_identity="engine@test",
         source_policy_identity=evidence.source_policy_identity,
         expected_snapshot_member_ids=expected_member_ids,
+        analysis_plan=prepared.analysis_plan.to_dict(),
+        expected_analysis_plan_identity=prepared.analysis_plan.identity,
     )
     assert view["status"] == "completed_with_limits"
     assert view["valuation_view"]["status"] in {"ready", "limited"}
@@ -85,7 +91,10 @@ def test_scenario_engine_failure_preserves_the_complete_forecast(
         fail_deterministic_scenario,
     )
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(request, evidence)
+    evaluator = ResearchEvaluation(ResearchEngine())
+    bundle = evaluator.evaluate(
+        request, evidence, evaluator.prepare(request, evidence)
+    )
 
     assert bundle.forecast.status is ResearchComponentStatus.COMPLETE
     assert (

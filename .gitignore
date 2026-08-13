@@ -15,6 +15,15 @@ skills/scripts/fixtures/model_workbooks/generated/
 /tushare_usage.md
 /docs/prompts/kimi-datasource/
 /docs/prompts/kimi-datasource.zip
+/.scratch/account-view.py
+/.scratch/agentgw-live/
+/.scratch/kong-four-report-review/
+/.scratch/publish-test-tmp/
+/.scratch/wind-ifind-availability/
+/skills/.redskill-lock.json
+/skills/bridgewater-pat-research/
+/skills/dcf-valuation-governance/
+/trading-datakong/
 /.scratch/ticket*-browser*/
 /.scratch/code-structure-deepening/ticket14-acceptance-*/
 /.scratch/code-structure-deepening/ticket14-browser-evidence*.json

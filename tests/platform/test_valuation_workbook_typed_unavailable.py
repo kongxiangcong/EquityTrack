@@ -86,7 +86,7 @@ def _typed_unavailable_view(status: str) -> ResearchDecisionView:
         subject_id="security_002407_szse",
         as_of="2026-07-29",
         model_identity="engine:test",
-        policy_identity="ResearchEvaluationPolicy@2",
+        policy_identity="ResearchEvaluationPolicy@3",
         status="completed_with_limits",
         valuation_view={
             "status": status,

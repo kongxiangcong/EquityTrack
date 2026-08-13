@@ -25,9 +25,12 @@ from trading_platform.research import ResearchEvaluation
 def test_complete_typed_market_evidence_runs_the_canonical_path_engine() -> None:
     request, evidence = _request_and_evidence()
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(
+    evaluator = ResearchEvaluation(ResearchEngine())
+    prepared = evaluator.prepare(request, evidence)
+    bundle = evaluator.evaluate(
         request,
         evidence,
+        prepared,
     )
 
     decision = bundle.market_path_decision
@@ -76,9 +79,12 @@ def test_ordinary_unadjusted_snapshot_enumerates_every_missing_gate() -> None:
         coverage_eligible=len(ordinary_daily),
     )
 
-    bundle = ResearchEvaluation(ResearchEngine()).evaluate(
+    evaluator = ResearchEvaluation(ResearchEngine())
+    prepared = evaluator.prepare(request, ordinary)
+    bundle = evaluator.evaluate(
         request,
         ordinary,
+        prepared,
     )
 
     decision = bundle.market_path_decision

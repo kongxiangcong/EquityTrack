@@ -4,6 +4,21 @@
 > canonical Forecast and Valuation artifacts, not an independent valuation
 > authority or a second research workflow.
 
+## Enforcement status
+
+Current runtime enforcement remains in the canonical workflow: frozen
+capability planning, strict typed model-input ingress, source/official/PIT
+permission, method applicability and math, and fail-closed missing-data/output
+boundaries. Workbook delivery also compares canonical OOXML rows and `Decimal`
+values with the exporting `ResearchDecisionView`, then independently recomputes
+the workbook equity-bridge/per-share chain from raw cells.
+
+Typed assumption-challenge completeness, a complete WACC x g surface, and an
+independent cross-DecisionView release receipt are target migration acceptance,
+not current fail-closed runtime gates. This reference may guide research review
+before that migration, but reports must not claim those target controls were
+runtime-enforced.
+
 ## Wired canonical boundary
 
 The formal research workflow persists the complete typed Forecast ->
@@ -32,6 +47,18 @@ Tushare-compatible Frozen DataSnapshot
 The model owns the Forecast and deterministic valuation calculations inside
 that sequence. It does not own report narrative, recent-trend interpretation,
 TradePlanDraft confirmation, or application mutations.
+
+## Analysis plan and capability binding
+
+Before Forecast or valuation runs, `ResearchAnalysisPlan@1` binds the formal
+evaluation plan to the frozen snapshot. It declares a closed dependency graph,
+output contracts, validators and required/supporting nodes. Callers cannot
+submit their own nodes, formulas or executable code.
+
+The binding records dataset/member identities and the typed field contract,
+without changing any input's origin. Node hashes are deterministic audit and
+invalidation evidence; they are not a claim that node-level cache replay is
+already implemented. See `research-analysis-plan.md`.
 
 ## Input-origin model
 
@@ -121,6 +148,24 @@ For each scenario record:
 - selected, limited, blocked and disabled valuation methods;
 - method formulas, conditional ranges and diagnostics;
 - assumptions, missing inputs and invalidation conditions.
+
+As a research-review discipline and target migration design, preserve a
+challenge dossier for every material assumption that separates observed fact,
+deterministic calculation and judgment. The dossier records:
+
+- supporting evidence and source refs;
+- counter-evidence that weakens the assumption;
+- a falsifier or observable invalidation condition;
+- stress/base/improvement values with dimensions and lineage;
+- what evidence would change the view.
+
+The current runtime can preserve rationale, bounds and invalidation conditions,
+but it does not yet enforce one typed completeness contract for this dossier.
+Missing dossier members are review and migration gaps and must not be
+represented as a passed runtime release gate. The future typed gate will limit
+only dependent methods or conclusions; neither current nor target handling may
+turn a conditional scenario into a probability-weighted target.
+
 
 Set `probability_mode = conditional_only` unless complete PIT-valid probability
 calibration exists. Under `conditional_only`, show no probability-weighted
@@ -219,11 +264,24 @@ The workbook must reconcile to the canonical DecisionView and typed artifacts:
 4. Origin/estimate/missing classifications are preserved.
 5. Statement, cash, revenue, shares and equity-bridge checks pass when
    applicable.
-6. Probability mode and sum-to-one gate match.
-7. Simulation/path result identities, RNG and seeds match when run.
-8. `not_run`, `partial` and `blocked` remain explicit.
-9. No formula errors, unexplained constants, placeholders or hidden fallback
-   paths remain.
+6. Python reads raw OOXML, reconciles the canonical row set and `Decimal` values
+   to the exporting `ResearchDecisionView`, then independently recomputes the
+   published equity bridge and per-share chain from workbook cells. This is a
+   projection-integrity gate, not a full DCF recalc or an independent
+   second-source/lineage check against the persisted ledger.
+7. Probability mode and sum-to-one gate match.
+8. Simulation/path result identities, RNG and seeds match when run.
+9. `not_run`, `partial` and `blocked` remain explicit.
+10. No formula errors, unexplained constants, placeholders or hidden fallback
+    paths remain.
+
+Current DCF method permission continues to use the canonical source/PIT,
+applicability, typed-input, forecast/FCFF and method-math/equity-bridge gates.
+Target migration acceptance will additionally require a typed assumption
+challenge dossier, a complete WACC x g surface, and one independent
+cross-DecisionView release receipt. Those target controls are not yet a single
+fail-closed runtime release gate. A workbook can prove only its projection
+integrity; it does not become the valuation authority.
 
 A workbook projection failure blocks XLSX delivery only. It does not create a
 second research result and does not erase a structurally complete canonical

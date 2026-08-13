@@ -13,12 +13,20 @@ from trading_platform.application.workflow_ledger import (
 from trading_platform.domain.research_bundle import ResearchEvaluationBundle
 from trading_platform.domain.research_evaluation import (
     DegradationPolicy,
+    RESEARCH_EVALUATION_POLICY_IDENTITY,
     ResearchWorkflowRequest,
 )
 from trading_platform.domain.research_inputs import ResearchInputs
 from trading_platform.identity import canonical_hash
+from trading_platform.research.analysis_plan import (
+    CompiledResearchAnalysisPlan,
+    ResearchAnalysisPlanCompiler,
+)
 from trading_platform.research.bundle import ResearchBundleAssembler
 from trading_platform.research.estimation import FrozenSnapshotEstimator
+from trading_platform.research.financial_model_inputs import (
+    FrozenFinancialModelCompiler,
+)
 
 
 class ResearchEvaluationError(ValueError):
@@ -28,13 +36,22 @@ class ResearchEvaluationError(ValueError):
 
 
 @dataclass(frozen=True)
+class PreparedResearchEvaluation:
+    analysis_plan: CompiledResearchAnalysisPlan
+    evaluation_fingerprint: str
+
+
+@dataclass(frozen=True)
 class ResearchEvaluation:
     """Owns deterministic research policy behind the workflow lifecycle."""
 
     engine: ResearchEngine
     estimator: FrozenSnapshotEstimator = FrozenSnapshotEstimator()
+    analysis_plan_compiler: ResearchAnalysisPlanCompiler = (
+        ResearchAnalysisPlanCompiler()
+    )
 
-    POLICY_IDENTITY = "ResearchEvaluationPolicy@2"
+    POLICY_IDENTITY = RESEARCH_EVALUATION_POLICY_IDENTITY
     _CRITICAL_FIELDS = (
         "revenue",
         "net_income",
@@ -52,12 +69,51 @@ class ResearchEvaluation:
         {"research_model_input", "market_path_policy"}
     )
 
+    def prepare(
+        self,
+        request: ResearchWorkflowRequest,
+        evidence: SnapshotEvidence,
+    ) -> PreparedResearchEvaluation:
+        self._validate_frozen_evidence(request, evidence)
+        try:
+            analysis_plan = self.analysis_plan_compiler.compile(
+                request=request,
+                evidence=evidence,
+            )
+        except ValueError as error:
+            raise ResearchEvaluationError(str(error)) from error
+        return PreparedResearchEvaluation(
+            analysis_plan=analysis_plan,
+            evaluation_fingerprint=self._fingerprint(
+                request,
+                evidence,
+                analysis_plan,
+            ),
+        )
+
     def evaluate(
         self,
         request: ResearchWorkflowRequest,
         evidence: SnapshotEvidence,
+        prepared: PreparedResearchEvaluation,
     ) -> ResearchEvaluationBundle:
         self._validate_frozen_evidence(request, evidence)
+        try:
+            prepared.analysis_plan.validate_context(
+                request=request,
+                evidence=evidence,
+            )
+        except ValueError as error:
+            raise ResearchEvaluationError(str(error)) from error
+        analysis_plan = prepared.analysis_plan
+        if prepared.evaluation_fingerprint != self._fingerprint(
+            request,
+            evidence,
+            analysis_plan,
+        ):
+            raise ResearchEvaluationError(
+                "RESEARCH_EVALUATION_PREPARATION_INVALID"
+            )
         manifest_members = tuple(evidence.member_evidence)
         manifest = self._manifest(request, evidence, manifest_members)
         estimates = self.estimator.build(
@@ -83,7 +139,7 @@ class ResearchEvaluation:
             and run.status != "completed"
         ):
             raise ResearchEvaluationError("RESEARCH_EVALUATION_DATA_INSUFFICIENT")
-        return ResearchBundleAssembler(
+        bundle = ResearchBundleAssembler(
             research_policy_identity=self.POLICY_IDENTITY,
             estimation_policy_identity=self.estimator.IDENTITY,
         ).assemble(
@@ -92,11 +148,17 @@ class ResearchEvaluation:
             research_run=run,
             estimates=estimates,
         )
+        try:
+            analysis_plan.validate_bundle(bundle)
+        except ValueError as error:
+            raise ResearchEvaluationError(str(error)) from error
+        return bundle
 
-    def fingerprint(
+    def _fingerprint(
         self,
         request: ResearchWorkflowRequest,
         evidence: SnapshotEvidence,
+        analysis_plan: CompiledResearchAnalysisPlan,
     ) -> str:
         return canonical_hash(
             {
@@ -110,6 +172,9 @@ class ResearchEvaluation:
                 ],
                 "source_policy_identity": evidence.source_policy_identity,
                 "evaluation_plan_identity": request.evaluation_plan.identity,
+                "analysis_plan_identity": analysis_plan.identity,
+                "analysis_plan_compiler": analysis_plan.compiler_identity,
+                "financial_model_compiler": FrozenFinancialModelCompiler.IDENTITY,
             }
         )
 
