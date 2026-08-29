@@ -4,6 +4,8 @@
 
 项目不自动下单，不接入实盘交易，也不提供个性化投资建议。缺少关键证据时，系统保留未知状态并明确降级或阻断，不以估计值、聚合数据或语言模型输出替代官方事实。
 
+> **设计状态**：新的[决策核心设计](docs/decision-core.md)已经确认，但尚未执行 `to-spec`、`to-issue` 或代码重构。本文其余能力说明仍描述当前 live runtime，不能据此把目标设计视为已实现。
+
 ## 研究定位
 
 本项目关注以下问题：
@@ -53,6 +55,7 @@
 
 - SSE、BSE 与公司 IR 官方披露接入仍不可用，不能视为 ready；
 - 策略验证与回测能力当前不可用，显式选择时只记录非阻断的 `requested_unavailable`；
+- Vibe-Trading、Qlib、因子挖掘和完整量化工具栈均不是当前模块，也没有 production Adapter、依赖或占位 Interface；
 - 市场机制 v2 因逐 session PIT 成分数据资格受阻；
 - 不含真实下单、盘中触发、后台自动调度和收益承诺；交付范围为 A 股。
 
@@ -563,7 +566,7 @@ src/trading_platform/      平台主体
   workflows/               研究工作流状态机
   identity/                规范身份与代码身份
   cli.py / web_server.py   维护命令行与本地网页适配器
-migrations/                只向前的一次性 SQLite 迁移（当前 0001 至 0024）
+migrations/                只向前的一次性 SQLite 迁移（当前 0001 至 0025）
 skills/SKILL.md            唯一 Codex/Skill 控制面入口（六类任务）
 skills/tasks/              账户状态、周期复盘、股票研究、交易计划的任务细则
 skills/references/         来源清单、输出投影、财务模型与控制面边界
@@ -577,7 +580,7 @@ docs/                      架构、调研、验收与审计文档
 CONTEXT.md                 领域词汇表与概念边界
 ```
 
-长期目标和不可违反约束以 [`docs/prompts/trading_platform_codex_prompt_optimized.md`](docs/prompts/trading_platform_codex_prompt_optimized.md) 与 [`AGENTS.md`](AGENTS.md) 为准。进一步阅读：
+目标产品、架构和验收边界以 [`docs/decision-core.md`](docs/decision-core.md) 为准，项目操作与安全规则以 [`AGENTS.md`](AGENTS.md) 为准。进一步阅读：
 
 - [`CONTEXT.md`](CONTEXT.md)：领域词汇表，统一账户、研究、计划、复盘等概念边界
 - [`docs/architecture/target-architecture.md`](docs/architecture/target-architecture.md)
