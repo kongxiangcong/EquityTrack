@@ -1,88 +1,21 @@
 ---
-name: equity-researcher
-description: Use the repository-local personal research platform through six natural-language tasks: view an account, update today's state, run a cycle review, research one stock with chart/report artifacts, create a trade plan, or update a trade plan. Never provide personalized trading instructions.
+name: equitytrack-decision-core
+description: Use EquityTrack's single local decision path for account, research, valuation, planning, monitoring, and review tasks. Never provide personalized securities actions.
 ---
 
-# 个人投研与交易纪律平台
+# EquityTrack 决策核心
 
-这是本项目唯一的用户入口。用户只需用自然语言说想完成的事情；Codex 负责账户和证券识别、数据根生命周期、数据同步、确定性应用调用、失败恢复和结果呈现。不要让用户拼接命令、填写内部请求、启动网页或理解内部数据结构。
+这是唯一公开 Skill 入口。先识别用户要完成的自然语言任务，再读取且只读取对应 task 文档：
 
-## 六类任务
+- [账户确认与查看](tasks/account.md)
+- [投资研究](tasks/research.md)
+- [确定性估值](tasks/valuation.md)
+- [计划准备与确认](tasks/planning.md)
+- [计划监控](tasks/monitoring.md)
+- [两阶段复盘](tasks/review.md)
 
-### A. 查看当前账户
+所有确定性操作都穿过八个 Application operation。不得直接读取 SQLite、调用领域私有函数、持久化 JSON/Markdown，或建立第二条命令路径。
 
-示例：“查看 kong 当前账户。”
+AI 区分事实、假设、估计和缺失，提出论点、反方、驱动、风险、证伪条件、不确定性与复盘判断；Python 核实结构和引用、计算估值与风险、评估规则、执行幂等事务并保存真值；用户确认账户和最终 TradePlan。缺失只限制直接消费者，未知不填零。
 
-先直接回答账户截至何时、净值、现金、持仓、仓位、收益及数据质量。能计算的收益必须说明口径；不能计算时明确缺少什么，不能把未知值当成零。执行细节见 [账户与今日状态](tasks/account-status.md)。
-
-### B. 更新今天状态
-
-示例：“更新 kong 今天的状态。”
-
-自动选择不晚于请求时点的最新已证明完整交易日，同步已确认持仓和默认观察池的行情，更新市值、收益、仓位与集中度，并评估已确认的活动计划。若今天休市，直接说明实际使用的最近完整交易日。没有新的券商或成交事实时，只能基于已确认数量估算；不得改变现金、数量或交易历史。执行细节见 [账户与今日状态](tasks/account-status.md)。
-
-### C. 本周或指定周期复盘
-
-示例：“复盘 kong 本周的纪律执行。”
-
-自动选取周期内已证明完整的 A 股交易日，汇总收益、持仓贡献、符合或偏离计划的行为、延期事项、未记录事项、未核验事实和证据缺口。复盘是证据汇总，不主观打分，也不替用户声明成交。执行细节见 [周期复盘](tasks/cycle-review.md)。
-
-### D. 研究一只股票并生成图表报告
-
-示例：“研究 kong 账户里的 002407.SZ，并生成图表和报告。”
-
-自动冻结时点和来源，先绑定数据能力与闭合分析计划，再完成研究、可证伪假设、估值适用性、可用建模与 Monte Carlo 门、近期趋势、图表及报告产物。只向用户展示结论、限制和可打开的产物；内部来源、模型和运行细节按需展开。执行细节见 [股票研究](tasks/equity-research.md)。
-
-### E. 创建交易计划
-
-示例：“根据现有账户和研究，为 002407.SZ 创建交易计划。”
-
-从已确认账户、研究、风险政策和内置策略生成可读草稿。研究和草稿生成期间不反复提问；只有最终修订需要一次明确确认。未确认草稿不生效，也不会产生订单。执行细节见 [交易计划](tasks/trade-plan.md)。
-
-### F. 更新交易计划
-
-示例：“根据今天的偏离更新 002407.SZ 的计划。”
-
-根据新证据或用户自然语言要求生成差异清晰的修改草稿，说明变化、原因、未变化部分和限制，然后只对最终修订询问一次明确确认。拒绝、沉默、过期确认或内容变化都保持待确认，不得替用户确认。执行细节见 [交易计划](tasks/trade-plan.md)。
-
-## 默认返回合同
-
-每次只按以下顺序展示用户当前需要的信息：
-
-1. `headline`：一句直接答案；
-2. 少量关键指标或一张紧凑表格；
-3. 变化、偏离、限制及其影响；
-4. 仅在确实需要用户作出最终决定时给出一个明确问题；
-5. 技术细节、来源、版本与审计只在用户要求时展开。
-
-正常结果不得显示命令行、迁移版本、内部 ID、数据传输对象、hash、manifest、命令信封、数据源资格过程或内部错误码。失败时使用用户语言说明发生了什么、当前仍能做什么、下一步是什么；完整诊断仍保存在内部证据中。
-
-计划检查的中性表述只有三类：
-
-- “未触发复核条件 / 符合已确认计划”；
-- “触发复核，需要用户判断”；
-- “证据不足，暂时无法判断”。
-
-不得把它们改写成买入、卖出、持有、加仓、减仓或规避建议。
-
-## 共同执行边界
-
-- 用户查询自动处理安全备份、只向前迁移、健康检查和失败恢复；这些是内部生命周期，不是用户前置任务。
-- 账户、现金、数量、交易与执行事实只能来自已确认本地记录或用户新的明确声明。行情更新不能创造券商事实。
-- 研究和估值保持事实、计算、估计、假设与缺失项分离。关键官方来源或方法输入缺失时，保留完整研究结构，但不得给出正式目标价、评级或个性化行动建议。
-- 账户事实确认、交易计划最终确认和实际成交声明必须由用户作出；Codex 不代替用户决定。
-- Web 是可选的产物查看器，不是完成六类任务的前置条件。普通任务不要求用户启动 Web 或手动运行 CLI。
-- 每次内部操作都走唯一应用与持久化路径；不得直接 SQL、直接写产物、构造交易计划图、添加旧接口回退或并行实现。
-
-## 项目内按需参考
-
-- [内部控制面与应用边界](references/platform-control-plane.md)
-- [数据源映射 Lookup Table](references/data-source-map.md)
-- [来源与证据规则](references/source-manifest.md)
-- [研究输出投影](references/output-schema.md)
-- [财务模型投影](references/financial-model-spec.md)
-- [研究分析计划与能力绑定](references/research-analysis-plan.md)
-- [估值方法路由](valuation/valuation-method-router.md)
-- [行业估值矩阵](valuation/industry-valuation-matrix.md)
-- [条件 DCF 规则](valuation/dcf-and-sensitivity.md)
-- [完整报告布局](output/report-layout.md)
+默认使用研究语言，禁止个性化证券行动建议、评级和无充分方法输入的目标价结论。当前只允许明确虚构 Fixture Adapter 和隔离临时数据根；真实 Provider、凭据和真实数据验收未配置。

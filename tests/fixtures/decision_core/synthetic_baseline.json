@@ -1,0 +1,30 @@
+{
+  "fixture_id": "imaginary-decision-loop",
+  "as_of": "2035-04-18T08:00:00+00:00",
+  "account": {
+    "account_id": "account-orchid",
+    "cash": null,
+    "positions": [
+      {"security_id": "security-aster-001", "quantity": "120", "available_quantity": null, "cost_basis": null}
+    ],
+    "confirmed_by": "synthetic-user"
+  },
+  "execution": {
+    "execution_id": "execution-lantern",
+    "security_id": "security-aster-001",
+    "quantity_delta": "5",
+    "verification_status": "user_declared",
+    "declared_by": "synthetic-user",
+    "declared_at": "2035-04-18T09:00:00+00:00"
+  },
+  "evidence": [
+    {"name": "market_price", "value": "17.50", "source_id": "fixture-source-aster-price"},
+    {"name": "free_cash_flow", "missing_reason": "fixture intentionally omits this input"}
+  ],
+  "legacy_relations": {
+    "unique": {"research": "old-research-orchid", "plan": "old-plan-orchid", "process_review": "old-review-orchid"},
+    "stale": {"as_of": "2035-04-01T08:00:00+00:00"},
+    "conflict": {"idempotency_key": "fixture-conflict"},
+    "ambiguous": {"candidate_ids": ["old-plan-amber", "old-plan-violet"]}
+  }
+}

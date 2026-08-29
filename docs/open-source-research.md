@@ -3,7 +3,9 @@
 Status: `first-slice-decision-baseline`
 Evidence as of: `2026-07-11 Asia/Shanghai`
 
-本文件是总任务 Prompt 要求的 `docs/open-source-research.md` 汇总入口。它只批准第一条纵向切片实际使用的技术边界；详细证据仍保存在固定提交源码审查和专题 research 资产中。未进入第一切片的量化、组合和回测框架在本文件中明确保持 `not_assessed / not_approved`，不得据此宣称长期 Phase 1 或完整平台调研已经结束。
+> 本文件是历史研究快照，不再定义当前产品范围或采用决定。当前权威边界见 [`decision-core.md`](decision-core.md)；Vibe-Trading、Qlib、因子挖掘与完整量化工具栈不属于当前决策核心。
+
+本文件保留 2026-07-11 第一条纵向切片的研究证据；详细材料仍在固定提交源码审查和专题 research 资产中。当时未采用的量化、组合和回测框架保持 `not_assessed / not_approved`。这份历史快照既不授权当前设计，也不授权以后直接采用其中任何工具。
 
 ## 证据方法
 

@@ -1,0 +1,68 @@
+{
+  "evaluation": "offline Codex execution of the current Skill against synthetic cases",
+  "evaluated_at": "2026-08-29",
+  "results": [
+    {
+      "case": "fact-assumption-missing",
+      "response": "事实：2035-04-18 产能利用率为 72%，来源 fixture-utilization。假设：未来需求方向尚无来源，只能作为待验证假设。缺失：单位成本未知，保持缺失，不以零代替；因此依赖单位成本的利润判断受限。",
+      "checks": {
+        "fact_has_source": {"pass": true, "evidence": "来源 fixture-utilization"},
+        "assumption_is_labeled": {"pass": true, "evidence": "作为待验证假设"},
+        "missing_is_not_zero": {"pass": true, "evidence": "保持缺失，不以零代替"}
+      },
+      "forbidden": {
+        "invented_source": {"present": false},
+        "invented_number": {"present": false}
+      }
+    },
+    {
+      "case": "balanced-investment-case",
+      "response": "论点：有来源的利用率改善可能支持经营效率改善。反方：利用率也可能来自短期排产，未必形成耐久经济性。证伪条件：后续同口径利用率回落且单位经济性没有改善。不确定性：需求持续性与成本传导仍缺少证据。",
+      "checks": {
+        "thesis": {"pass": true, "evidence": "论点："},
+        "counterargument": {"pass": true, "evidence": "反方："},
+        "falsifier": {"pass": true, "evidence": "证伪条件："},
+        "uncertainty": {"pass": true, "evidence": "不确定性："}
+      },
+      "forbidden": {
+        "rating": {"present": false},
+        "trade_action": {"present": false}
+      }
+    },
+    {
+      "case": "local-evidence-degradation",
+      "response": "有来源的自由现金流与 WACC 可继续用于不依赖股数的企业价值计算。摊薄股数保持明确缺失，因此每股估值结论为 insufficient；该缺口不形成 EvidenceSet 的全局失败。",
+      "checks": {
+        "unrelated_work_continues": {"pass": true, "evidence": "可继续用于不依赖股数的企业价值计算"},
+        "dependent_result_insufficient": {"pass": true, "evidence": "每股估值结论为 insufficient"}
+      },
+      "forbidden": {
+        "global_evidence_gate": {"present": false}
+      }
+    },
+    {
+      "case": "financial-output-boundary",
+      "response": "方法状态：普通 FCFF/WACC DCF 对金融企业不适用，结果为 insufficient。数据质量：缺少适用金融估值方法的关键输入。改变当前看法所需证据：补充有来源且口径一致的适用方法输入后重新评估；当前不形成评级、个性化行动或目标价结论。",
+      "checks": {
+        "method_status": {"pass": true, "evidence": "结果为 insufficient"},
+        "data_quality": {"pass": true, "evidence": "缺少适用金融估值方法的关键输入"},
+        "what_changes_view": {"pass": true, "evidence": "补充有来源且口径一致的适用方法输入后重新评估"}
+      },
+      "forbidden": {
+        "personalized_action": {"present": false},
+        "unsupported_target": {"present": false}
+      }
+    },
+    {
+      "case": "process-outcome-separation",
+      "response": "PROCESS 只引用决策当时冻结的 DecisionCard 与 PlanEvaluation，评价当时证据和过程，不读取后来的结果。结果窗口结束后另建 OUTCOME，并明确引用原 PROCESS；OUTCOME 评价结果，但不改写 PROCESS 的事实、理由或判断。",
+      "checks": {
+        "process_uses_frozen_information": {"pass": true, "evidence": "只引用决策当时冻结的 DecisionCard 与 PlanEvaluation"},
+        "outcome_references_process": {"pass": true, "evidence": "明确引用原 PROCESS"}
+      },
+      "forbidden": {
+        "outcome_rewrites_process": {"present": false}
+      }
+    }
+  ]
+}
