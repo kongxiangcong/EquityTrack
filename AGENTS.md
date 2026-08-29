@@ -5,15 +5,15 @@ These rules apply to the entire repository.
 ## Authority and current state
 
 - `docs/decision-core.md` is the sole product, architecture, scope, and acceptance baseline for the Decision Core.
-- The Decision Core is **design confirmed, not implemented**. Do not describe its target records, operations, or Modules as live runtime facts.
-- The user will invoke `to-spec` and `to-issue` manually. Do not generate a Spec, issues, or implementation merely because the design document exists.
+- The Decision Core is **synthetically verified**. Its six Modules and eight Application operations are live runtime facts; real Provider and real-data verification are not.
+- Further Specs, issues, or implementation require an explicit user task; the completed rebuild does not authorize scope expansion.
 - `CONTEXT.md` is the sole domain glossary. `docs/adr/` records only hard-to-reverse decisions and their reasons.
-- `skills/SKILL.md` remains the sole current Codex/Skill entry. Until a future atomic cutover, it describes the existing runtime rather than the target design.
+- `skills/SKILL.md` is the sole current Codex/Skill entry and describes the verified synthetic runtime.
 
 ## Request routing
 
 - For a current supported user task, read `skills/SKILL.md` and the matching `skills/tasks/` document first, then use its canonical application path.
-- For Decision Core design, `to-spec`, `to-issue`, or future implementation work, read `docs/decision-core.md`, `CONTEXT.md`, and relevant ADRs before exploring code.
+- For Decision Core design or implementation work, read `docs/decision-core.md`, `CONTEXT.md`, and relevant ADRs before exploring code.
 - Platform maintenance uses `python -m trading_platform.cli`. CLI, tests, adapters, and future presentation cross the same application Interface; they do not reach persistence or private research functions directly.
 
 ## Deep Modules and canonical paths

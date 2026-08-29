@@ -4,17 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-equity-research"
-version = "0.3.0"
-description = "Evidence-constrained professional equity research narrative core"
+version = "1.0.0"
+description = "Local deterministic investment decision core"
 requires-python = ">=3.10"
-dependencies = [
-  "reportlab==4.4.9",
-]
-
-[project.optional-dependencies]
-browser-test = [
-  "websocket-client==1.9.0",
-]
+dependencies = []
 
 [project.scripts]
 trading-platform = "trading_platform.cli:main"
@@ -27,6 +20,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not release_acceptance'"
+pythonpath = ["src"]
 markers = [
   "release_acceptance: explicit release gate that executes the acceptance suite ledger",
 ]

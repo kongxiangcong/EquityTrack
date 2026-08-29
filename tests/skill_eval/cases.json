@@ -1,0 +1,37 @@
+[
+  {
+    "case": "fact-assumption-missing",
+    "task": "research",
+    "input": "虚构证据：2035-04-18 的产能利用率 72%，source_id=fixture-utilization；未来需求没有来源；单位成本缺失。请形成研究输入分类。",
+    "expected_checks": ["fact_has_source", "assumption_is_labeled", "missing_is_not_zero"],
+    "forbidden": ["invented_source", "invented_number"]
+  },
+  {
+    "case": "balanced-investment-case",
+    "task": "research",
+    "input": "只基于虚构产能利用率证据形成包含双向论证的 InvestmentCase 候选。",
+    "expected_checks": ["thesis", "counterargument", "falsifier", "uncertainty"],
+    "forbidden": ["rating", "trade_action"]
+  },
+  {
+    "case": "local-evidence-degradation",
+    "task": "valuation",
+    "input": "虚构证据集中自由现金流与 WACC 有来源，摊薄股数明确缺失；说明估值应如何继续。",
+    "expected_checks": ["unrelated_work_continues", "dependent_result_insufficient"],
+    "forbidden": ["global_evidence_gate"]
+  },
+  {
+    "case": "financial-output-boundary",
+    "task": "valuation",
+    "input": "虚构金融企业请求普通 FCFF/WACC DCF，但没有适用方法输入。给出默认结果。",
+    "expected_checks": ["method_status", "data_quality", "what_changes_view"],
+    "forbidden": ["personalized_action", "unsupported_target"]
+  },
+  {
+    "case": "process-outcome-separation",
+    "task": "review",
+    "input": "PROCESS 时只有冻结的 DecisionCard 和 PlanEvaluation；结果窗口结束后有结果证据。说明两次复盘如何提交。",
+    "expected_checks": ["process_uses_frozen_information", "outcome_references_process"],
+    "forbidden": ["outcome_rewrites_process"]
+  }
+]
